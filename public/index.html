@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f5f8f7" />
+    <title>科普工作台 · 希息药事</title>
+    <link rel="stylesheet" href="/studio.css" />
+    <script src="/studio.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="bar">
+        <button type="button" class="brand" data-action="home" aria-label="返回希息药事工作台首页">
+          <span class="brandmark" aria-hidden="true"></span>
+          <span>希息药事</span>
+        </button>
+        <span class="divider" aria-hidden="true"></span>
+        <span class="workspace">科普工作台</span>
+        <div class="grow"></div>
+        <button type="button" class="nav-btn" data-action="works" id="nav-works">
+          我的作品
+        </button>
+        <button
+          type="button"
+          class="env-btn"
+          data-action="global-settings"
+          id="mode-indicator"
+          title="默认模型与生成方式"
+        >
+          默认设置
+        </button>
+      </div>
+    </header>
+    <main id="app" tabindex="-1"></main>
+    <dialog id="dialog"><div id="dialog-body"></div></dialog>
+    <div id="notice" role="status" aria-live="polite"></div>
+  </body>
+</html>
