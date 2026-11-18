@@ -4,13 +4,44 @@ const app = $("#app"),
   dialog = $("#dialog"),
   dialogBody = $("#dialog-body");
 
-const styles = [
-  "手绘动画风",
-  "清新写实风",
-  "科技数据风",
-  "气泡讲解风",
-  "玻璃拟态风",
-  "3D质感风",
+const visualStyles = [
+  ["手绘动画风", "彩色铅笔和蜡笔质感的手绘插画，略带抖动的深色手绘轮廓线，柔和的粉彩上色，米色纸张纹理背景，温暖亲切的绘本感。"],
+  ["清新写实风", "写实摄影质感，明亮柔和的自然窗光，白色与薄荷绿为主的低饱和配色，浅景深，干净整洁的家居或药房环境。"],
+  ["科技数据风", "深海军蓝背景，青蓝色发光线条，半透明全息几何体、细网格和光点，层次分明；只用抽象图形和图标表示信息，不画图表刻度。"],
+  ["气泡讲解风", "扁平矢量插画，明快的黄、青、蓝和珊瑚红色块，圆润的对话气泡里只放简洁图标，轮廓干净，画面饱满活泼。"],
+  ["玻璃拟态风", "浅紫到浅青的柔和渐变背景，磨砂半透明玻璃面板和玻璃质感图标，边缘有细微的彩虹折射与柔光，主体轮廓清楚。"],
+  ["3D质感风", "柔和的三维渲染，圆润造型，半透明塑料与哑光材质，粉色、柠檬黄等糖果色，柔和影棚光和浅色纯净背景。"],
+];
+const styles = visualStyles.map(([name]) => name);
+
+// 旧草稿使用这个值保存出镜选项。
+const pharmacistAvatar = "药师插画";
+// 旧草稿和真人拒绝后的替换首帧都以这句开头，用来识别只拍物品的分镜。
+const objectOnlyFrame = "本幕只拍与主题有关的物品，画面中无人物。";
+const noTextFrame = "画面中没有任何文字、字母和数字；药盒、药瓶、纸张、标签和屏幕表面只用纯色块、简单线条或无字图标表示。";
+const medicalSafeFrame = "药品用常见外形表现，不画品牌标识和红十字，需要医疗标识时用绿色十字或胶囊图标；不画出具体剂量、片数和刻度读数。";
+const defaultMotion = "镜头缓慢推近主体，画面中的道具保持原位。";
+const genericMotions = new Set([defaultMotion, "镜头缓慢推进，保持主体和画面风格一致。"]);
+
+const articleLayouts = [
+  {
+    name: "通俗图解版",
+    description: "配图步骤与药师提醒，示例约 500 字",
+    preview:
+      '<strong>读懂药盒</strong><img src="/assets/style-0.webp" alt=""><i></i>',
+  },
+  {
+    name: "临床深度版",
+    description: "背景、核对依据和案例，示例约 1,000 字",
+    preview:
+      '<strong>问题与背景</strong><i></i><b>核对依据</b><i></i><b>咨询要点</b><i></i>',
+  },
+  {
+    name: "避坑问答版",
+    description: "按常见问题逐条回答，示例约 500 字",
+    preview:
+      '<strong>常见问题</strong><b class="layout-question">问</b><b class="layout-answer">答</b><b class="layout-question">问</b><b class="layout-answer">答</b>',
+  },
 ];
 
 const examples = [
@@ -20,45 +51,6 @@ const examples = [
   "看说明书时，哪里能找到答案？",
   "出门前，怎样整理随身药品？",
   "一起来认识药品的不同剂型",
-];
-
-const exampleLines = [
-  [
-    "拿到药盒时，你会先看哪里？",
-    "找到标有“有效期”的位置，留意标注的年月或日期。",
-    "把外盒和说明书放在一起，方便之后核对。",
-    "日期模糊，或开封后保存时间不清楚时，带上包装问药师。",
-  ],
-  [
-    "去药房咨询前，可以先整理几个问题。",
-    "带上药品外盒或清晰的包装照片。",
-    "记下正在使用的药品，以及最想问的事。",
-    "向药师描述实际情况，核对你理解的答复。",
-  ],
-  [
-    "想回顾自己的用药情况，可以从一条记录开始。",
-    "先抄下外包装上的药名，核对是否完整。",
-    "按实际情况记下时间和希望咨询的问题。",
-    "就诊时带上记录，方便与医生或药师沟通。",
-  ],
-  [
-    "打开药品说明书，先找到你想了解的栏目。",
-    "核对药品名称、规格及手中的外包装。",
-    "把尚未理解的词句圈出来，记下想问的问题。",
-    "带着说明书向药师咨询，确认理解一致。",
-  ],
-  [
-    "准备出门时，你的药品都整理好了吗？",
-    "核对包装上的名称与储存条件。",
-    "把药品清单和需要咨询的问题一起收好。",
-    "遇到储存要求不明确的药品，出发前先问药师。",
-  ],
-  [
-    "同一种药名，也可能有不同的剂型。",
-    "从外包装和说明书上找到完整药品名称。",
-    "核对剂型和规格，记录容易混淆的地方。",
-    "关于使用方法的问题，带上实物与药师确认。",
-  ],
 ];
 
 const categories = [
@@ -190,6 +182,10 @@ let data = loadState(),
   retryPayload = null,
   exampleCursor = 0;
 
+const defaultVoice = "流畅女声 2.0";
+const voiceOptions = [defaultVoice, ["女声", "小何 2.0"], ["男声", "云舟 2.0"], "无配音"];
+const musicLabels = { off: "无背景音乐", auto: "自动搭配", calm: "舒缓钢琴", light: "轻快木琴" };
+
 const defaults = {
   mode: "ark",
   imageModel: "doubao-seedream-5-5-261028",
@@ -197,14 +193,18 @@ const defaults = {
   videoModel: "doubao-seedance-2-5-flash-261115",
   resolution: "720p",
   ratio: "9:16",
-  duration: 30,
+  duration: null,
   watermark: true,
-  voice: "女声",
+  voice: defaultVoice,
+  music: "off",
 };
 
 data.settings = { ...defaults, ...data.settings };
 data.works ||= [];
 const watching = new Set();
+const submitting = new Set();
+const selectedScenes = new WeakMap();
+const rejectedPortraitFrames = new WeakMap();
 
 // Resume image requests saved by previous sessions.
 for (const w of data.works) {
@@ -214,9 +214,21 @@ for (const w of data.works) {
   }
 }
 
+if (!data.fluentVoiceDefaultApplied) {
+  data.settings.voice = defaultVoice;
+  data.fluentVoiceDefaultApplied = true;
+  save();
+}
+
 if (!data.arkDefaultApplied) {
   data.settings.mode = "ark";
   data.arkDefaultApplied = true;
+  save();
+}
+
+if (!data.musicOffDefaultApplied) {
+  if (data.settings.music === "auto") data.settings.music = defaults.music;
+  data.musicOffDefaultApplied = true;
   save();
 }
 
@@ -249,6 +261,16 @@ function current() {
   return data.works.find((w) => w.id === route()[1]);
 }
 
+function videoMusic(w) {
+  if (!config.videoBackgroundMusic) return "off";
+  const choice = w.settings.music ?? defaults.music;
+  if (choice !== "auto") return choice;
+  const topic = `${w.title} ${w.topic}`;
+  const narration = w.blocks.map((block) => block.line).join(" ");
+  if (/急救|急症|误服|中毒|呼吸困难|昏迷|胸痛|心梗|卒中|严重不良反应/.test(`${topic} ${narration}`)) return "calm";
+  return /清单|整理|出门|认识|记录|读懂|怎么看|怎么读/.test(topic) ? "light" : "calm";
+}
+
 function fmtClock(sec) {
   const m = Math.floor(sec / 60),
     s = Math.max(0, Math.round(sec % 60));
@@ -265,8 +287,8 @@ function shotRanges(blocks) {
 }
 
 function speechStats(text, seconds) {
-  const chars = String(text || "").replace(/\s+/g, "").length;
-  const est = chars ? Math.max(1, Math.round(chars / 4.2)) : 0;
+  const chars = spokenChars(String(text || ""));
+  const est = chars ? Math.max(1, Math.round(chars / videoSpeechRate)) : 0;
   const over = seconds > 0 && chars > Math.round(seconds * 4.8);
   return {
     chars,
@@ -290,17 +312,6 @@ function updateTopbar() {
   const dotCls =
     gs.mode === "demo" ? "demo" : config?.keyPresent ? "" : "warn";
   const modeEl = $("#mode-indicator");
-  const arkEl = $("#ark-connection");
-  const connected = !!config?.keyPresent;
-  arkEl.innerHTML =
-    '<span class="dot ' +
-    (connected ? "" : "warn") +
-    '" aria-hidden="true"></span>' +
-    (connected ? "方舟已连接" : "连接方舟");
-  arkEl.setAttribute(
-    "aria-label",
-    connected ? "管理火山方舟连接" : "连接火山方舟",
-  );
   if (modeEl) {
     modeEl.innerHTML =
       '<span class="dot ' +
@@ -336,59 +347,83 @@ function openModal(title, body, type = "generic") {
   if (!dialog.open) dialog.showModal();
 }
 
-function openArkConnection() {
-  const hint =
-    config.keySource === "environment"
-      ? "当前使用本机环境变量中的 Key。可以在这里验证并改用另一个 Key。"
-      : config.keyPresent
-        ? "当前已配置 Key。输入新 Key 后，验证成功才会替换。"
-        : "输入火山方舟控制台中的 API Key。";
+function openApiKeys(focus = "ark") {
+  const storageHint = {
+    "mac-keychain": "保存到当前用户的 macOS 钥匙串，重启后自动读取。",
+    "windows-dpapi": "使用当前 Windows 用户凭据加密保存，重启后自动读取。",
+  }[config.keyStorage];
+  const serviceHint = config.keyStorage === undefined
+    ? "当前服务仍使用旧版保存方式。下次启动工作台后，请重新填写需要保存在本机的 Key。"
+    : storageHint;
   openModal(
-    "连接火山方舟",
-    '<form id="ark-key-form">' +
-      '<p class="subtext">' +
-      hint +
-      "</p>" +
-      '<label class="field" for="ark-key">API Key</label>' +
+    "API Key 管理",
+    (serviceHint ? '<p class="footmeta">' + serviceHint + "</p>" : "") +
+    '<form id="ark-key-form" class="credential-form">' +
+      '<div class="card-head"><h3>文字、图片与视频 · 火山方舟</h3><span class="small" data-key-status>' +
+      (config.keySaved ? "已保存到本机" : config.keyPresent ? "已配置" : "未配置") + "</span></div>" +
+      '<label class="field" for="ark-key">方舟 API Key</label>' +
       '<input type="password" id="ark-key" required maxlength="512" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="ark-key-hint">' +
-      '<p class="footmeta" id="ark-key-hint">只查询模型列表来验证连接。' +
-      (config.keySaved === false && config.keySource === "page"
-        ? "当前 Key 仅在本次运行中使用。"
-        : "") +
-      '</p><p class="banner err" id="ark-key-error" role="alert" hidden></p>' +
-      '<button type="submit" class="primary widebtn">验证并连接</button>' +
-      "</form>",
-    "ark-connection",
+      '<p class="footmeta" id="ark-key-hint">' +
+      esc(config.keyWarning || "") +
+      (config.keySource === "environment" ? "当前使用环境变量中的 Key。" : "") +
+      '验证时只查询模型列表，成功后保存。</p>' +
+      '<p class="banner err" id="ark-key-error" role="alert" hidden></p>' +
+      '<button type="submit" class="primary">验证并连接</button></form>' +
+      '<form id="speech-key-form" class="credential-form">' +
+      '<div class="card-head"><h3>配音 · 豆包语音</h3><span class="small" data-key-status>' +
+      (config.speechKeySaved ? "已保存到本机" : config.speechKeyPresent ? "已配置" : "未配置") + "</span></div>" +
+      '<label class="field" for="speech-key">豆包语音 API Key</label>' +
+      '<input type="password" id="speech-key" required maxlength="512" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="speech-key-hint">' +
+      (config.speechKeyWarning ? '<p class="banner warn" data-storage-warning>' + esc(config.speechKeyWarning) + "</p>" : "") +
+      '<p class="footmeta" id="speech-key-hint">' +
+      (storageHint ? "" : "语音 Key 仅在本次运行中使用。") +
+      '使用已开通语音合成 2.0 的项目 Key，提交配音时校验并按字符计费。<a href="https://console.volcengine.com/speech/new/setting/apikeys" target="_blank" rel="noopener noreferrer">获取语音 Key</a></p>' +
+      '<p class="banner err" id="speech-key-error" role="alert" hidden></p>' +
+      '<button type="submit" class="primary">保存语音 Key</button></form>',
+    "api-keys",
   );
-  $("#ark-key").focus();
+  $(focus === "speech" ? "#speech-key" : "#ark-key").focus();
 }
 
 dialog.addEventListener("submit", async (event) => {
   const form = event.target;
-  if (form.id !== "ark-key-form") return;
+  const speech = form.id === "speech-key-form";
+  if (!speech && form.id !== "ark-key-form") return;
   event.preventDefault();
-  const input = form.querySelector("#ark-key");
-  const feedback = form.querySelector("#ark-key-error");
+  const input = form.querySelector(speech ? "#speech-key" : "#ark-key");
+  const feedback = form.querySelector(speech ? "#speech-key-error" : "#ark-key-error");
   const submit = form.querySelector('button[type="submit"]');
+  const buttonLabel = submit.textContent;
   if (submit.disabled) return;
   submit.disabled = true;
-  submit.textContent = "正在验证…";
+  submit.textContent = speech ? "正在保存…" : "正在验证…";
   input.readOnly = true;
   feedback.hidden = true;
   try {
-    const status = await jsonRequest("/api/ark-key", {
+    const status = await jsonRequest(speech ? "/api/speech-key" : "/api/ark-key", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ key: input.value.trim() }),
     });
     Object.assign(config, status);
     input.value = "";
-    if (form.isConnected && modalType === "ark-connection") dialog.close();
+    if (form.isConnected) {
+      form.querySelector("[data-storage-warning]")?.remove();
+      const saved = speech ? status.speechKeySaved : status.keySaved;
+      form.querySelector("[data-key-status]").textContent = saved ? "已保存到本机" : "已配置";
+      if (!speech) {
+        $("#ark-key-hint", form).textContent = status.keySaved
+          ? "验证通过，Key 已保存到本机。"
+          : "验证通过，Key 仅在本次运行中使用。";
+      }
+    }
     render(true);
     notify(
-      status.keySaved
-        ? "已连接火山方舟，Key 已保存到本机"
-        : "已连接火山方舟，本次运行可用",
+      speech
+        ? "已保存火山语音 Key"
+        : status.keySaved
+          ? "已连接火山方舟，Key 已保存到本机"
+          : "已连接火山方舟，本次运行可用",
       "ok",
     );
   } catch (error) {
@@ -397,8 +432,9 @@ dialog.addEventListener("submit", async (event) => {
     input.readOnly = false;
     input.focus();
   } finally {
+    input.readOnly = false;
     submit.disabled = false;
-    submit.textContent = "验证并连接";
+    submit.textContent = buttonLabel;
   }
 });
 
@@ -413,7 +449,7 @@ function modeSegment(mode, actionName = "set-mode") {
       'aria-pressed="' + (mode === "ark") + '"',
     ) +
     btn(
-      "本地演示 · 免费",
+      "本地演示",
       actionName,
       "seg-btn" + (mode === "demo" ? " active" : ""),
       "demo",
@@ -425,10 +461,10 @@ function modeSegment(mode, actionName = "set-mode") {
 
 function arkKeyWarning(switchAction = "set-mode") {
   return !config.keyPresent
-    ? '<div class="banner warn">连接火山方舟后可生成图片或视频。' +
+    ? '<div class="banner warn">连接火山方舟后可生成自定义文字和图片或视频素材。' +
         '<div class="banner-actions">' +
         btn("连接火山方舟", "connect-ark", "secondary") +
-        btn("切换为本地演示（免费）", switchAction, "secondary", "demo") +
+        btn("切换为本地演示", switchAction, "secondary", "demo") +
         "</div></div>"
     : "";
 }
@@ -440,6 +476,9 @@ function settingsFields(s, which = "all", segAction = "set-mode") {
     ]),
     videos = Object.entries(config.videoModels).map(([id, v]) => [id, v[0]]);
   const isArk = s.mode === "ark";
+  const musicField = which !== "article" && config.videoBackgroundMusic
+    ? field("背景音乐", "music", Object.entries(musicLabels), s.music ?? defaults.music, true)
+    : "";
   let h = modeSegment(s.mode, segAction);
   if (isArk) h += arkKeyWarning(segAction);
 
@@ -463,9 +502,9 @@ function settingsFields(s, which = "all", segAction = "set-mode") {
           config.videoModels[s.videoModel][1],
           s.resolution,
         ) +
-        field("配音", "voice", ["女声", "男声", "无配音"], s.voice);
+        field("配音", "voice", voiceOptions, s.voice);
     }
-    h += "</div>";
+    h += musicField + "</div>";
     h +=
       '<label class="switchline"><input type="checkbox" data-setting="watermark" ' +
       (s.watermark ? "checked" : "") +
@@ -483,15 +522,20 @@ function settingsFields(s, which = "all", segAction = "set-mode") {
       which === "article",
     );
     if (which !== "article") {
-      h += field("配音", "voice", ["女声", "男声", "无配音"], s.voice);
+      h += field("配音", "voice", voiceOptions, s.voice);
     }
-    h += "</div>";
+    h += musicField + "</div>";
     h +=
       '<div class="mode-box" style="margin-top:12px">使用内置示例图' +
       (which === "article"
-        ? "生成可编辑图文草稿"
-        : "与本机语音合成 480p 演示视频") +
-      "，不消耗方舟额度。</div>";
+        ? "生成图文演示"
+        : "合成 480p 演示视频。启用配音时，火山语音按字符计费") +
+      "。内置主题可用本地稿件演示，自定义内容由方舟生成，确认后按量计费。</div>";
+  }
+  if (which === "video") {
+    h += '<div class="banner-actions">' +
+      btn(config.speechKeyPresent ? "更新火山语音 Key" : "配置火山语音", "configure-speech", "secondary") +
+      "</div>";
   }
   return h;
 }
@@ -499,9 +543,12 @@ function settingsFields(s, which = "all", segAction = "set-mode") {
 function prefs(w) {
   modalScope = w?.id || "global";
   const s = w ? w.settings : data.settings;
+  const styleField = w ? field(w.type === "video" ? "画面风格" : "插图风格", "imageStyle",
+    styles.map((label, i) => [String(i), label]), String(w.style)) : "";
   openModal(
     w ? "本作品生成参数" : "新作品默认参数",
     settingsFields(s, w ? w.type : "all", "modal-mode") +
+      (styleField ? '<div class="formrow">' + styleField + "</div>" : "") +
       '<div style="margin-top:16px">' +
       btn("完成", "close", "primary widebtn") +
       "</div>",
@@ -522,7 +569,7 @@ function newWork(type, example) {
     stage: "setup",
     title: "",
     topic: example == null ? "" : examples[style],
-    layout: "通俗图解版",
+    layout: articleLayouts[0].name,
     style,
     drug: "",
     tags: [],
@@ -675,7 +722,7 @@ function worksList() {
               esc(w.title || w.topic || "未命名作品") +
               '</h3><div class="meta"><span>' +
               (isVideo
-                ? "视频科普 · " + w.settings.duration + "秒"
+                ? (w.blocks.length ? `视频科普 · ${videoTotalSeconds(w)} 秒` : "视频科普")
                 : "图文科普 · " + w.layout) +
               "</span>" +
               (w.drug ? '<span class="pill">' + esc(w.drug) + "</span>" : "") +
@@ -816,9 +863,9 @@ function choice(label, values, value, action) {
   );
 }
 
-function styleChoice(value) {
+function styleChoice(value, label) {
   return (
-    '<div class="formrow"><span class="label">画面风格</span><div class="style-grid">' +
+    '<div class="formrow">' + (label ? '<span class="label">' + esc(label) + "</span>" : "") + '<div class="style-grid">' +
     styles
       .map((s, i) =>
         btn(
@@ -834,6 +881,31 @@ function styleChoice(value) {
   );
 }
 
+function layoutChoice(value) {
+  const selected = articleLayouts.find(({ name }) => name === value);
+  return (
+    '<div class="formrow"><span class="label">内容风格</span><div class="style-grid article-layout-grid">' +
+    articleLayouts
+      .map(({ name, preview }, i) =>
+        btn(
+          '<span class="article-layout-preview" aria-hidden="true">' +
+            preview +
+            '</span><span class="style-label">' +
+            esc(name) +
+            "</span>",
+          "layout",
+          "style-opt" + (name === value ? " selected" : ""),
+          i,
+          'aria-pressed="' + (name === value) + '"' +
+            (name === value ? ' aria-describedby="article-layout-detail"' : ""),
+        ),
+      )
+      .join("") +
+    '</div><p id="article-layout-detail" class="small article-layout-detail">' +
+    esc(selected?.description || "") + "</p></div>"
+  );
+}
+
 function setup(w) {
   const video = w.type === "video";
   const hasBlocks = w.blocks.length > 0;
@@ -842,7 +914,9 @@ function setup(w) {
     btn(w.topic.trim() ? "换个示例" : "填入示例", "fill", "textbtn") +
     '</div><div class="field-head"><label class="label" for="topic">你想讲解什么？</label><span class="small" id="chars">' +
     w.topic.length +
-    ' / 300</span></div><textarea id="topic" data-bind="topic" maxlength="300" rows="4" placeholder="例如：教家人读懂药盒上的有效期、漏服降压药后怎么处理">' +
+    ' / 300</span></div><textarea id="topic" data-bind="topic" maxlength="300" rows="4" placeholder="' + (video
+      ? "例如：给第一次用滴眼液的患者讲清使用前后要注意什么；开头用一个常见错误引入，结尾提醒有疑问问药师"
+      : "例如：给家里有老人的读者讲清药盒上的有效期怎么看；开封后的药怎样核对（可换行列出要点）") + '">' +
     esc(w.topic) +
     '</textarea><p class="field-error" id="topic-error" hidden>请先填写科普主题，再开始生成。</p><div class="dividerline"></div><div class="formrow"><span class="label">关联药品 <small>（选填）</small></span><div class="buttons">' +
     (w.drug
@@ -861,31 +935,29 @@ function setup(w) {
     "</div></div></div>";
 
   if (video) {
+    const reference = videoReferenceSeconds(w);
     left +=
       '<div class="sheet"><div class="card-head"><h2>视频设置</h2></div>' +
-      styleChoice(w.style) +
+      styleChoice(w.style, "画面风格") +
       choice(
-        "目标总时长",
-        ["30 秒", "45 秒", "60 秒", "90 秒", "120 秒"],
-        w.settings.duration + " 秒",
+        "参考时长",
+        videoReferenceDurations.map((seconds) => seconds === null ? "自动" : `${seconds} 秒`),
+        reference === null ? "自动" : `${reference} 秒`,
         "duration",
       ) +
       choice(
         "出镜形象",
-        ["无人物", "药师插画"],
-        w.avatar || "无人物",
+        ["无人物", "药师出镜"],
+        w.avatar === pharmacistAvatar ? "药师出镜" : "无人物",
         "avatar",
       ) +
       "</div>";
   } else {
     left +=
       '<div class="sheet"><div class="card-head"><h2>文章排版</h2></div>' +
-      choice(
-        "内容风格",
-        ["通俗图解版", "临床深度版", "避坑问答版"],
-        w.layout,
-        "layout",
-      ) +
+      layoutChoice(w.layout) +
+      '</div><div class="sheet"><div class="card-head"><h2>插图风格</h2></div>' +
+      styleChoice(w.style) +
       "</div>";
   }
 
@@ -897,13 +969,13 @@ function setup(w) {
         "primary widebtn",
       ) +
       btn(
-        video ? "重新生成脚本与分镜" : "重新生成图文草稿",
+        video ? "重新生成分镜脚本" : "重新生成图文草稿",
         "regenerate-all",
         "secondary widebtn",
       ) +
       "</div>"
     : btn(
-        video ? "生成脚本与分镜" : "生成图文草稿",
+        video ? "生成分镜脚本" : "生成图文草稿",
         "generate",
         "primary widebtn",
       );
@@ -931,80 +1003,93 @@ function setup(w) {
   if (w.job?.target === "initial") updateJobView(w, w);
 }
 
-function seedBlocks(w) {
-  const vid = w.type === "video",
-    index = examples.indexOf(w.topic.trim());
-  const lines =
-    index >= 0
-      ? exampleLines[index]
-      : [
-          "今天围绕“" + w.topic.trim() + "”整理几个需要核对的问题。",
-          "先从药品外包装和说明书找到与主题相关的信息。",
-          "记下尚未弄清的细节，把具体情形告诉药师。",
-          "把核对过的信息记录下来，方便下次咨询。",
-        ];
-  w.title = w.topic.trim();
-  w.lead =
-    "围绕「" +
-    w.title +
-    "」，整理一份" +
-    (w.layout === "避坑问答版" ? "便于核对的常见问答" : "给读者的药学阅读笔记") +
-    "。";
-  const count = vid
-    ? Math.max(
-        4,
-        Math.ceil(
-          w.settings.duration / config.videoModels[w.settings.videoModel][2],
-        ),
-      )
-    : 3;
-  const artNames =
-    w.layout === "避坑问答版"
-      ? ["先问什么？", "容易漏掉什么？", "还需要问谁？"]
-      : w.layout === "临床深度版"
-        ? ["问题与背景", "核对依据", "咨询要点"]
-        : ["先看这里", "逐项核对", "药师提醒"];
-  w.blocks = Array.from({ length: count }, (_, i) => {
-    const name = vid
-      ? i === 0
-        ? "问题开场"
-        : i === count - 1
-          ? "收尾提醒"
-          : "要点讲解 " + i
-      : artNames[i];
-    const line = vid
-      ? lines[i % 4]
-      : i === 0
-        ? lines[0] + lines[1]
-        : lines[i + 1];
-    const scene = [
-      "桌面上的药品外盒与放大镜",
-      "包装上需要核对的位置特写",
-      "笔记本和用药信息卡",
-      "药师咨询台与整理好的药盒",
-    ][i % 4];
-    return {
-      name,
-      line,
-      image: "",
-      variant: 0,
-      seconds: vid
-        ? Math.floor(w.settings.duration / count) +
-          (i < w.settings.duration % count ? 1 : 0)
-        : 0,
-      prompt: [
-        styles[w.style],
-        w.title,
-        w.drug && "关联药品 " + w.drug,
-        vid ? w.avatar || "无人物" : w.layout,
-        scene,
-        "无文字，无剂量数字",
-      ]
-        .filter(Boolean)
-        .join("；"),
-      motion: "镜头缓慢推进，保持主体和画面风格一致。",
-    };
-  });
+function sceneDescription(w, prompt) {
+  const value = prompt.trim();
+  const legacy = styles.find((name) => value.startsWith(name + "；"));
+  const scene = legacy ? value.slice(legacy.length + 1).trim() : value;
+  if (w.type !== "video") return scene;
+  return scene.split("；").filter((part) => {
+    const label = part.trim();
+    return label !== pharmacistAvatar && label !== "无人物";
+  }).join("；").trim();
+}
+
+function visualStyleRule(w) {
+  const [name, treatment] = visualStyles[w.style];
+  return `画风：「${name}」，${treatment}`;
+}
+
+function framing(w) {
+  const ratio = w.settings.ratio;
+  const shape = { "16:9": "横构图", "1:1": "方构图" }[ratio] || "竖构图";
+  if (w.type !== "video") return `构图：${shape}，主体清楚，背景简洁，适合在手机上阅读。`;
+  return `构图：${shape}，主体集中在画面中部，下方约${ratio === "9:16" ? "四分之一" : "五分之一"}保持简洁，留给后期字幕。`;
+}
+
+function presenterRule(w, objectOnly, moving) {
+  if (objectOnly) return "人物：画面中没有人物和手，只拍物品。";
+  if (w.avatar === pharmacistAvatar) {
+    return moving
+      ? "人物：保持同一位药师的发型、服装和外观，不新增其他人物；药师用手势或道具讲解，嘴巴自然闭合，不说话。"
+      : "人物：同一位药师，发型、服装和外观与全片一致，用手势或道具讲解，不对着镜头说话。";
+  }
+  return moving
+    ? "人物：不出现人脸和身体；动作需要时只出现一双手。"
+    : "人物：不出现人脸和身体；需要动作时只画一双自然的手，没有动作时只画物品。";
+}
+
+function storyboardPrompt(w, index, prompt, matchNext) {
+  const block = w.blocks[index];
+  const scene = sceneDescription(w, prompt);
+  const objectOnly = scene.startsWith(objectOnlyFrame);
+  const motion = objectOnly ? "镜头缓慢推近，依次聚焦本幕的物品。" : (block.motion || "").trim() || defaultMotion;
+  const line = block.line.trim().replace(/\s+/g, " ");
+  return [
+    `本幕动作：${motion}`,
+    genericMotions.has(motion) && line && `本幕讲解内容（只用来理解动作，不出现在画面中）：${line.slice(0, 200)}`,
+    "节奏：动作幅度小、速度平缓，一个动作做完再开始下一个；镜头运动平稳，不切换场景。",
+    scene && `首帧内容：${scene.slice(0, 240)}`,
+    "保持首帧的场景、光线、道具外观和画风，不新增其他物品。",
+    presenterRule(w, objectOnly, true),
+    matchNext
+      ? "动作完成后，沿同一件道具或同一方向平稳过渡到给定尾帧。尾帧只用来衔接，下一幕的动作留到下一幕。"
+      : "动作完成后，镜头平稳停住。",
+    `画风：保持「${styles[w.style]}」。`,
+    "画面中不出现文字、字幕和数字，包装和屏幕保持无字。",
+  ].filter(Boolean).join("\n").slice(0, 2050);
+}
+function sceneImageState(block) {
+  if (block.job?.error) return "配图失败";
+  if (block.job?.referenceAfter) return "等待基准图";
+  if (block.job) return "生成中";
+  return block.image ? "已配图" : "待配图";
+}
+
+function storyboardSwitcher(w, selected) {
+  return '<nav class="scene-switcher" aria-label="切换分镜">' +
+    w.blocks.map((block, i) => btn(
+      '<span class="scene-name"><b>' + (i + 1) + '</b><span data-scene-name>' +
+      esc(block.name.trim() || "未命名分镜") + '</span></span><span class="scene-state" data-scene-state>' +
+      sceneImageState(block) + '</span>',
+      "select-scene", "scene-choice", i, 'aria-pressed="' + (i === selected) + '"',
+    )).join("") + '</nav>';
+}
+
+function selectScene(w, index) {
+  if (!w.blocks[index]) return;
+  selectedScenes.set(w, w.blocks[index]);
+  render(true);
+  app.querySelector('.scene-choice[aria-pressed="true"]')?.focus({ preventScroll: true });
+}
+
+function revealSelectedScene() {
+  const selected = app.querySelector('.scene-choice[aria-pressed="true"]');
+  if (!selected) return;
+  const rail = selected.parentElement;
+  const start = selected.offsetLeft - 3;
+  const end = selected.offsetLeft + selected.offsetWidth + 3;
+  if (start < rail.scrollLeft) rail.scrollLeft = start;
+  else if (end > rail.scrollLeft + rail.clientWidth) rail.scrollLeft = end - rail.clientWidth;
 }
 
 function pictureControls(w, b, i, quiet = false) {
@@ -1025,9 +1110,12 @@ function pictureControls(w, b, i, quiet = false) {
         '" alt="第 ' +
         (i + 1) +
         ' 张配图">'
-      : "") +
+      : w.type === "video" && (!b.job || b.job.error)
+        ? '<span class="picture-placeholder">待生成分镜图</span>'
+        : "") +
     (b.job && !b.job.error
-      ? '<div class="picture-overlay" role="status"><span class="picture-busy"><span class="spinner" aria-hidden="true"></span>正在生成这张图</span></div>'
+      ? '<div class="picture-overlay" role="status"><span class="picture-busy"><span class="spinner" aria-hidden="true"></span>' +
+        (b.job.referenceAfter ? "等待基准图" : "正在生成这张图") + '</span></div>'
       : "") +
     "</div>" +
     (b.job
@@ -1039,12 +1127,14 @@ function pictureControls(w, b, i, quiet = false) {
           ? '<span class="small">' +
             esc(origin) +
             (b.imageSize ? " · " + esc(b.imageSize) : "") +
+            (styles[b.imageStyle] ? " · " + esc(styles[b.imageStyle]) : "") +
             "</span>"
           : '<span class="small">暂未添加配图</span>') +
         (w.stage === "review"
           ? ""
           : btn(
-              b.image ? "重新生成这张图" : "为这段配图",
+              b.image ? "重新生成这张图" : w.type === "video" ? "生成这张分镜图" :
+                b.suggestedImage ? "生成本段建议配图" : "为这段配图",
               "reimage",
               quiet ? "textbtn" : "outline",
               i,
@@ -1055,25 +1145,32 @@ function pictureControls(w, b, i, quiet = false) {
 }
 
 function inlineJobError(job, index = "") {
+  const dismiss = job.target === "initial-image"
+    ? "跳过这张图"
+    : index === "" ? "关闭提示" : "取消重做";
   return (
     '<div class="banner err" role="alert">配图生成未完成：' +
     esc(job.error) +
     '<div class="banner-actions">' +
     btn("重试", "retry", "secondary", index) +
-    btn(index === "" ? "关闭提示" : "取消重做", "abort-job", "textbtn", index) +
+    btn(dismiss, "abort-job", "textbtn", index) +
     "</div></div>"
   );
 }
 
 function syncImageActions(w) {
   const pending = w.blocks.some((b) => b.job);
+  const missing = w.type === "video" && w.blocks.some((b) => !b.image);
   for (const el of app.querySelectorAll(
     '[data-action="compose"], [data-action="submit"]',
   )) {
-    el.disabled = pending || (el.dataset.action === "submit" && !!w.videoDirty);
+    const composing = el.dataset.action === "compose";
+    el.disabled = pending || (composing ? missing : !!w.videoDirty);
     el.title = pending
-      ? "请先等待单张配图完成或取消失败提示"
-      : w.videoDirty
+      ? "请等待配图完成，或处理失败的配图"
+      : composing && missing
+        ? "请先为全部分镜生成配图"
+        : !composing && w.videoDirty
         ? "分镜已变更，请先重新合成视频"
         : "";
   }
@@ -1081,8 +1178,47 @@ function syncImageActions(w) {
     el.disabled =
       w.blocks.length <= 2 || !!w.blocks[Number(el.dataset.val)]?.job;
   }
+  for (const el of app.querySelectorAll('[data-action="move-block"]')) {
+    const [index, direction] = el.dataset.val.split(":").map(Number);
+    const neighbor = w.blocks[index + direction];
+    el.disabled = !neighbor || !!neighbor.job || !!w.blocks[index]?.job;
+  }
+  const regenerate = app.querySelector('[data-action="regenerate-all"]');
+  if (regenerate) {
+    regenerate.disabled = w.blocks.some((b) => b.job && !b.job.error);
+  }
   const stale = app.querySelector("#video-stale");
   if (stale) stale.hidden = !w.videoDirty;
+  const suggested = app.querySelector('[data-action="fill-article-images"]');
+  if (suggested) {
+    const count = missingBlockImages(w).length;
+    suggested.hidden = !count;
+    suggested.textContent = `生成建议配图（${count} 张）`;
+  }
+  const restyle = app.querySelector('[data-action="restyle-images"]');
+  if (restyle) {
+    const count = w.blocks.filter((block) => block.image).length;
+    restyle.hidden = count < 2;
+    restyle.disabled = pending;
+    restyle.textContent = `统一重做配图（${count} 张）`;
+  }
+  const imageProgress = app.querySelector("#storyboard-image-progress");
+  if (imageProgress) {
+    const ready = w.blocks.filter((b) => b.image).length;
+    const failed = w.blocks.filter((b) => b.job?.error).length;
+    const progress = `分镜配图 ${ready} / ${w.blocks.length}` +
+      (failed ? ` · ${failed} 张失败` : "");
+    if (imageProgress.textContent !== progress) imageProgress.textContent = progress;
+    const fill = app.querySelector('[data-action="fill-video-images"]');
+    fill.hidden = !missing;
+    fill.disabled = !w.blocks.some((b) => !b.image && !b.job);
+    for (const el of app.querySelectorAll(".scene-choice")) {
+      const state = el.querySelector("[data-scene-state]");
+      const label = sceneImageState(w.blocks[Number(el.dataset.val)]);
+      if (state.textContent !== label) state.textContent = label;
+      state.dataset.state = label;
+    }
+  }
 }
 
 function updateJobView(w, owner, finished = false) {
@@ -1121,7 +1257,7 @@ function updateJobView(w, owner, finished = false) {
 }
 
 function renderPictureDialog(w) {
-  const { index, mode, prompt, imageModel, imageSize } = regenModal;
+  const { index, mode, prompt, imageModel, imageSize, reference } = regenModal;
   const block = w.blocks[index];
   const models = Object.entries(config.imageModels).map(([id, spec]) => [
     id,
@@ -1134,19 +1270,23 @@ function renderPictureDialog(w) {
   let body =
     modeSegment(mode, "regen-mode") +
     (isArk ? arkKeyWarning("regen-mode") : "") +
-    '<label class="field">画面提示词<textarea id="imageprompt" rows="4" maxlength="1800">' +
+    '<label class="field">' + (w.type === "video" ? "本幕首帧画面（选填）" : "画面描述（选填）") +
+    '<textarea id="imageprompt" rows="3" maxlength="1800" placeholder="例如：近景，一只手把药盒转到侧面，手指停在印日期的位置">' +
     esc(prompt) +
     "</textarea></label>";
 
   if (isArk) {
     body +=
+      '<details class="shot-options"><summary>查看完整生成提示词</summary>' +
+      '<textarea id="generated-image-prompt" rows="5" readonly aria-label="提交给方舟的提示词">' +
+      esc(picturePrompt(w, index, prompt, reference)) + '</textarea></details>' +
       '<div class="fields" style="margin-top:11px">' +
       '<label class="field">生图模型<select id="picture-model">' +
       opts(models, imageModel) +
       '</select></label><label class="field">清晰度<select id="picture-size">' +
       opts(config.imageModels[imageModel][1], imageSize) +
       "</select></label></div>" +
-      '<p class="footmeta">仅生成这一张，成功后原位替换，按方舟实际用量计费。</p>' +
+      '<p class="footmeta">沿用所选风格「' + esc(styles[w.style]) + '」。仅生成这一张，成功后原位替换，按方舟实际用量计费。</p>' +
       (w.type === "video" && w.stage === "draft"
         ? '<p class="footmeta">换图后返回分镜编辑重新合成，即可更新视频画面。</p>'
         : "") +
@@ -1161,9 +1301,9 @@ function renderPictureDialog(w) {
       "</div>";
   } else {
     body +=
-      '<div class="mode-box" style="margin-top:12px">切换下一张内置示例图并保存上方提示词，不消耗方舟额度。</div>' +
+      '<div class="mode-box" style="margin-top:12px">使用「' + esc(styles[w.style]) + '」的内置样图并保存提示词。</div>' +
       '<div style="margin-top:14px">' +
-      btn("更换本地示例图", "regen-demo", "primary widebtn", index) +
+      btn("使用所选风格样图", "regen-demo", "primary widebtn", index) +
       "</div>";
   }
 
@@ -1176,10 +1316,13 @@ function renderPictureDialog(w) {
 
 function openPictureDialog(w, index) {
   const block = w.blocks[index];
+  const needsReplacement = rejectedPortraitFrames.get(w)?.has(block.image);
+  const prompt = needsReplacement ? objectOnlyFrame + "用道具近景表现本幕口播中的核对要点。" : sceneDescription(w, block.prompt);
   regenModal = {
     index,
     mode: w.settings.mode,
-    prompt: block.prompt,
+    prompt,
+    reference: prompt.startsWith(objectOnlyFrame) ? "" : pictureReference(w, [block]),
     imageModel: w.settings.imageModel,
     imageSize: w.settings.imageSize,
   };
@@ -1271,10 +1414,10 @@ function blockEditor(w, b, i, rangeStr) {
       ? '<details class="shot-options"><summary>运镜要求与单镜时长（' +
         b.seconds +
         " 秒）</summary>" +
-        '<label class="field">画面动作与运镜<textarea rows="2" maxlength="400" data-block="' +
+        '<label class="field">画面动作与镜头衔接<textarea rows="2" maxlength="400" data-block="' +
         i +
         '" data-key="motion">' +
-        esc(b.motion || "镜头缓慢推进，保持主体和画面风格一致。") +
+        esc(b.motion || defaultMotion) +
         '</textarea></label><label class="field" style="margin-top:10px">单镜时长<select data-seconds="' +
         i +
         '">' +
@@ -1293,39 +1436,60 @@ function blockEditor(w, b, i, rangeStr) {
   );
 }
 
+// Use the same reading surface in the editor and the finished draft.
+function articlePaper(w, editable) {
+  const qa = w.layout === "避坑问答版";
+  const deep = w.layout === "临床深度版";
+  function field(value, label, binding, limit, tag, cls) {
+    if (!editable) return `<${tag} class="${cls}">${esc(value)}</${tag}>`;
+    return `<textarea rows="1" class="autogrow ${cls}" aria-label="${label}" placeholder="${label}" maxlength="${limit}" ${binding}>${esc(value)}</textarea>`;
+  }
+  const sections = w.blocks.map((b, i) => {
+    const binding = `data-block="${i}"`;
+    const heading = field(b.name, `第 ${i + 1} 段小标题`, binding + ' data-key="name"', 60, "h3", "paper-heading");
+    const text = field(b.line, `第 ${i + 1} 段正文`, binding + ' data-key="line"', 1800, "p", "paper-text");
+    const tools = editable ? '<div class="paper-tools">' +
+      btn(ico("up"), "move-block", "icon-btn", i + ":-1", 'aria-label="上移本段"') +
+      btn(ico("down"), "move-block", "icon-btn", i + ":1", 'aria-label="下移本段"') +
+      btn(ico("trash"), "remove-block", "icon-btn danger", i, 'aria-label="移除本段"') + "</div>" : "";
+    const marker = qa ? "问" : deep ? "" : String(i + 1).padStart(2, "0");
+    return '<section class="paper-section"><div class="paper-section-head">' +
+      (marker ? '<span class="paper-marker" aria-hidden="true">' + marker + "</span>" : "") +
+      heading + tools + '</div><div class="paper-copy">' +
+      (qa ? '<span class="paper-answer">答</span>' : "") + text + "</div>" +
+      pictureControls(w, b, i, true) + "</section>";
+  }).join("");
+  return '<article class="sheet article-paper"><header><span class="paper-edition">' + esc(w.layout) +
+    "</span>" + field(w.title, "作品标题", 'data-bind="title"', 300, "h2", "paper-title") +
+    '</header><div class="paper-intro"><b>药师导读</b>' +
+    field(w.lead, "药师导读", 'data-bind="lead"', 600, "p", "paper-lead") + "</div>" + sections +
+    (editable ? btn(ico("plus") + " 添加一段正文", "append", "textbtn") :
+      '<p class="ai-note">内容与配图由 AI 辅助生成，发布前请药师核对专业表述。</p>') +
+    "</article>";
+}
+
 function editor(w) {
   const vid = w.type === "video";
   const s = w.settings;
+  const music = s.music ?? defaults.music;
   const ranges = vid ? shotRanges(w.blocks) : [];
-  const totalSec = vid ? w.blocks.reduce((sum, b) => sum + b.seconds, 0) : 0;
-  if (vid) w.settings.duration = totalSec;
-  const missingImages = vid && w.blocks.some((b) => !b.image);
+  const totalSec = vid ? videoTotalSeconds(w) : 0;
+  const selected = Math.max(0, w.blocks.indexOf(selectedScenes.get(w)));
 
-  const body =
-    '<div class="sheet"><label class="field">作品标题<input maxlength="300" data-bind="title" value="' +
-    esc(w.title) +
-    '" placeholder="输入清晰易懂的科普标题"></label>' +
-    (vid
-      ? ""
-      : '<label class="field" style="margin-top:14px">药师导读<textarea rows="2" maxlength="600" class="autogrow" data-bind="lead" placeholder="用一两句话提炼核心阅读提示">' +
-        esc(w.lead) +
-        "</textarea></label>") +
-    '</div><div class="sheet"><div class="card-head"><h2>' +
-    (vid ? "分镜脚本" : "正文与配图") +
-    '</h2><span class="small">共 ' +
-    w.blocks.length +
-    (vid ? " 幕 · " + totalSec + " 秒" : " 段") +
-    "</span></div>" +
-    w.blocks.map((b, i) => blockEditor(w, b, i, ranges[i])).join("") +
-    '<div style="margin-top:12px">' +
-    btn(
-      ico("plus") + (vid ? " 添加一幕分镜" : " 添加一段正文"),
-      "append",
-      "secondary",
-      "",
-      vid && w.blocks.length >= 12 ? "disabled" : "",
-    ) +
-    "</div></div>";
+  const body = vid
+    ? '<div class="sheet"><label class="field">作品标题<input maxlength="300" data-bind="title" value="' +
+      esc(w.title) + '" placeholder="输入清晰易懂的科普标题"></label>' +
+      '<label class="field" style="margin-top:10px">全片场景与道具<textarea rows="2" maxlength="240" class="autogrow" data-bind="setting" placeholder="例如：家中客厅的浅色木桌，桌上有白色药箱、一盒浅蓝色药盒和米色记录本">' +
+      esc(w.setting || "") + '</textarea></label><p class="footmeta">生成分镜图时沿用这里的场景，让各幕道具保持一致。</p></div>' +
+      '<div class="sheet"><div class="card-head"><h2>分镜脚本</h2><span class="small">共 ' +
+      w.blocks.length + " 幕 · " + totalSec + " 秒</span></div>" +
+      storyboardSwitcher(w, selected) +
+      (w.blocks[selected] ? blockEditor(w, w.blocks[selected], selected, ranges[selected]) : "") +
+      '<div class="flexwrap" style="margin-top:12px">' +
+      btn(ico("plus") + " 添加一幕分镜", "append", "secondary", "", w.blocks.length >= maxVideoShots ? "disabled" : "") +
+      btn("按口播调整时长", "time-shots", "secondary") +
+      "</div></div>"
+    : articlePaper(w, true);
 
   const summaryPills = [
     s.mode === "ark"
@@ -1334,11 +1498,13 @@ function editor(w) {
         : config.imageModels[s.imageModel][0]
       : "内置示例素材",
     "画幅 " + s.ratio,
+    styles[w.style],
     ...(vid
       ? [s.mode === "ark" ? s.resolution : "480p", s.voice, totalSec + " 秒"]
       : s.mode === "ark"
         ? [s.imageSize]
         : []),
+    ...(vid && config.videoBackgroundMusic ? [music === "off" ? musicLabels.off : `配乐 · ${musicLabels[music]}`] : []),
     ...(w.drug ? ["药品：" + w.drug] : []),
   ];
 
@@ -1354,11 +1520,13 @@ function editor(w) {
     '<div style="margin-top:12px">' +
     btn("调整模型参数", "work-settings", "outline widebtn") +
     "</div>" +
-    (missingImages && s.mode === "demo"
-      ? '<div style="margin-top:8px">' +
-        btn("补齐缺失示例图", "fill-demo-images", "secondary widebtn") +
+    (vid
+      ? '<div class="storyboard-progress stack-actions">' +
+        '<p class="small" id="storyboard-image-progress" role="status"></p>' +
+        btn("生成缺失配图", "fill-video-images", "primary widebtn") +
         "</div>"
-      : "") +
+      : btn("生成建议配图", "fill-article-images", "secondary widebtn", "", 'hidden style="margin-top:12px"')) +
+    btn("统一重做配图", "restyle-images", "outline widebtn", "", 'hidden style="margin-top:8px"') +
     '<div class="dividerline"></div><div class="stack-actions">' +
     btn(
       vid
@@ -1470,8 +1638,9 @@ function detail(w) {
     ...(vid
       ? [
           w.settings.ratio,
-          w.settings.duration + " 秒",
+          videoTotalSeconds(w) + " 秒",
           w.settings.voice,
+          ...(musicLabels[w.video.music] ? [musicLabels[w.video.music]] : []),
           w.renderMode === "demo" ? "本地演示成片" : "方舟动态成片",
         ]
       : []),
@@ -1487,7 +1656,7 @@ function detail(w) {
       '"><track default kind="subtitles" srclang="zh" label="中文" src="' +
       esc(w.video.captions) +
       '"></video></div>' +
-      '<div id="video-stale" class="banner warn" hidden>分镜脚本或配图已修改。返回分镜编辑并重新合成后，上方成片才会同步更新。</div>' +
+      '<div id="video-stale" class="banner warn" hidden>分镜或背景音乐已修改。返回分镜编辑并重新合成后，成片会同步更新。</div>' +
       '<div class="dividerline"></div><details class="transcript" open><summary>' +
       w.blocks.length +
       " 幕分镜与口播台词</summary>" +
@@ -1508,22 +1677,7 @@ function detail(w) {
         )
         .join("") +
       "</details>"
-    : '<div class="prose"><div class="lead-box"><div class="lead-title">药师导读</div><p class="lead">' +
-      esc(w.lead) +
-      "</p></div>" +
-      w.blocks
-        .map(
-          (b, i) =>
-            '<section class="prose-section"><h3>' +
-            esc(b.name) +
-            "</h3><p>" +
-            esc(b.line) +
-            "</p>" +
-            pictureControls(w, b, i, true) +
-            "</section>",
-        )
-        .join("") +
-      '<div class="ai-note">内容与配图由 AI 辅助生成，发布前请药师核对专业表述。</div></div>';
+    : articlePaper(w, false);
 
   const tagsHtml = w.tags.length
     ? '<div class="flexwrap" style="margin-bottom:12px">' +
@@ -1594,12 +1748,12 @@ function detail(w) {
     w,
     reviewing ? "作品审核中" : vid ? "视频成品草稿" : "图文成品草稿",
     2,
-    '<div class="layout"><div class="sheet"><h2 class="articleTitle">' +
-      esc(w.title) +
-      '</h2><div class="article-meta">' +
-      metaPills.map((m) => '<span class="pill">' + esc(m) + "</span>").join("") +
-      "</div>" +
-      body +
+    '<div class="layout"><div>' +
+      (vid ? '<div class="sheet"><h2 class="articleTitle">' + esc(w.title) +
+        '</h2><div class="article-meta">' +
+        metaPills.map((m) => '<span class="pill">' + esc(m) + "</span>").join("") +
+        "</div>" + body + "</div>" : body + '<div class="article-meta paper-meta">' +
+        metaPills.map((m) => '<span class="pill">' + esc(m) + "</span>").join("") + "</div>") +
       '</div><aside class="aside">' +
       panel +
       "</aside></div>",
@@ -1607,11 +1761,46 @@ function detail(w) {
   );
 }
 
+function portraitRejected(job) {
+  return job?.target === "compose" && job.payload.mode === "ark" &&
+    /InputImageSensitiveContentDetected\.PrivacyInformation|input image[^\n]*may contain real person/i.test(job.error || "");
+}
+
+function rejectedFrameIndex(w) {
+  const position = /^制作分镜\s+(\d+)\s*\//.exec(w.job?.progress || "");
+  if (!position) return -1;
+  const currentIndex = Number(position[1]) - 1;
+  const tailRejected = w.job.payload.items[currentIndex]?.matchNext && /content\[2\]/i.test(w.job.error || "");
+  const index = currentIndex + (tailRejected ? 1 : 0);
+  const image = w.job.payload.items[index]?.image;
+  if (!image) return -1;
+  return w.blocks[index]?.image === image ? index : w.blocks.findIndex((block) => block.image === image);
+}
+
+function rememberRejectedFrame(w) {
+  const index = rejectedFrameIndex(w);
+  if (index < 0) return;
+  const images = rejectedPortraitFrames.get(w) || new Set();
+  images.add(w.blocks[index].image);
+  rejectedPortraitFrames.set(w, images);
+}
+
 function jobView(w) {
   const failed = !!w.job.error;
+  const writing = w.job.target === "write-draft";
+  const speechAuthFailed = failed && w.job.error.includes("火山语音鉴权失败");
+  const rejected = portraitRejected(w.job);
+  const rejectedIndex = rejected ? rejectedFrameIndex(w) : -1;
+  const portraitMessage = rejected &&
+    (rejectedIndex >= 0 ? `方舟判定第 ${rejectedIndex + 1} 幕的首帧可能含真人。` : "方舟判定本次使用的首帧可能含真人。") +
+    "换成无人物画面后再合成。想保留现有图片，也可以返回编辑页切换到本地演示，合成静帧视频。";
+  const recovery = rejected
+    ? (rejectedIndex >= 0 ? btn(`重做第 ${rejectedIndex + 1} 幕无人物首帧`, "replace-portrait-frame", "primary") : "")
+    : (speechAuthFailed ? btn("更新火山语音 Key", "configure-speech", "primary") : "") +
+      btn(w.job.partial ? "重试配图规划" : "继续此任务", "retry", speechAuthFailed ? "secondary" : "primary");
   shell(
     w,
-    failed ? "生成任务需要处理" : "正在合成视频",
+    failed ? "生成任务需要处理" : writing ? (w.type === "article" ? "正在生成文章" : "正在生成分镜脚本") : "正在合成视频",
     1,
     '<div class="view-wrap sheet"><div class="row">' +
       (failed ? "" : '<span class="spinner" aria-hidden="true"></span>') +
@@ -1622,13 +1811,15 @@ function jobView(w) {
       '" style="margin-top:14px">' +
       esc(
         failed
-          ? w.job.error
-          : "合成期间可先返回工作台处理其他草稿，已完成的分镜会自动复用。",
+          ? (rejected ? portraitMessage : w.job.error)
+          : writing ? "生成完成后，草稿会保存在「我的作品」。" : "合成期间可先返回工作台处理其他草稿，已完成的分镜会自动复用。",
       ) +
-      '</div><div class="actions">' +
+      '</div>' + (rejected ? '<details class="shot-options"><summary>查看方舟原始报错</summary><p class="footmeta">' +
+        esc(w.job.error) + "</p></details>" : "") + '<div class="actions">' +
       (failed
-        ? btn("继续此任务", "retry", "primary") +
-          btn("返回分镜编辑", "abort-job", "secondary")
+        ? recovery +
+          (w.job.partial ? btn("保留正文，稍后配图", "keep-written-article", "secondary") : "") +
+          btn(writing ? "返回主题设置" : "返回分镜编辑", "abort-job", "secondary")
         : "") +
       btn("返回工作台", "home", "textbtn") +
       "</div></div>",
@@ -1647,25 +1838,61 @@ async function jsonRequest(path, init) {
   return value;
 }
 
+async function recoverFinishedJob(w) {
+  const job = w.job;
+  let result;
+  try {
+    result = await jsonRequest("/api/jobs/" + job.payload.id);
+  } catch {
+    return; // Keep the saved failure and its retry controls while offline.
+  }
+  if (w.job !== job || !job.error) return;
+  if (result.status === "done") {
+    job.error = "";
+    poll(w);
+  } else if (result.status === "failed" && portraitRejected(job) && result.progress && job.progress !== result.progress) {
+    job.progress = result.progress;
+    save();
+    updateJobView(w, w);
+  } else if (job.target === "write-draft" && result.status === "failed" && result.output?.sections && !job.partial) {
+    job.partial = result.output;
+    job.error = result.error;
+    save();
+    updateJobView(w, w);
+  }
+}
+
 async function poll(w, owner = w) {
   const job = owner.job;
-  if (!job || watching.has(job.payload.id)) return;
+  if (!job || job.referenceAfter || submitting.has(job.payload.id) || watching.has(job.payload.id)) {
+    return;
+  }
   watching.add(job.payload.id);
   try {
     while (owner.job === job && !job.error) {
       try {
         const result = await jsonRequest("/api/jobs/" + job.payload.id);
         if (owner.job !== job) return;
-        if (result.status === "failed") throw Error(result.error);
+        if (result.status === "failed") {
+          job.progress = result.progress || job.progress;
+          if (job.target === "write-draft" && result.output?.sections) job.partial = result.output;
+          throw Error(result.error);
+        }
         if (result.status === "done") {
+          let ready = [];
           if (job.target === "compose") {
             w.video = result.output;
+            if (result.output.shotSeconds?.length === w.blocks.length) {
+              result.output.shotSeconds.forEach((seconds, index) => { w.blocks[index].seconds = seconds; });
+            }
             w.renderMode = job.payload.mode;
             w.stage = "draft";
             w.videoDirty = false;
             w.viewingSetup = false;
+          } else if (job.target === "write-draft") {
+            applyWrittenDraft(w, result.output);
           } else {
-            const single = job.target === "regenerate";
+            const single = owner !== w;
             result.output.images.forEach((img, i) => {
               const block = single ? owner : w.blocks[i];
               if (!block) return;
@@ -1678,11 +1905,21 @@ async function poll(w, owner = w) {
                 job.payload.mode === "ark"
                   ? job.payload.settings.imageSize
                   : "";
-              if (single) {
+              block.imageStyle = job.payload.styleReference ? job.payload.style : undefined;
+              block.storyboardFrame = job.payload.storyboard === true && job.payload.mode === "ark";
+              if (job.target === "regenerate") {
                 block.prompt = job.prompt;
                 block.variant = (block.variant || 0) + 1;
               }
             });
+            if (job.referenceLeader) {
+              ready = w.blocks.filter((block) => block.job?.referenceAfter === job.payload.id);
+              for (const block of ready) {
+                block.job.payload.items[0].reference = owner.image;
+                delete block.job.referenceAfter;
+                block.job.readyToSend = true;
+              }
+            }
             if (single && w.type === "video" && w.video) w.videoDirty = true;
             if (!single) {
               w.stage = w.type === "video" ? "script" : "draft";
@@ -1694,12 +1931,14 @@ async function poll(w, owner = w) {
           w.updated = Date.now();
           save();
           updateJobView(w, owner, true);
+          for (const block of ready) sendJob(w, block);
           return;
         }
         job.progress = result.progress;
         const el = owner === w && current() === w ? $("#progress") : null;
         if (el) el.textContent = result.progress;
       } catch (e) {
+        if (owner.job !== job) return;
         job.error = e.message;
         save();
         updateJobView(w, owner);
@@ -1714,6 +1953,11 @@ async function poll(w, owner = w) {
 
 async function sendJob(w, owner = w) {
   const j = owner.job;
+  if (!j || j.referenceAfter) return;
+  const { id } = j.payload;
+  if (submitting.has(id)) return;
+  submitting.add(id);
+  delete j.readyToSend;
   j.error = "";
   save();
   updateJobView(w, owner);
@@ -1723,44 +1967,71 @@ async function sendJob(w, owner = w) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(j.payload),
     });
-    if (owner.job === j) poll(w, owner);
   } catch (e) {
-    j.error = e.message;
-    save();
-    updateJobView(w, owner);
+    if (owner.job === j) {
+      j.error = e.message;
+      save();
+      updateJobView(w, owner);
+    }
+  } finally {
+    submitting.delete(id);
   }
+  if (owner.job === j && !j.error) poll(w, owner);
+}
+
+function createJob(w, target, items, settings = w.settings) {
+  const payload = {
+    id: crypto.randomUUID(),
+    mode: settings.mode,
+    kind: target === "compose" ? "video" : target === "write-draft" ? "draft" : "images",
+    settings: { ...settings },
+    style: w.style,
+    items,
+  };
+  if (payload.kind === "images" && config.imageStyleReference) payload.styleReference = true;
+  if (w.type === "video" && payload.kind !== "draft") payload.storyboard = true;
+  return { target, payload };
 }
 
 async function startJob(w, target, items, extra = {}, settings = w.settings) {
   const owner = target === "regenerate" ? w.blocks[extra.index] : w;
   if (w.job || owner.job) return;
-  const payload = {
-    id: crypto.randomUUID(),
-    mode: settings.mode,
-    kind: target === "compose" ? "video" : "images",
-    settings: { ...settings },
-    style: w.style,
-    items,
-  };
-  owner.job = { target, payload, ...extra };
-  save();
+  owner.job = { ...createJob(w, target, items, settings), ...extra };
   await sendJob(w, owner);
 }
 
-function authorize(w, count, kind, fn) {
-  if (w.settings.mode === "demo") return fn();
-  if (!config.keyPresent) {
-    openArkConnection();
+function authorize(w, count, kind, fn, voicedCount = count) {
+  const writing = kind === "draft";
+  const isArk = writing || w.settings.mode === "ark";
+  const usesSpeech = kind === "video" && w.settings.voice !== "无配音" && voicedCount > 0;
+  if (!isArk && !usesSpeech) return fn();
+  if (writing && !config.textModel) {
+    notify("请重启本地工作台，再刷新页面以启用方舟文字生成。", "warn");
+    return;
+  }
+  if (isArk && !config.keyPresent) {
+    openApiKeys();
+    return;
+  }
+  if (usesSpeech && !config.speechKeyPresent) {
+    openApiKeys("speech");
     return;
   }
   retryPayload = fn;
-  openModal(
-    "确认使用火山方舟生成",
+  const reference = videoReferenceSeconds(w);
+  const textSummary = writing ? "<p>将使用方舟" +
+    (w.type === "video" ? (reference === null
+      ? "按主题生成完整口播，再根据口播安排分镜时长。"
+      : `参考 ${reference} 秒生成完整口播，再根据口播安排分镜时长。`) :
+      w.job?.partial ? "根据已生成的正文规划配图。" : "生成完整文章，再按正文决定哪些段落需要配图。") +
+    "预计提交 " + count + " 次文本请求，按 token 计费。素材张数在草稿生成后确认。</p>" +
+    '<span class="pill">' + esc(config.textModel) + "</span>" : "";
+  const arkSummary = !isArk || writing ? "" : (
     "<p>将按当前参数提交最多 <b>" +
       count +
       "</b> 个" +
       (kind === "video"
-        ? "视频分镜（共 " + w.settings.duration + " 秒）"
+        ? "视频分镜（预计 " + videoTotalSeconds(w) + " 秒，自动分镜会按配音调整）"
         : "图片生成") +
       '任务，费用由当前方舟账号按量结算。</p><div class="summary-kv" style="margin-top:12px">' +
       '<span class="pill">' +
@@ -1773,7 +2044,14 @@ function authorize(w, count, kind, fn) {
       esc(kind === "video" ? w.settings.resolution : w.settings.imageSize) +
       '</span><span class="pill">画幅 ' +
       esc(w.settings.ratio) +
-      '</span></div><div class="actions dialog-actions">' +
+      "</span></div>"
+  );
+  const speechSummary = usesSpeech
+    ? "<p>最多为 <b>" + voicedCount + "</b> 个分镜生成火山语音配音，按口播字符数计费。</p>"
+    : "";
+  openModal(
+    isArk ? "确认使用火山方舟生成" : "确认使用火山语音配音",
+    textSummary + arkSummary + speechSummary + '<div class="actions dialog-actions">' +
       btn("取消", "close", "secondary") +
       btn("确认提交并计费", "confirm-paid", "primary") +
       "</div>",
@@ -1799,19 +2077,149 @@ function generate(w) {
     topicMissing();
     return;
   }
-  if (w.settings.mode === "ark" && !config.keyPresent) {
-    openArkConnection();
-    return;
+  if (w.job || w.blocks.some((b) => b.job && !b.job.error)) return;
+  const localExample = w.settings.mode === "demo" && examples.includes(w.topic.trim());
+  if (!localExample) {
+    return authorize(w, w.type === "article" ? 2 : 1, "draft", () => {
+      const settings = { ...w.settings, mode: "ark" };
+      if (w.type === "video") settings.duration = videoReferenceSeconds(w);
+      const job = createJob(w, "write-draft", [], settings);
+      job.payload.draft = { type: w.type, topic: w.topic.trim(), layout: w.layout, drug: w.drug };
+      if (w.type === "video") job.payload.draft.pharmacist = w.avatar === pharmacistAvatar;
+      w.job = job;
+      return sendJob(w);
+    });
   }
-  seedBlocks(w);
-  if (w.video) {
+  if (w.type === "article") {
+    const plan = planArticle(w);
+    const images = plan.blocks.filter((block) => block.suggestedImage);
+    installDraft(w, plan);
+    changed(w);
+    queueBlockImages(w, images);
+  } else {
+    installDraft(w, planVideo(w, config.videoModels[w.settings.videoModel][2]));
+    changed(w);
+  }
+  render();
+  app.focus({ preventScroll: true });
+}
+
+function installDraft(w, plan) {
+  Object.assign(w, plan);
+  w.viewingSetup = false;
+  w.editing = w.type === "article";
+  w.stage = w.editing ? "draft" : "script";
+  if (w.type === "video") {
     w.video = null;
     w.videoDirty = false;
+    selectedScenes.delete(w);
   }
-  const items = (w.type === "video" ? w.blocks : w.blocks.slice(0, 2)).map(
-    (b) => ({ prompt: b.prompt }),
-  );
-  authorize(w, items.length, "images", () => startJob(w, "initial", items));
+}
+
+function applyWrittenDraft(w, output) {
+  const { title } = output;
+  if (w.type === "video") {
+    installDraft(w, { title, setting: output.setting || "", blocks: videoBlocks(output.shots) });
+  } else {
+    const visuals = new Map((output.images || []).map(({ section, scene }) => [section, scene]));
+    const sections = output.sections.map(({ name, line }, i) => [name, line, visuals.get(i + 1)]);
+    installDraft(w, { title, lead: output.lead, blocks: articleBlocks(sections) });
+  }
+}
+
+function missingBlockImages(w) {
+  return w.blocks.filter((b) => (w.type === "video" || b.suggestedImage) && !b.image && !b.job);
+}
+
+function pictureReference(w, targets) {
+  if (!config.imageStyleReference) return "";
+  return w.blocks.find((block) =>
+    block.image?.startsWith("/media/") && block.imageStyle === w.style &&
+    (w.type !== "video" || block.storyboardFrame) && !targets.includes(block)
+  )?.image || "";
+}
+
+function picturePrompt(w, index, prompt, useReference) {
+  const block = w.blocks[index];
+  const scene = sceneDescription(w, prompt);
+  const summary = block.line.trim().replace(/\s+/g, " ");
+  if (w.type === "video") {
+    const objectOnly = scene.startsWith(objectOnlyFrame);
+    const first = index > 0 && w.blocks[0]?.prompt ? sceneDescription(w, w.blocks[0].prompt) : "";
+    const setting = w.setting?.trim() || (first && !first.startsWith(objectOnlyFrame) ? `与第一幕相同（${first.slice(0, 120)}）` : "");
+    return [
+      `画面：短视频第 ${index + 1} 幕的起始画面。` + (scene || `用一个画面表现本幕要点「${block.name.trim()}」。`),
+      !scene && summary && `本幕讲解（只用来构思画面，不写进画面）：${summary.slice(0, 120)}`,
+      !objectOnly && setting && `全片场景：${setting.slice(0, 160)}`,
+      presenterRule(w, objectOnly, false),
+      useReference && !objectOnly && "参考图是本片已完成的分镜，沿用其中的场景、光线、道具外观和人物外观，按本幕内容调整景别和摆放。",
+      framing(w), visualStyleRule(w), noTextFrame, medicalSafeFrame,
+    ].filter(Boolean).join("\n").slice(0, 2200);
+  }
+  const title = (w.title.trim() || w.topic.trim()).slice(0, 80);
+  const source = [title && `文章「${title}」`, block.name.trim() && `小节「${block.name.trim().slice(0, 40)}」`].filter(Boolean).join("的");
+  return [
+    scene ? `画面：${scene}` : "画面：画出最能帮读者看懂本段的一件物品或一个动作。",
+    !scene && summary && `本段大意（只用来构思画面，不写进画面）：${summary.slice(0, 160)}`,
+    source && `用途：用药科普${source}的配图。`,
+    w.drug && `涉及药品：${w.drug}，只用来确定药品外形，不在画面上写药名。`,
+    framing(w), visualStyleRule(w),
+    config.imageStyleReference && "参考图一是画风样图，只参考配色、笔触和材质，不沿用其中的人物、物品和构图。",
+    useReference && "参考图二是本篇已完成的配图，沿用其中反复出现的人物外观和道具。",
+    noTextFrame, medicalSafeFrame,
+  ].filter(Boolean).join("\n").slice(0, 2200);
+}
+function pictureItem(w, index, prompt, variant, reference, referenceAfter) {
+  if (w.type === "video" && sceneDescription(w, prompt).startsWith(objectOnlyFrame)) reference = "";
+  return {
+    prompt: picturePrompt(w, index, prompt, reference || referenceAfter),
+    variant,
+    ...(reference ? { reference } : {}),
+  };
+}
+
+function fillBlockImages(w) {
+  if (w.job) return;
+  const missing = missingBlockImages(w);
+  if (!missing.length) return;
+  authorize(w, missing.length, "images", () => queueBlockImages(w, missing));
+}
+
+function restyleBlockImages(w) {
+  if (w.job || w.blocks.some((block) => block.job)) return;
+  const existing = w.blocks.filter((block) => block.image);
+  if (existing.length < 2) return;
+  authorize(w, existing.length, "images", () => queueBlockImages(w, existing, true));
+}
+
+function queueBlockImages(w, blocks, replacing = false) {
+  const reference = pictureReference(w, blocks);
+  const needsLeader = w.type === "video" && w.settings.mode === "ark" && config.imageStyleReference && !reference;
+  let leader = needsLeader ? w.blocks.find(({ job }) => job?.referenceLeader && !job.error &&
+    job.payload.storyboard && job.payload.style === w.style)?.job : null;
+  const queued = [];
+  for (const block of blocks) {
+    const index = w.blocks.indexOf(block);
+    if (index < 0 || block.job || Boolean(block.image) !== replacing) continue;
+    const prompt = sceneDescription(w, block.prompt);
+    const variant = w.type === "video" ? index : queued.length;
+    const objectOnly = w.type === "video" && prompt.startsWith(objectOnlyFrame);
+    const referenceAfter = objectOnly ? undefined : leader?.payload.id;
+    block.job = createJob(w, replacing ? "regenerate" : "initial-image", [pictureItem(w, index, prompt, variant, reference, referenceAfter)]);
+    if (replacing) block.job.prompt = prompt;
+    if (referenceAfter) {
+      block.job.referenceAfter = referenceAfter;
+    } else {
+      block.job.readyToSend = true;
+      queued.push(block);
+      if (needsLeader && !objectOnly) {
+        leader = block.job;
+        leader.referenceLeader = true;
+      }
+    }
+  }
+  save();
+  for (const block of queued) sendJob(w, block);
 }
 
 function renderDrugList(query = "") {
@@ -1903,9 +2311,9 @@ function askRegenAllModal(w) {
     return;
   }
   openModal(
-    "重新生成整篇内容？",
+    w.type === "video" ? "重新生成分镜脚本？" : "重新生成整篇内容？",
     "<p>重新生成将覆盖当前已编辑的" +
-      (w.type === "video" ? "分镜脚本与已合成成片" : "标题、导读与各段正文") +
+      (w.type === "video" ? "分镜脚本、配图和已合成成片" : "标题、导读与各段正文") +
       '。</p><div class="actions dialog-actions">' +
       btn("取消", "close", "secondary") +
       btn("确认覆盖并重做", "confirm-regen-all", "primary") +
@@ -1954,6 +2362,7 @@ function render(preserveScroll = false) {
     if (w.job.target === "initial") setup(w);
     else jobView(w);
     if (!w.job.error) poll(w);
+    else if (w.job.target === "compose" || w.job.target === "write-draft") recoverFinishedJob(w);
     if (!preserveScroll) window.scrollTo(0, 0);
     return;
   }
@@ -1961,7 +2370,12 @@ function render(preserveScroll = false) {
   else if (w.stage === "script" || (w.stage === "draft" && w.editing))
     editor(w);
   else detail(w);
-  for (const b of w.blocks) if (b.job && !b.job.error) poll(w, b);
+  for (const b of w.blocks) {
+    if (!b.job || b.job.error || b.job.referenceAfter) continue;
+    if (b.job.readyToSend) sendJob(w, b);
+    else poll(w, b);
+  }
+  revealSelectedScene();
   if (preserveScroll) window.scrollTo(0, prevScroll);
   else window.scrollTo(0, 0);
 }
@@ -1995,6 +2409,8 @@ document.addEventListener("input", (e) => {
   }
   if (el.id === "imageprompt" && regenModal) {
     regenModal.prompt = el.value;
+    const preview = $("#generated-image-prompt", dialogBody);
+    if (w && preview) preview.value = picturePrompt(w, regenModal.index, el.value, regenModal.reference);
     return;
   }
   if (el.classList.contains("autogrow")) autoGrow(el);
@@ -2017,6 +2433,11 @@ document.addEventListener("input", (e) => {
     const block = w.blocks[idx];
     if (!block) return;
     block[el.dataset.key] = el.value;
+    if (el.dataset.key === "name" && w.type === "video") {
+      const sceneName = app.querySelector('.scene-choice[data-val="' + idx + '"] [data-scene-name]');
+      if (sceneName) sceneName.textContent = el.value.trim() || "未命名分镜";
+      if (w.video) w.videoDirty = true;
+    }
     if (el.dataset.key === "line") {
       const paceEl = $("#pace-" + idx);
       if (paceEl) {
@@ -2038,6 +2459,15 @@ document.addEventListener("input", (e) => {
 });
 
 document.addEventListener("keydown", (e) => {
+  const scene = e.target.closest(".scene-choice");
+  if (scene && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
+    e.preventDefault();
+    const index = Number(scene.dataset.val);
+    const targets = scene.parentElement.children;
+    const next = { ArrowLeft: index - 1, ArrowRight: index + 1, Home: 0, End: targets.length - 1 }[e.key];
+    targets[Math.max(0, Math.min(targets.length - 1, next))].click();
+    return;
+  }
   if (e.key !== "Enter" || e.isComposing) return;
   const el = e.target,
     w = current();
@@ -2088,8 +2518,9 @@ document.addEventListener("change", (e) => {
     return;
   }
   if (el.dataset.seconds !== undefined && w) {
-    w.blocks[Number(el.dataset.seconds)].seconds = Number(el.value);
-    w.settings.duration = w.blocks.reduce((sum, b) => sum + b.seconds, 0);
+    const block = w.blocks[Number(el.dataset.seconds)];
+    block.seconds = Number(el.value);
+    block.manualSeconds = true;
     if (w.video) w.videoDirty = true;
     changed(w);
     render(true);
@@ -2097,11 +2528,19 @@ document.addEventListener("change", (e) => {
   }
   const k = el.dataset.setting;
   if (!k) return;
+  if (k === "imageStyle" && w && modalScope === w.id) {
+    w.style = Number(el.value);
+    changed(w);
+    prefs(w);
+    render(true);
+    return;
+  }
   const inside = dialog.contains(el);
   const s =
     inside && modalScope === "global"
       ? data.settings
       : w?.settings || data.settings;
+  if (k === "music" && s === w?.settings && w.video && (s.music ?? defaults.music) !== el.value) w.videoDirty = true;
   applySettingMutation(s, k, el.type === "checkbox" ? el.checked : el.value);
   if (w && s === w.settings) changed(w);
   if (inside) {
@@ -2160,7 +2599,10 @@ document.addEventListener("click", async (e) => {
         prefs(null);
         break;
       case "connect-ark":
-        if (config) openArkConnection();
+        if (config) openApiKeys();
+        break;
+      case "configure-speech":
+        if (config) openApiKeys("speech");
         break;
       case "work-settings":
         if (w) prefs(w);
@@ -2208,6 +2650,7 @@ document.addEventListener("click", async (e) => {
         break;
       case "resume-edit":
         w.viewingSetup = false;
+        if (w.type === "article") w.editing = true;
         changed(w);
         render();
         break;
@@ -2216,7 +2659,7 @@ document.addEventListener("click", async (e) => {
         break;
       case "confirm-regen-all":
         dialog.close();
-        w.viewingSetup = false;
+        if (w.type === "video") w.viewingSetup = false;
         generate(w);
         break;
       case "fill": {
@@ -2231,12 +2674,12 @@ document.addEventListener("click", async (e) => {
         break;
       }
       case "avatar":
-        w.avatar = ["无人物", "药师插画"][Number(v)];
+        w.avatar = ["无人物", pharmacistAvatar][Number(v)];
         changed(w);
         render(true);
         break;
       case "duration":
-        w.settings.duration = [30, 45, 60, 90, 120][Number(v)];
+        w.settings.duration = videoReferenceDurations[Number(v)];
         changed(w);
         render(true);
         break;
@@ -2244,11 +2687,13 @@ document.addEventListener("click", async (e) => {
         w.style = Number(v);
         changed(w);
         render(true);
+        app.querySelector('[data-action="style"][aria-pressed="true"]')?.focus({ preventScroll: true });
         break;
       case "layout":
-        w.layout = ["通俗图解版", "临床深度版", "避坑问答版"][Number(v)];
+        w.layout = articleLayouts[Number(v)].name;
         changed(w);
         render(true);
+        app.querySelector('[data-action="layout"][aria-pressed="true"]')?.focus();
         break;
       case "drug":
         openDrugModal(w);
@@ -2292,18 +2737,15 @@ document.addEventListener("click", async (e) => {
         changed(w);
         render();
         break;
-      case "fill-demo-images":
-        w.blocks.forEach((b, idx) => {
-          if (!b.image) {
-            b.image = asset((w.style || 0) + idx);
-            b.imageModel = "";
-            b.imageSize = "";
-          }
-        });
-        if (w.video) w.videoDirty = true;
-        changed(w);
-        render(true);
-        notify("已补齐本地示例分镜图", "ok");
+      case "select-scene":
+        selectScene(w, Number(v));
+        break;
+      case "fill-video-images":
+      case "fill-article-images":
+        fillBlockImages(w);
+        break;
+      case "restyle-images":
+        restyleBlockImages(w);
         break;
       case "compose": {
         if (!w.title.trim()) {
@@ -2317,6 +2759,15 @@ document.addEventListener("click", async (e) => {
         if (w.blocks.some((b) => !b.image)) {
           notify("还有分镜缺少配图，请先为该幕配图", "warn");
           return;
+        }
+        if (w.settings.mode === "ark") {
+          const rejected = rejectedPortraitFrames.get(w);
+          const index = rejected ? w.blocks.findIndex((block) => rejected.has(block.image)) : -1;
+          if (index >= 0) {
+            notify(`第 ${index + 1} 幕的首帧已被方舟拒绝，请换图后再合成。`, "warn");
+            selectScene(w, index);
+            return;
+          }
         }
         if (
           w.blocks.some(
@@ -2333,12 +2784,13 @@ document.addEventListener("click", async (e) => {
           startJob(
             w,
             "compose",
-            w.blocks.map(({ prompt, image, line, seconds, motion }) => ({
-              prompt: prompt + "；" + (motion || "保持画面主体一致。"),
-              image,
-              line,
-              seconds,
-            })),
+            w.blocks.map(({ prompt, image, line, seconds, manualSeconds }, index) => {
+              const matchNext = index + 1 < w.blocks.length && !sceneDescription(w, prompt).startsWith(objectOnlyFrame);
+              return { prompt: storyboardPrompt(w, index, prompt, matchNext), image, line, seconds, matchNext,
+                autoDuration: !manualSeconds };
+            }),
+            {},
+            { ...w.settings, music: videoMusic(w) },
           ),
         );
         break;
@@ -2350,10 +2802,32 @@ document.addEventListener("click", async (e) => {
         if (fn) await fn();
         break;
       }
+      case "time-shots": {
+        const maxSeconds = config.videoModels[w.settings.videoModel][2];
+        const chars = w.blocks.map((block) => spokenChars(block.line));
+        const over = chars.findIndex((count) => count / videoSpeechRate > maxSeconds);
+        if (over >= 0) {
+          notify(`第 ${over + 1} 幕的口播超过模型的单镜时长上限，请缩短或拆成两幕。`, "warn");
+          selectScene(w, over);
+          return;
+        }
+        const seconds = w.blocks.map((block, i) => chars[i]
+          ? Math.min(maxSeconds, recommendedShotSeconds(chars[i])) : block.seconds);
+        if (w.blocks.every((block, i) => block.seconds === seconds[i] && !block.manualSeconds)) {
+          notify("当前分镜时长已与口播估时一致");
+          return;
+        }
+        w.blocks.forEach((block, i) => { block.seconds = seconds[i]; delete block.manualSeconds; });
+        if (w.video) w.videoDirty = true;
+        changed(w);
+        render(true);
+        notify(`已按口播调整分镜，共 ${videoTotalSeconds(w)} 秒`, "ok");
+        break;
+      }
       case "append": {
         const vid = w.type === "video";
-        if (vid && w.blocks.length >= 12) {
-          notify("最多支持 12 幕分镜", "warn");
+        if (vid && w.blocks.length >= maxVideoShots) {
+          notify(`最多支持 ${maxVideoShots} 幕分镜`, "warn");
           return;
         }
         const idx = w.blocks.length;
@@ -2363,25 +2837,16 @@ document.addEventListener("click", async (e) => {
         w.blocks.push({
           name: vid ? "要点讲解 " + idx : "补充要点 " + idx,
           line: "",
-          prompt: [
-            styles[w.style],
-            w.title || w.topic,
-            w.drug && "关联药品 " + w.drug,
-            "清晰的科普配图，无文字，无剂量数字",
-          ]
-            .filter(Boolean)
-            .join("；"),
-          image: vid && w.settings.mode === "demo" ? asset(w.style + idx) : "",
+          prompt: "",
+          image: "",
           variant: 0,
           seconds: sec,
-          motion: "镜头缓慢推进，保持主体和画面风格一致。",
+          motion: defaultMotion,
         });
-        if (vid) {
-          w.settings.duration = w.blocks.reduce((sum, b) => sum + b.seconds, 0);
-          if (w.video) w.videoDirty = true;
-        }
+        if (vid && w.video) w.videoDirty = true;
         changed(w);
-        render(true);
+        if (vid) selectScene(w, idx);
+        else render(true);
         break;
       }
       case "move-block": {
@@ -2400,7 +2865,8 @@ document.addEventListener("click", async (e) => {
         w.blocks.splice(nextIdx, 0, moved);
         if (w.type === "video" && w.video) w.videoDirty = true;
         changed(w);
-        render(true);
+        if (w.type === "video") selectScene(w, nextIdx);
+        else render(true);
         break;
       }
       case "remove-block": {
@@ -2411,12 +2877,10 @@ document.addEventListener("click", async (e) => {
           return;
         }
         w.blocks.splice(idx, 1);
-        if (w.type === "video") {
-          w.settings.duration = w.blocks.reduce((sum, b) => sum + b.seconds, 0);
-          if (w.video) w.videoDirty = true;
-        }
+        if (w.type === "video" && w.video) w.videoDirty = true;
         changed(w);
-        render(true);
+        if (w.type === "video") selectScene(w, Math.min(idx, w.blocks.length - 1));
+        else render(true);
         break;
       }
       case "reimage":
@@ -2425,11 +2889,8 @@ document.addEventListener("click", async (e) => {
       case "regen":
       case "regen-demo": {
         const i = Number(v),
-          prompt = ($("#imageprompt", dialogBody)?.value || "").trim();
-        if (!prompt) {
-          notify("请填写画面提示词", "warn");
-          return;
-        }
+          prompt = sceneDescription(w, $("#imageprompt", dialogBody)?.value || "");
+        const reference = regenModal?.reference || "";
         const isArk = action === "regen";
         const settings = {
           ...w.settings,
@@ -2440,14 +2901,14 @@ document.addEventListener("click", async (e) => {
             $("#picture-size", dialogBody)?.value || w.settings.imageSize,
         };
         if (isArk && !config.keyPresent) {
-          openArkConnection();
+          openApiKeys();
           return;
         }
         dialog.close();
         await startJob(
           w,
           "regenerate",
-          [{ prompt, variant: (w.blocks[i].variant || 0) + i + 1 }],
+          [pictureItem(w, i, prompt, (w.blocks[i].variant || 0) + i + 1, reference)],
           { index: i, prompt },
           settings,
         );
@@ -2456,21 +2917,56 @@ document.addEventListener("click", async (e) => {
       case "retry": {
         const owner = v === "" || v == null ? w : w.blocks[Number(v)];
         const j = owner.job;
+        if (portraitRejected(j)) return;
+        if (j.target === "write-draft") {
+          authorize(w, w.type === "article" && !j.partial ? 2 : 1, "draft", () => sendJob(w));
+          break;
+        }
         authorize(
           { ...w, settings: j.payload.settings },
           j.payload.items.length,
           j.payload.kind,
           () => sendJob(w, owner),
+          j.payload.items.filter((item) => item.line?.trim()).length,
         );
         break;
       }
       case "abort-job": {
         const owner = v === "" || v == null ? w : w.blocks[Number(v)];
+        if (owner.job?.target === "write-draft") w.viewingSetup = true;
+        if (owner === w && portraitRejected(owner.job)) rememberRejectedFrame(w);
+        const leaderId = owner.job?.referenceLeader ? owner.job.payload.id : "";
+        if (leaderId) {
+          for (const block of w.blocks) {
+            if (block.job?.referenceAfter === leaderId) block.job = null;
+          }
+        }
         owner.job = null;
         changed(w);
-        updateJobView(w, owner, true);
+        if (leaderId) render(true);
+        else updateJobView(w, owner, true);
         break;
       }
+      case "replace-portrait-frame": {
+        if (!portraitRejected(w.job)) break;
+        const index = rejectedFrameIndex(w);
+        if (index < 0) break;
+        rememberRejectedFrame(w);
+        w.job = null;
+        w.stage = "script";
+        w.viewingSetup = false;
+        changed(w);
+        selectScene(w, index);
+        openPictureDialog(w, index);
+        break;
+      }
+      case "keep-written-article":
+        if (!w.job?.partial) break;
+        applyWrittenDraft(w, w.job.partial);
+        w.job = null;
+        changed(w);
+        render();
+        break;
       case "tags":
         tagsModal(w);
         break;
@@ -2554,7 +3050,7 @@ document.addEventListener("click", async (e) => {
 
 dialog.addEventListener("close", () => {
   if (dialog.open) return;
-  if (modalType === "ark-connection") dialogBody.replaceChildren();
+  if (modalType === "api-keys") dialogBody.replaceChildren();
   retryPayload = null;
   regenModal = null;
   modalType = null;

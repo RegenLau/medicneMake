@@ -5,14 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#ffffff" />
     <title>科普工作台 · 希息药事</title>
+    <link rel="icon" type="image/png" href="/assets/platform-logo.png" />
     <link rel="stylesheet" href="/studio.css" />
+    <script src="/article-content.js" defer></script>
+    <script src="/video-content.js" defer></script>
     <script src="/studio.js" defer></script>
   </head>
   <body>
     <header class="topbar">
       <div class="bar">
         <button type="button" class="brand" data-action="home" aria-label="返回希息药事工作台首页">
-          <span class="brandmark" aria-hidden="true"></span>
+          <img class="brandmark" src="/assets/platform-logo.png" width="34" height="34" alt="" />
           <span>希息药事</span>
         </button>
         <span class="divider" aria-hidden="true"></span>
@@ -24,11 +27,10 @@
         <button
           type="button"
           class="env-btn"
-          id="ark-connection"
           data-action="connect-ark"
-          title="连接火山方舟"
+          title="管理图片、视频和配音的 API Key"
         >
-          连接方舟
+          API Key 管理
         </button>
         <button
           type="button"
