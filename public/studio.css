@@ -938,6 +938,11 @@ main {
   margin: 4px 16px 14px;
 }
 
+.card-costs {
+  align-self: flex-start;
+  margin: 0 10px 6px;
+}
+
 .sample .meta {
   color: var(--brand-600);
   font-weight: 500;
@@ -2122,6 +2127,65 @@ dialog p b {
 .dialog-actions {
   justify-content: flex-end;
   margin-top: 24px;
+}
+
+.cost-work-title {
+  overflow-wrap: anywhere;
+  margin-bottom: 14px;
+}
+
+.cost-total,
+.cost-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.cost-total {
+  padding: 12px 0;
+  margin-bottom: 4px;
+  border-block: 1px solid var(--line);
+  font-weight: 600;
+}
+
+.cost-total strong,
+.cost-line dd {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cost-lines {
+  margin: 0;
+}
+
+.cost-line {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.cost-line dt span {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-2);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.cost-line dd {
+  margin: 0;
+  text-align: right;
+}
+
+.cost-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.cost-sources a {
+  color: var(--brand-600);
+  text-decoration: underline;
 }
 
 @keyframes dialog-in {

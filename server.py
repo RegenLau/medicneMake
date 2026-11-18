@@ -24,6 +24,7 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 import draft_content
+import work_costs
 
 ROOT = Path(__file__).resolve().parent
 mimetypes.add_type("image/webp", ".webp")
@@ -366,7 +367,16 @@ def setting_valid(p):
         raise ValueError("未知画面风格")
 
 
-def image_item(p, item, index):
+def image_references(p, item):
+    if p.get("styleReference") is not True:
+        return []
+    references = [] if p.get("storyboard") is True else [f"/assets/style-{p['style']}.webp"]
+    if item.get("reference") and item["reference"] not in references:
+        references.append(item["reference"])
+    return references
+
+
+def image_item(p, item, index, record=None):
     style_asset = f"/assets/style-{p['style']}.webp"
     if p["mode"] == "demo":
         time.sleep(0.28)
@@ -382,19 +392,21 @@ def image_item(p, item, index):
         "response_format": "b64_json",
         "watermark": s["watermark"],
     }
-    if p.get("styleReference") is True:
-        references = [] if p.get("storyboard") is True else [style_asset]
-        if item.get("reference") and item["reference"] not in references:
-            references.append(item["reference"])
+    references = image_references(p, item)
+    if references:
         images = [image_data_url(media_path(ref)) for ref in references]
-        if images:
-            body["image"] = images if len(images) > 1 else images[0]
+        body["image"] = images if len(images) > 1 else images[0]
     if s["imageModel"] != "doubao-seedream-5-5-261028":
         body["sequential_image_generation"] = "disabled"
     data = ark("/images/generations", body)
     row = (data.get("data") or [{}])[0]
     if not row.get("b64_json"):
         raise ValueError(str(row.get("error", {}).get("message", "方舟未返回图片")))
+    if record:
+        actual_size = row.get("size")
+        if not isinstance(actual_size, str) or not re.fullmatch(r"[0-9]{1,5}x[0-9]{1,5}", actual_size):
+            actual_size = size
+        record(f"image:{index}:{uuid.uuid4()}", work_costs.image_cost(s["imageModel"], actual_size, len(references), index))
     raw = base64.b64decode(row["b64_json"])
     ext = ".png" if raw.startswith(b"\x89PNG") else ".jpg"
     path = MEDIA / (uuid.uuid4().hex + ext)
@@ -420,7 +432,7 @@ def seedance_frame(image, role, folder, width, height):
     return {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{raw}"}, "role": role}
 
 
-def source_clip(p, item, dest, state, save, tail_image=None):
+def source_clip(p, item, dest, state, save, tail_image=None, on_success=None):
     s = p["settings"]
     if p["mode"] == "demo":
         width, height = frame_size(s, demo=True)
@@ -483,6 +495,8 @@ def source_clip(p, item, dest, state, save, tail_image=None):
     for _ in range(720):
         response = ark("/contents/generations/tasks/" + state["remote"])
         if response["status"] == "succeeded":
+            if on_success:
+                on_success(response)
             with (
                 urlopen(response["content"]["video_url"], timeout=180) as remote,
                 dest.open("wb") as local,
@@ -522,6 +536,7 @@ def narrate(line, speaker, target, key):
             "Content-Type": "application/json",
             "X-Api-Resource-Id": SPEECH_RESOURCE,
             "X-Api-Request-Id": str(uuid.uuid4()),
+            "X-Control-Require-Usage-Tokens-Return": "text_words",
         },
     )
     request.add_unredirected_header("X-Api-Key", key)
@@ -541,6 +556,7 @@ def narrate(line, speaker, target, key):
                 except (ValueError, TypeError, KeyError):
                     raise ValueError("火山语音返回了无法读取的音频数据。") from None
                 if code == 20000000:
+                    characters = work_costs.usage_value(chunk.get("usage"), "text_words")
                     break
                 if code != 0:
                     raise ValueError(f"火山语音合成失败（{code}），请检查服务权限或额度。")
@@ -560,9 +576,10 @@ def narrate(line, speaker, target, key):
         wav.setparams((1, 2, SPEECH_SAMPLE_RATE, 0, "NONE", "not compressed"))
         wav.writeframes(audio)
     temp.replace(target)
+    return characters
 
 
-def shot_audio(settings, line, folder, speech_key):
+def shot_audio(settings, line, folder, speech_key, index=0, record=None):
     speaker = SPEAKERS.get(settings["voice"])
     if not speaker or not line:
         return None, 0
@@ -570,7 +587,9 @@ def shot_audio(settings, line, folder, speech_key):
     digest = hashlib.sha256(fingerprint.encode()).hexdigest()
     audio = folder / ("speech-" + digest + ".wav")
     if not audio.is_file():
-        narrate(line, speaker, audio, speech_key)
+        characters = narrate(line, speaker, audio, speech_key)
+        if record:
+            record(f"speech:{index}", work_costs.speech_cost(characters, line, settings["voice"], index))
     with wave.open(str(audio)) as wav:
         return audio, wav.getnframes() / wav.getframerate()
 
@@ -689,7 +708,7 @@ def music_mix(duration, voiced):
     )
 
 
-def render_video(p, job, save, speech_key):
+def render_video(p, job, save, speech_key, record=None):
     settings = p["settings"]
     track = settings.get("music", "off")
     music = music_path(track)
@@ -707,7 +726,7 @@ def render_video(p, job, save, speech_key):
         if storyboard:
             job["progress"] = f"准备第 {i + 1} 幕配音"
             save()
-            audio, spoken = shot_audio(settings, line, folder, speech_key)
+            audio, spoken = shot_audio(settings, line, folder, speech_key, i, record)
             if p["mode"] == "ark" and i + 1 < len(items) and item.get("matchNext") is True:
                 tail = items[i + 1]["image"]
             item = storyboard_timing(item, spoken, VIDEO_MODELS[settings["videoModel"]][2], tail)
@@ -730,13 +749,28 @@ def render_video(p, job, save, speech_key):
             json.dumps(fingerprint, ensure_ascii=False).encode()
         ).hexdigest()
         source = DATA / (digest + ".mp4")
+        state = job["remote"].get(str(i), {})
         if not source.is_file():
             temp = folder / "source.tmp.mp4"
             state = job["remote"].setdefault(str(i), {})
-            source_clip(p, item, temp, state, save, tail)
+
+            def report_video(result):
+                tokens = work_costs.usage_value(result.get("usage"), "completion_tokens")
+                seconds = result.get("duration")
+                if type(seconds) not in (int, float) or not 0 < seconds <= 120:
+                    seconds = item["seconds"]
+                record(f"video:{i}:{state['remote']}", work_costs.video_cost(
+                    settings["videoModel"], settings["resolution"], seconds, tokens, i, frame_size(settings),
+                ))
+
+            source_clip(p, item, temp, state, save, tail, report_video if record else None)
             temp.replace(source)
+        elif record and p["mode"] == "ark" and not state.get("remote"):
+            record(f"video-cache:{i}", work_costs.entry(
+                f"第 {i + 1} 幕动画", settings["videoModel"], "复用本地视频", 0, i,
+            ))
         if not storyboard:
-            audio, spoken = shot_audio(settings, line, folder, speech_key)
+            audio, spoken = shot_audio(settings, line, folder, speech_key, i, record)
         clip = timed_clip(p, item, source, folder, audio, spoken)
         segments.append(clip)
         seconds = item["seconds"]
@@ -788,14 +822,24 @@ def render_video(p, job, save, speech_key):
     return {"url": f"/media/{base}.mp4", "captions": f"/media/{base}.vtt", "music": track, "shotSeconds": shot_seconds}
 
 
-def write_draft(p, job, save):
+def write_draft(p, job, save, record=None):
+    def tracked_ark(label):
+        def request(path, body, **kwargs):
+            result = ark(path, body, **kwargs)
+            if record:
+                record(f"text:{uuid.uuid4()}", work_costs.text_cost(
+                    label, result.get("model") or body["model"], result.get("usage") or {},
+                ))
+            return result
+        return request
+
     item = p["draft"]
     if item["type"] == "video":
         settings = p["settings"]
         job["progress"] = "撰写完整口播并划分分镜"
         save()
         job["output"] = draft_content.video_draft(
-            ark, TEXT_MODEL, item, settings.get("duration"), VIDEO_MODELS[settings["videoModel"]][2],
+            tracked_ark("口播与分镜脚本"), TEXT_MODEL, item, settings.get("duration"), VIDEO_MODELS[settings["videoModel"]][2],
             settings.get("ratio", "9:16"),
         )
         return
@@ -803,17 +847,25 @@ def write_draft(p, job, save):
     if not job.get("output"):
         job["progress"] = "撰写文章正文"
         save()
-        job["output"] = draft_content.article_draft(ark, TEXT_MODEL, item)
+        job["output"] = draft_content.article_draft(tracked_ark("文章正文"), TEXT_MODEL, item)
     if "images" not in job["output"]:
         job["progress"] = "根据正文规划配图"
         save()
-        job["output"]["images"] = draft_content.article_images(ark, TEXT_MODEL, job["output"], item["layout"])
+        job["output"]["images"] = draft_content.article_images(
+            tracked_ark("规划文章配图"), TEXT_MODEL, job["output"], item["layout"],
+        )
 
 
 def work(job, key=None, speech_key=""):
     def save():
         with CACHE_LOCK:
             write_json(JOBS / (job["id"] + ".json"), job)
+
+    def record(key, row):
+        costs = job.setdefault("costs", {})
+        if costs.get(key) != row:
+            costs[key] = row
+            save()
 
     JOB_CREDENTIALS.key = key
     try:
@@ -825,13 +877,13 @@ def work(job, key=None, speech_key=""):
                 for i in range(len(job["results"]), len(p["items"])):
                     job["progress"] = f"生成配图 {i + 1} / {len(p['items'])}"
                     save()
-                    job["results"].append(image_item(p, p["items"][i], i))
+                    job["results"].append(image_item(p, p["items"][i], i, record))
                     save()
                 job["output"] = {"images": job["results"]}
             elif p["kind"] == "draft":
-                write_draft(p, job, save)
+                write_draft(p, job, save, record)
             else:
-                job["output"] = render_video(p, job, save, speech_key)
+                job["output"] = render_video(p, job, save, speech_key, record)
             job["status"] = "done"
     except Exception as error:
         job.update(status="failed", error=str(error)[:650])
@@ -843,6 +895,71 @@ def work(job, key=None, speech_key=""):
 
 def visible(job):
     return {k: job.get(k) for k in ("id", "status", "progress", "error", "output")}
+
+
+def job_costs(job):
+    p = job["request"]
+    settings = p["settings"]
+    recorded = job.get("costs", {})
+    rows = list(recorded.values())
+    # Older requests had no work ID or per-call usage. Recover what the saved outputs establish.
+    legacy = not p.get("workId")
+    if legacy and p["kind"] == "draft" and job.get("output") and not any(k.startswith("text:") for k in recorded):
+        rows.append(work_costs.entry("历史文字生成", "", "缺少 Token 用量", None))
+    elif legacy and p["kind"] == "images" and p["mode"] == "ark":
+        size = SIZES[settings["imageSize"]][settings["ratio"]]
+        for index, item in enumerate(p["items"][:len(job.get("results", []))]):
+            if not any(k.startswith(f"image:{index}:") for k in recorded):
+                rows.append(work_costs.image_cost(settings["imageModel"], size, len(image_references(p, item)), index))
+    elif p["kind"] == "video":
+        output = job.get("output") or {}
+        seconds = output.get("shotSeconds") or [item["seconds"] for item in p["items"]]
+        for index, item in enumerate(p["items"]):
+            folder = JOBS / job["id"] / str(index)
+            state = job.get("remote", {}).get(str(index), {})
+            if p["mode"] == "ark" and (state.get("remote") or state.get("submitting")) and not any(
+                k.startswith(f"video:{index}:") for k in recorded
+            ):
+                # A completed clip proves the remote request succeeded. A submitted ID alone does not.
+                duration = seconds[index] if output.get("url") else None
+                if duration is None and not p.get("storyboard") and (folder / "clip.mp4").is_file():
+                    duration = item["seconds"]
+                rows.append(work_costs.video_cost(
+                    settings["videoModel"], settings["resolution"], duration, None, index, frame_size(settings),
+                ))
+            if legacy and f"speech:{index}" not in recorded and any(folder.glob("speech-*.wav")):
+                rows.append(work_costs.speech_cost(None, item["line"].strip(), settings["voice"], index))
+    return rows
+
+
+def cost_details(request):
+    if not isinstance(request.get("workId"), str) or not isinstance(request.get("jobIds", []), list) or not isinstance(request.get("media", []), list):
+        raise ValueError("费用查询格式无效")
+    if not all(isinstance(job_id, str) for job_id in request.get("jobIds", [])):
+        raise ValueError("任务 ID 无效")
+    work_id = str(uuid.UUID(request["workId"]))
+    job_ids = {str(uuid.UUID(job_id)) for job_id in request.get("jobIds", [])}
+    assets = {url for url in request.get("media", []) if isinstance(url, str) and re.fullmatch(
+        r"/media/[a-f0-9-]+\.(?:jpg|png|webp|mp4)", url,
+    )}
+    rows = []
+    unresolved = False
+    for path in sorted(JOBS.glob("*.json"), key=lambda file: file.stat().st_mtime):
+        job = read_json(path)
+        p = job["request"]
+        known_work = p.get("workId")
+        output = job.get("output") or {}
+        if known_work:
+            if known_work != work_id:
+                continue
+        elif job["id"] not in job_ids and output.get("url") not in assets and not assets.intersection(job.get("results", [])):
+            continue
+        rows.extend(job_costs(job))
+        if job["status"] in ("queued", "running", "failed"):
+            unresolved = True
+    amounts = [float(row["amount"]) for row in rows if row["amount"] is not None]
+    return {"rows": rows, "total": math.fsum(amounts) if amounts else None, "unresolved": unresolved,
+            "priceDate": work_costs.PRICE_DATE, "arkPrice": work_costs.ARK_PRICE, "speechPrice": work_costs.SPEECH_PRICE}
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -872,6 +989,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "imageModels": IMAGE_MODELS,
                     "videoModels": VIDEO_MODELS,
                     "textModel": TEXT_MODEL,
+                    "workCosts": True,
                     "videoBackgroundMusic": True,
                     "imageStyleReference": True,
                     **ark_connection(),
@@ -947,7 +1065,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         if (
-            self.path not in ("/api/jobs", "/api/ark-key", "/api/speech-key")
+            self.path not in ("/api/jobs", "/api/costs", "/api/ark-key", "/api/speech-key")
             or not self.allowed()
             or self.headers.get("Origin") not in (ORIGIN, f"http://localhost:{PORT}")
             or self.headers.get_content_type() != "application/json"
@@ -955,16 +1073,20 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_error(403)
         try:
             n = int(self.headers.get("Content-Length", "0"))
-            if not 0 < n <= (100000 if self.path == "/api/jobs" else 4096):
+            if not 0 < n <= (100000 if self.path in ("/api/jobs", "/api/costs") else 4096):
                 raise ValueError("请求大小无效")
             p = json.loads(self.rfile.read(n))
             if not isinstance(p, dict):
                 raise ValueError("请求格式无效")
+            if self.path == "/api/costs":
+                return self.send_json(200, cost_details(p))
             if self.path in ("/api/ark-key", "/api/speech-key"):
                 if self.path == "/api/speech-key":
                     return self.send_json(200, configure_speech(p.get("key")))
                 return self.send_json(200, connect_ark(p.get("key")))
             job_id = str(uuid.UUID(p["id"]))
+            if "workId" in p and (not isinstance(p["workId"], str) or str(uuid.UUID(p["workId"])) != p["workId"]):
+                raise ValueError("作品 ID 无效")
             setting_valid(p)
             file = JOBS / (job_id + ".json")
             with CACHE_LOCK:

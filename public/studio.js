@@ -212,6 +212,10 @@ for (const w of data.works) {
     w.blocks[w.job.index].job = w.job;
     w.job = null;
   }
+  if (!w.costTracking) {
+    w.legacyCostMedia ??= workMedia(w);
+    w.legacyCostJobs ??= workJobIds(w);
+  }
 }
 
 if (!data.fluentVoiceDefaultApplied) {
@@ -259,6 +263,63 @@ function route() {
 
 function current() {
   return data.works.find((w) => w.id === route()[1]);
+}
+
+function workMedia(w) {
+  return [w.video?.url, ...(w.blocks ?? []).map((block) => block.image)]
+    .filter((url) => url?.startsWith("/media/"));
+}
+
+function workJobIds(w) {
+  return [w.job, ...(w.blocks ?? []).map((block) => block.job)]
+    .flatMap((job) => job?.payload?.id ? [job.payload.id] : []);
+}
+
+const feeAmount = new Intl.NumberFormat("zh-CN", {
+  style: "currency", currency: "CNY", minimumFractionDigits: 2, maximumFractionDigits: 6,
+});
+
+function renderWorkCosts(w, result) {
+  const partial = !w.costTracking || result.unresolved || result.rows.some((row) => row.amount === null);
+  const total = result.total ?? (!partial && result.rows.length === 0 ? 0 : null);
+  const summary = total === null ? "暂无法估算" : feeAmount.format(total);
+  const rows = result.rows.map(({ label, model, usage, amount }) => (
+    '<div class="cost-line"><dt><strong>' + esc(label) + '</strong><span>' +
+    esc([model, usage].filter(Boolean).join(" · ")) + '</span></dt><dd>' +
+    (amount === null ? "待核对" : feeAmount.format(Number(amount))) + '</dd></div>'
+  )).join("");
+  return '<p class="cost-work-title">' + esc(w.title || w.topic || "未命名作品") + '</p>' +
+    '<div class="cost-total"><span>' + (partial ? "可估算项目小计" : "估算费用合计") +
+    '</span><strong>' + summary + '</strong></div>' +
+    (rows ? '<dl class="cost-lines">' + rows + '</dl>' : '<p class="small">暂无可核对的费用明细。</p>') +
+    (!w.costTracking ? '<p class="footmeta">旧作品可能缺少早期文字用量，或缺少已替换素材的任务记录。</p>' : '') +
+    (result.unresolved ? '<p class="footmeta">部分任务的用量仍待核对。</p>' : '') +
+    '<p class="footmeta">按公开按量单价估算，账户折扣、资源包与实付金额以服务商账单为准。</p>' +
+    '<p class="cost-sources small">' + esc(result.priceDate) + ' 核对单价' +
+    '<a href="' + esc(result.arkPrice) + '" target="_blank" rel="noopener noreferrer">方舟价格</a>' +
+    '<a href="' + esc(result.speechPrice) + '" target="_blank" rel="noopener noreferrer">语音价格</a></p>';
+}
+
+async function openWorkCosts(w) {
+  openModal("费用详情", '<div id="cost-content"><p class="small" role="status">正在读取费用明细…</p></div>', "work-costs");
+  const panel = $("#cost-content", dialogBody);
+  try {
+    const result = await jsonRequest("/api/costs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        workId: w.id,
+        jobIds: [...new Set([...workJobIds(w), ...(w.legacyCostJobs ?? [])])],
+        media: [...new Set([...workMedia(w), ...(w.legacyCostMedia ?? [])])],
+      }),
+    });
+    if (dialog.open && panel.isConnected) panel.innerHTML = renderWorkCosts(w, result);
+  } catch (error) {
+    if (dialog.open && panel.isConnected) {
+      panel.innerHTML = '<p class="banner err" role="alert">' + esc(error.message) + '</p>' +
+        btn("重新读取", "work-costs", "secondary", w.id);
+    }
+  }
 }
 
 function videoMusic(w) {
@@ -574,6 +635,7 @@ function newWork(type, example) {
     drug: "",
     tags: [],
     settings: s,
+    costTracking: !!config.workCosts,
     blocks: [],
     created: Date.now(),
     updated: Date.now(),
@@ -729,6 +791,7 @@ function worksList() {
               "<span>" +
               new Date(w.updated).toLocaleDateString() +
               "</span></div></button>" +
+              (config.workCosts ? btn("费用详情", "work-costs", "textbtn card-costs", w.id) : "") +
               btn(
                 ico("trash"),
                 "ask-delete",
@@ -823,10 +886,11 @@ function steps(w, activeIdx) {
 
 function shell(w, title, activeStep, html, rightHead = "") {
   updateTopbar();
+  const actions = (config.workCosts ? btn("费用详情", "work-costs", "textbtn", w.id) : "") + rightHead;
   app.innerHTML =
     '<nav class="subnav" aria-label="工作台导航">' +
     btn(ico("back") + " 返回工作台", "home", "back") +
-    rightHead +
+    (actions ? '<div class="buttons">' + actions + '</div>' : "") +
     "</nav>" +
     '<div class="section-head"><h1>' +
     esc(title) +
@@ -1988,6 +2052,7 @@ function createJob(w, target, items, settings = w.settings) {
     style: w.style,
     items,
   };
+  if (config.workCosts) payload.workId = w.id;
   if (payload.kind === "images" && config.imageStyleReference) payload.styleReference = true;
   if (w.type === "video" && payload.kind !== "draft") payload.storyboard = true;
   return { target, payload };
@@ -2608,6 +2673,11 @@ document.addEventListener("click", async (e) => {
         if (w) prefs(w);
         else prefs(null);
         break;
+      case "work-costs": {
+        const work = data.works.find((item) => item.id === v);
+        if (work) await openWorkCosts(work);
+        break;
+      }
       case "set-mode":
         if (w) {
           applySettingMutation(w.settings, "mode", v);
