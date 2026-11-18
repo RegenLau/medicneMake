@@ -14,7 +14,7 @@ import time
 import uuid
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
@@ -25,6 +25,7 @@ PUBLIC = ROOT / "public"
 DATA = ROOT / ".studio"
 MEDIA = DATA / "media"
 JOBS = DATA / "jobs"
+ARK_KEY_FILE = DATA / "ark-key.dpapi"
 for directory in (MEDIA, JOBS):
     directory.mkdir(parents=True, exist_ok=True)
 PORT = int(os.environ.get("STUDIO_PORT", "8765"))
@@ -79,6 +80,90 @@ FFMPEG = shutil.which("ffmpeg") or next(
 CACHE_LOCK = threading.RLock()
 ACTIVE = set()
 SLOTS = threading.Semaphore(2)
+JOB_CREDENTIALS = threading.local()
+
+
+def protect_ark_key(value, *, decrypt=False):
+    # Windows DPAPI binds the saved ciphertext to this Windows user.
+    command = (
+        "$bytes=[Convert]::FromBase64String($value); "
+        "[Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect($bytes,$null,$scope))"
+        if decrypt
+        else "$bytes=[Text.Encoding]::UTF8.GetBytes($value); "
+        "[Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect($bytes,$null,$scope))"
+    )
+    result = subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Security; "
+            "$scope=[Security.Cryptography.DataProtectionScope]::CurrentUser; "
+            "$value=[Console]::In.ReadToEnd(); " + command,
+        ],
+        input=value,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    if result.returncode or not result.stdout.strip():
+        raise OSError("Windows 无法处理方舟凭据")
+    return result.stdout.strip()
+
+
+def load_ark_key():
+    if os.name == "nt" and ARK_KEY_FILE.is_file():
+        try:
+            return protect_ark_key(
+                ARK_KEY_FILE.read_text(encoding="ascii"), decrypt=True
+            )
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
+    return ""
+
+
+PAGE_ARK_KEY = load_ark_key()
+
+
+def current_ark_key():
+    return PAGE_ARK_KEY or os.environ.get("ARK_API_KEY", "").strip()
+
+
+def ark_connection():
+    return {
+        "keyPresent": bool(current_ark_key()),
+        "keySource": "page"
+        if PAGE_ARK_KEY
+        else "environment"
+        if current_ark_key()
+        else "",
+        "keySaved": bool(PAGE_ARK_KEY and os.name == "nt"),
+    }
+
+
+def connect_ark(key):
+    global PAGE_ARK_KEY
+    if not isinstance(key, str) or not re.fullmatch(r"[!-~]{1,512}", key.strip()):
+        raise ValueError("请输入有效的火山方舟 API Key")
+    key = key.strip()
+    response = ark("/models", key=key, timeout=12)
+    if not isinstance(response, dict) or not isinstance(response.get("data"), list):
+        raise ValueError("方舟返回的验证结果异常，请稍后重试")
+    with CACHE_LOCK:
+        if os.name == "nt":
+            try:
+                encrypted = protect_ark_key(key)
+                tmp = ARK_KEY_FILE.with_suffix(".tmp")
+                tmp.write_text(encrypted, encoding="ascii")
+                tmp.replace(ARK_KEY_FILE)
+            except (OSError, subprocess.TimeoutExpired):
+                raise ValueError(
+                    "Key 校验成功，但本机无法保存，请检查项目目录权限"
+                ) from None
+        PAGE_ARK_KEY = key
+        return ark_connection()
 
 
 def write_json(path, data):
@@ -91,25 +176,40 @@ def read_json(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def ark(path, body=None):
-    key = os.environ.get("ARK_API_KEY", "").strip()
+def ark(path, body=None, *, key=None, timeout=240):
+    if key is None:
+        key = getattr(JOB_CREDENTIALS, "key", None)
+    if key is None:
+        key = current_ark_key()
     if not key:
-        raise ValueError("当前服务未读到 ARK_API_KEY，请配置后重启。")
+        raise ValueError("请在页面顶部连接火山方舟，再重试生成。")
     request = Request(
         ARK + path,
         data=json.dumps(body).encode() if body is not None else None,
         headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
     )
     try:
-        with urlopen(request, timeout=240) as response:
+        with urlopen(request, timeout=timeout) as response:
             return json.load(response)
     except HTTPError as error:
+        if path == "/models":
+            message = {
+                401: "火山方舟未接受此 Key，请检查是否复制完整或已失效。",
+                403: "此 Key 无权查询方舟模型，请检查所属项目与权限。",
+            }.get(error.code, f"方舟验证失败（HTTP {error.code}），请稍后重试。")
+            raise ValueError(message) from None
         try:
             info = json.load(error).get("error", {})
             message = str(info.get("message") or info.get("code") or "")
         except (ValueError, AttributeError):
             message = ""
-        raise ValueError(f"方舟返回 {error.code}。{message[:450]}") from None
+        raise ValueError(
+            f"方舟返回 {error.code}。{message.replace(key, '[已隐藏]')[:450]}"
+        ) from None
+    except (URLError, TimeoutError):
+        if path == "/models":
+            raise ValueError("暂时连不上火山方舟，请检查网络后重试。") from None
+        raise
 
 
 def media_path(url):
@@ -151,8 +251,8 @@ def run_ffmpeg(*args):
 def setting_valid(p):
     if p.get("mode") not in ("demo", "ark") or p.get("kind") not in ("images", "video"):
         raise ValueError("未知的生成方式")
-    if p["mode"] == "ark" and not os.environ.get("ARK_API_KEY", "").strip():
-        raise ValueError("方舟 Key 未配置")
+    if p["mode"] == "ark" and not current_ark_key():
+        raise ValueError("请先连接火山方舟")
     s = p["settings"]
     if (
         s["imageModel"] not in IMAGE_MODELS
@@ -471,11 +571,12 @@ def render_video(p, job, save):
     return {"url": f"/media/{base}.mp4", "captions": f"/media/{base}.vtt"}
 
 
-def work(job):
+def work(job, key=None):
     def save():
         with CACHE_LOCK:
             write_json(JOBS / (job["id"] + ".json"), job)
 
+    JOB_CREDENTIALS.key = key
     try:
         with SLOTS:
             p = job["request"]
@@ -529,7 +630,7 @@ class Handler(SimpleHTTPRequestHandler):
                 {
                     "imageModels": IMAGE_MODELS,
                     "videoModels": VIDEO_MODELS,
-                    "keyPresent": bool(os.getenv("ARK_API_KEY", "").strip()),
+                    **ark_connection(),
                     "encoder": bool(FFMPEG),
                 },
             )
@@ -600,7 +701,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         if (
-            self.path != "/api/jobs"
+            self.path not in ("/api/jobs", "/api/ark-key")
             or not self.allowed()
             or self.headers.get("Origin") not in (ORIGIN, f"http://localhost:{PORT}")
             or self.headers.get_content_type() != "application/json"
@@ -608,9 +709,13 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_error(403)
         try:
             n = int(self.headers.get("Content-Length", "0"))
-            if not 0 < n <= 100000:
+            if not 0 < n <= (4096 if self.path == "/api/ark-key" else 100000):
                 raise ValueError("请求大小无效")
             p = json.loads(self.rfile.read(n))
+            if self.path == "/api/ark-key":
+                if not isinstance(p, dict):
+                    raise ValueError("请求格式无效")
+                return self.send_json(200, connect_ark(p.get("key")))
             job_id = str(uuid.UUID(p["id"]))
             setting_valid(p)
             file = JOBS / (job_id + ".json")
@@ -626,7 +731,8 @@ class Handler(SimpleHTTPRequestHandler):
                 job.update(status="queued", progress="等待本地工作台处理", error="")
                 write_json(file, job)
                 ACTIVE.add(job_id)
-                threading.Thread(target=work, args=(job,), daemon=True).start()
+                key = current_ark_key() if p["mode"] == "ark" else None
+                threading.Thread(target=work, args=(job, key), daemon=True).start()
                 self.send_json(202, visible(job))
         except (ValueError, KeyError, TypeError) as error:
             self.send_json(400, {"error": str(error)})

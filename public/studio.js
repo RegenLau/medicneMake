@@ -287,11 +287,22 @@ function updateTopbar() {
   const dotCls =
     gs.mode === "demo" ? "demo" : config?.keyPresent ? "" : "warn";
   const modeEl = $("#mode-indicator");
+  const arkEl = $("#ark-connection");
+  const connected = !!config?.keyPresent;
+  arkEl.innerHTML =
+    '<span class="dot ' +
+    (connected ? "" : "warn") +
+    '" aria-hidden="true"></span>' +
+    (connected ? "方舟已配置" : "连接方舟");
+  arkEl.setAttribute(
+    "aria-label",
+    connected ? "管理火山方舟连接" : "连接火山方舟",
+  );
   if (modeEl) {
     modeEl.innerHTML =
       '<span class="dot ' +
       dotCls +
-      '" aria-hidden="true"></span><span><span class="env-prefix">默认：</span>' +
+      '" aria-hidden="true"></span><span class="mode-label">默认：' +
       (gs.mode === "ark" ? "火山方舟" : "本地演示") +
       "</span>" +
       ico("settings");
@@ -318,6 +329,71 @@ function openModal(title, body, type = "generic") {
   if (!dialog.open) dialog.showModal();
 }
 
+function openArkConnection() {
+  const hint =
+    config.keySource === "environment"
+      ? "当前使用本机环境变量中的 Key。可以在这里验证并改用另一个 Key。"
+      : config.keyPresent
+        ? "当前已配置 Key。输入新 Key 后，验证成功才会替换。"
+        : "输入火山方舟控制台中的 API Key。";
+  openModal(
+    "连接火山方舟",
+    '<form id="ark-key-form">' +
+      '<p class="subtext">' +
+      hint +
+      "</p>" +
+      '<label class="field" for="ark-key">API Key</label>' +
+      '<input type="password" id="ark-key" required maxlength="512" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="ark-key-hint">' +
+      '<p class="footmeta" id="ark-key-hint">只查询模型列表来验证连接。' +
+      (config.keySaved === false && config.keySource === "page"
+        ? "当前 Key 仅在本次运行中使用。"
+        : "") +
+      '</p><p class="banner err" id="ark-key-error" role="alert" hidden></p>' +
+      '<button type="submit" class="primary widebtn">验证并连接</button>' +
+      "</form>",
+    "ark-connection",
+  );
+  $("#ark-key").focus();
+}
+
+dialog.addEventListener("submit", async (event) => {
+  const form = event.target;
+  if (form.id !== "ark-key-form") return;
+  event.preventDefault();
+  const input = form.querySelector("#ark-key");
+  const feedback = form.querySelector("#ark-key-error");
+  const submit = form.querySelector('button[type="submit"]');
+  if (submit.disabled) return;
+  submit.disabled = true;
+  submit.textContent = "正在验证…";
+  input.readOnly = true;
+  feedback.hidden = true;
+  try {
+    const status = await jsonRequest("/api/ark-key", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: input.value.trim() }),
+    });
+    Object.assign(config, status);
+    input.value = "";
+    if (form.isConnected && modalType === "ark-connection") dialog.close();
+    render(true);
+    notify(
+      status.keySaved
+        ? "已连接火山方舟，Key 已保存到本机"
+        : "已连接火山方舟，本次运行可用",
+    );
+  } catch (error) {
+    feedback.textContent = error.message;
+    feedback.hidden = false;
+    input.readOnly = false;
+    input.focus();
+  } finally {
+    submit.disabled = false;
+    submit.textContent = "验证并连接";
+  }
+});
+
 function modeSegment(mode, actionName = "set-mode") {
   return (
     '<div class="seg" role="group" aria-label="生成方式">' +
@@ -341,10 +417,11 @@ function modeSegment(mode, actionName = "set-mode") {
 
 function arkKeyWarning(switchAction = "set-mode") {
   return !config.keyPresent
-    ? '<div class="banner warn">未检测到 ARK_API_KEY，当前无法调用火山方舟。' +
-      '<div class="banner-actions">' +
-      btn("切换为本地演示（免费）", switchAction, "secondary", "demo") +
-      "</div></div>"
+    ? '<div class="banner warn">连接火山方舟后可生成图片或视频。' +
+        '<div class="banner-actions">' +
+        btn("连接火山方舟", "connect-ark", "secondary") +
+        btn("切换为本地演示（免费）", switchAction, "secondary", "demo") +
+        "</div></div>"
     : "";
 }
 
@@ -1217,11 +1294,7 @@ function editor(w) {
       : "内置示例素材",
     "画幅 " + s.ratio,
     ...(vid
-      ? [
-          s.mode === "ark" ? s.resolution : "480p",
-          s.voice,
-          totalSec + " 秒",
-        ]
+      ? [s.mode === "ark" ? s.resolution : "480p", s.voice, totalSec + " 秒"]
       : s.mode === "ark"
         ? [s.imageSize]
         : []),
@@ -1398,14 +1471,8 @@ function detail(w) {
         '">' +
         ico("download") +
         " 下载 MP4 视频</a>"
-      : btn(
-          ico("copy") + " 复制全文内容",
-          "copy-article",
-          "outline widebtn",
-        )) +
-    (!reviewing
-      ? btn("调整模型参数", "work-settings", "textbtn")
-      : "") +
+      : btn(ico("copy") + " 复制全文内容", "copy-article", "outline widebtn")) +
+    (!reviewing ? btn("调整模型参数", "work-settings", "textbtn") : "") +
     "</div></div>";
 
   shell(
@@ -1568,7 +1635,7 @@ async function startJob(w, target, items, extra = {}, settings = w.settings) {
 function authorize(w, count, kind, fn) {
   if (w.settings.mode === "demo") return fn();
   if (!config.keyPresent) {
-    notify("尚未配置 ARK_API_KEY，可先切换为本地演示");
+    openArkConnection();
     return;
   }
   retryPayload = fn;
@@ -1606,7 +1673,7 @@ function generate(w) {
     return;
   }
   if (w.settings.mode === "ark" && !config.keyPresent) {
-    notify("尚未配置 ARK_API_KEY，请先切换为本地演示或配置 Key");
+    openArkConnection();
     return;
   }
   seedBlocks(w);
@@ -1629,7 +1696,10 @@ function renderDrugList(query = "") {
     html += btn("使用「" + esc(q) + "」", "pickdrug", "chip selected", q);
   }
   html += matched.map((x) => btn(esc(x), "pickdrug", "chip", x)).join("");
-  return html || '<span class="small">未匹配预设药名，可直接输入后按回车使用。</span>';
+  return (
+    html ||
+    '<span class="small">未匹配预设药名，可直接输入后按回车使用。</span>'
+  );
 }
 
 function openDrugModal(w) {
@@ -1943,6 +2013,9 @@ document.addEventListener("click", async (e) => {
       case "global-settings":
         prefs(null);
         break;
+      case "connect-ark":
+        if (config) openArkConnection();
+        break;
       case "work-settings":
         if (w) prefs(w);
         else prefs(null);
@@ -2104,7 +2177,9 @@ document.addEventListener("click", async (e) => {
             (b) => b.seconds > config.videoModels[w.settings.videoModel][2],
           )
         ) {
-          notify("存在单镜时长超过当前模型上限，请调短单镜时长或切换 Seedance 2.5");
+          notify(
+            "存在单镜时长超过当前模型上限，请调短单镜时长或切换 Seedance 2.5",
+          );
           return;
         }
         authorize(w, w.blocks.length, "video", () =>
@@ -2218,7 +2293,7 @@ document.addEventListener("click", async (e) => {
             $("#picture-size", dialogBody)?.value || w.settings.imageSize,
         };
         if (isArk && !config.keyPresent) {
-          notify("尚未配置 ARK_API_KEY");
+          openArkConnection();
           return;
         }
         dialog.close();
@@ -2325,6 +2400,7 @@ document.addEventListener("click", async (e) => {
 
 dialog.addEventListener("close", () => {
   if (dialog.open) return;
+  if (modalType === "ark-connection") dialogBody.replaceChildren();
   retryPayload = null;
   regenModal = null;
   modalType = null;

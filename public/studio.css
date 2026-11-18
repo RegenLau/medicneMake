@@ -1560,7 +1560,8 @@ dialog::backdrop {
     gap: 5px;
   }
 
-  .env-prefix {
+  .mode-label,
+  #mode-indicator .dot {
     display: none;
   }
 
@@ -1640,6 +1641,25 @@ dialog::backdrop {
   dialog {
     padding: 18px;
     width: calc(100% - 20px);
+  }
+}
+
+@media (max-width: 360px) {
+  .bar {
+    gap: 5px;
+    padding-inline: 10px;
+  }
+  .bar .brand {
+    font-size: 15px;
+    gap: 5px;
+  }
+  .bar .nav-btn,
+  .bar .env-btn {
+    font-size: 12px;
+    padding-inline: 6px;
+  }
+  #nav-works .count {
+    display: none;
   }
 }
 
