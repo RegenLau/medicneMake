@@ -224,9 +224,12 @@ function save() {
   localStorage.setItem(storeKey, JSON.stringify(data));
 }
 
-function notify(text) {
+function notify(text, tone = "") {
   const el = $("#notice");
   el.textContent = text;
+  el.className = tone;
+  void el.offsetWidth;
+  el.classList.add("show");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
     el.textContent = "";
@@ -293,7 +296,7 @@ function updateTopbar() {
     '<span class="dot ' +
     (connected ? "" : "warn") +
     '" aria-hidden="true"></span>' +
-    (connected ? "方舟已配置" : "连接方舟");
+    (connected ? "方舟已连接" : "连接方舟");
   arkEl.setAttribute(
     "aria-label",
     connected ? "管理火山方舟连接" : "连接火山方舟",
@@ -309,6 +312,10 @@ function updateTopbar() {
   }
   const worksEl = $("#nav-works");
   if (worksEl) {
+    const onWorks = route()[0] !== "work" && tab === "works";
+    worksEl.classList.toggle("active", onWorks);
+    if (onWorks) worksEl.setAttribute("aria-current", "page");
+    else worksEl.removeAttribute("aria-current");
     worksEl.innerHTML =
       "我的作品" +
       (data.works.length
@@ -382,6 +389,7 @@ dialog.addEventListener("submit", async (event) => {
       status.keySaved
         ? "已连接火山方舟，Key 已保存到本机"
         : "已连接火山方舟，本次运行可用",
+      "ok",
     );
   } catch (error) {
     feedback.textContent = error.message;
@@ -544,7 +552,7 @@ function home() {
   updateTopbar();
   const draftCount = data.works.filter((w) => w.stage !== "review").length;
   app.innerHTML =
-    '<div class="topline"><h1>科普制作</h1>' +
+    '<div class="topline"><div><h1>科普制作</h1><p class="subtitle">选择内容形式，生成可编辑、可核对的用药科普草稿。</p></div>' +
     btn(
       ico("folder") +
         " 草稿箱" +
@@ -653,8 +661,8 @@ function worksList() {
               esc(w.id) +
               '"><div class="cover"><img alt="" src="' +
               esc(coverImg) +
-              '"><span class="tag' +
-              (w.stage === "review" ? " review" : "") +
+              '"><span class="tag st-' +
+              (w.job ? "job" : w.stage) +
               '">' +
               stageName(w) +
               "</span>" +
@@ -736,11 +744,9 @@ function steps(w, activeIdx) {
         const isNow = j === activeIdx;
         const isDone = j < activeIdx;
         const inner =
-          (isDone
-            ? ico("check")
-            : '<span class="step-num">' +
-              String(j + 1).padStart(2, "0") +
-              "</span>") +
+          '<span class="step-num" aria-hidden="true">' +
+          (isDone ? ico("check") : j + 1) +
+          "</span>" +
           "<span>" +
           item.label +
           "</span>";
@@ -758,7 +764,7 @@ function steps(w, activeIdx) {
               "</span>";
         return (
           "<li>" +
-          (j > 0 ? ico("chevron", "icon step-sep") : "") +
+          (j > 0 ? '<span class="step-sep" aria-hidden="true"></span>' : "") +
           node +
           "</li>"
         );
@@ -780,7 +786,14 @@ function shell(w, title, activeStep, html, rightHead = "") {
     "</h1></div>" +
     steps(w, activeStep) +
     html;
+  app.querySelectorAll("textarea.autogrow").forEach(autoGrow);
   syncImageActions(w);
+}
+
+function autoGrow(el) {
+  if (CSS.supports?.("field-sizing", "content") || !el.offsetParent) return;
+  el.style.height = "auto";
+  el.style.height = el.scrollHeight + 2 + "px";
 }
 
 function choice(label, values, value, action) {
@@ -803,6 +816,24 @@ function choice(label, values, value, action) {
   );
 }
 
+function styleChoice(value) {
+  return (
+    '<div class="formrow"><span class="label">画面风格</span><div class="style-grid">' +
+    styles
+      .map((s, i) =>
+        btn(
+          '<img src="' + asset(i) + '" alt=""><span>' + esc(s) + "</span>",
+          "style",
+          "style-opt" + (i === value ? " selected" : ""),
+          i,
+          'aria-pressed="' + (i === value) + '"',
+        ),
+      )
+      .join("") +
+    "</div></div>"
+  );
+}
+
 function setup(w) {
   const video = w.type === "video";
   const hasBlocks = w.blocks.length > 0;
@@ -813,7 +844,7 @@ function setup(w) {
     w.topic.length +
     ' / 300</span></div><textarea id="topic" data-bind="topic" maxlength="300" rows="4" placeholder="例如：教家人读懂药盒上的有效期、漏服降压药后怎么处理">' +
     esc(w.topic) +
-    '</textarea><div class="dividerline"></div><div class="formrow"><span class="label">关联药品 <small>（选填）</small></span><div class="buttons">' +
+    '</textarea><p class="field-error" id="topic-error" hidden>请先填写科普主题，再开始生成。</p><div class="dividerline"></div><div class="formrow"><span class="label">关联药品 <small>（选填）</small></span><div class="buttons">' +
     (w.drug
       ? '<span class="pill">' +
         esc(w.drug) +
@@ -832,7 +863,7 @@ function setup(w) {
   if (video) {
     left +=
       '<div class="sheet"><div class="card-head"><h2>视频设置</h2></div>' +
-      choice("画面风格", styles, styles[w.style], "style") +
+      styleChoice(w.style) +
       choice(
         "目标总时长",
         ["30 秒", "45 秒", "60 秒", "90 秒", "120 秒"],
@@ -976,14 +1007,16 @@ function seedBlocks(w) {
   });
 }
 
-function pictureControls(w, b, i) {
+function pictureControls(w, b, i, quiet = false) {
   const origin = b.image?.startsWith("/assets/")
     ? "本地示例图"
     : config.imageModels[b.imageModel]?.[0] || "火山方舟生成";
   return (
     '<div class="picture-slot" data-picture="' +
     i +
-    '"><div class="picture-frame" data-ratio="' +
+    '"' +
+    (quiet ? ' data-quiet="1"' : "") +
+    '><div class="picture-frame" data-ratio="' +
     esc(w.settings.ratio) +
     '">' +
     (b.image
@@ -1013,7 +1046,7 @@ function pictureControls(w, b, i) {
           : btn(
               b.image ? "重新生成这张图" : "为这段配图",
               "reimage",
-              "outline",
+              quiet ? "textbtn" : "outline",
               i,
             )) +
         "</div>") +
@@ -1057,7 +1090,9 @@ function updateJobView(w, owner, finished = false) {
   if (owner !== w) {
     const index = w.blocks.indexOf(owner);
     const slot = app.querySelector('[data-picture="' + index + '"]');
-    if (slot) slot.outerHTML = pictureControls(w, owner, index);
+    if (slot) {
+      slot.outerHTML = pictureControls(w, owner, index, !!slot.dataset.quiet);
+    }
     syncImageActions(w);
     return;
   }
@@ -1160,7 +1195,11 @@ function blockEditor(w, b, i, rangeStr) {
   return (
     '<section class="shot"><div class="shothead">' +
     '<div class="shot-title-group">' +
-    (vid ? '<span class="shot-badge">分镜 ' + (i + 1) + "</span>" : "") +
+    '<span class="shot-badge">' +
+    (vid ? "分镜 " : "第 ") +
+    (i + 1) +
+    (vid ? "" : " 段") +
+    "</span>" +
     '<input class="inline-title" maxlength="60" data-block="' +
     i +
     '" data-key="name" value="' +
@@ -1204,6 +1243,7 @@ function blockEditor(w, b, i, rangeStr) {
         'aria-label="移除" title="移除"',
     ) +
     "</div></div></div>" +
+    '<div class="shot-body"><div class="shot-main">' +
     '<div class="field-head"><label class="label" for="line-' +
     i +
     '">' +
@@ -1220,14 +1260,13 @@ function blockEditor(w, b, i, rangeStr) {
     (vid ? 2 : 3) +
     '" maxlength="' +
     (vid ? 450 : 1800) +
-    '" data-block="' +
+    '" class="autogrow" data-block="' +
     i +
     '" data-key="line" placeholder="' +
     (vid ? "填写这一幕药师讲解的口播句子" : "填写这一段的科普正文") +
     '">' +
     esc(b.line) +
     "</textarea>" +
-    pictureControls(w, b, i) +
     (vid
       ? '<details class="shot-options"><summary>运镜要求与单镜时长（' +
         b.seconds +
@@ -1248,7 +1287,9 @@ function blockEditor(w, b, i, rangeStr) {
         ) +
         "</select></label></details>"
       : "") +
-    "</section>"
+    '</div><div class="shot-media">' +
+    pictureControls(w, b, i) +
+    "</div></div></section>"
   );
 }
 
@@ -1266,7 +1307,7 @@ function editor(w) {
     '" placeholder="输入清晰易懂的科普标题"></label>' +
     (vid
       ? ""
-      : '<label class="field" style="margin-top:14px">药师导读<textarea rows="2" maxlength="600" data-bind="lead" placeholder="用一两句话提炼核心阅读提示">' +
+      : '<label class="field" style="margin-top:14px">药师导读<textarea rows="2" maxlength="600" class="autogrow" data-bind="lead" placeholder="用一两句话提炼核心阅读提示">' +
         esc(w.lead) +
         "</textarea></label>") +
     '</div><div class="sheet"><div class="card-head"><h2>' +
@@ -1303,7 +1344,7 @@ function editor(w) {
 
   const aside =
     '<div class="sheet"><div class="card-head"><h2>' +
-    (vid ? "合成准备" : "保存修改") +
+    (vid ? "合成准备" : "预览与发布") +
     '</h2><span class="status-pill">' +
     (s.mode === "ark" ? "火山方舟" : "本地演示") +
     '</span></div><div class="summary-kv">' +
@@ -1331,7 +1372,9 @@ function editor(w) {
     (vid && w.video && !w.videoDirty
       ? btn("查看已合成视频", "view-draft", "secondary widebtn")
       : "") +
-    '</div><p class="footmeta">所有编辑实时保存在当前浏览器。</p></div>';
+    '</div><p class="footmeta save-state" id="save-state">' +
+    savedLabel(w) +
+    "</p></div>";
 
   shell(
     w,
@@ -1346,6 +1389,68 @@ function editor(w) {
   );
 }
 
+const reviewChecks = [
+  "药品名称、规格与说明书或外包装一致",
+  "未给出个体化剂量，或替代医嘱的用药建议",
+  "风险提示与就医、咨询药师的提醒表述完整",
+  "配图与字幕中没有错误文字或剂量数字",
+];
+
+function savedLabel(w) {
+  return (
+    "已自动保存到当前浏览器 · " +
+    new Date(w.updated).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    })
+  );
+}
+
+function contentSig(w) {
+  const s = JSON.stringify([
+    w.title,
+    w.lead,
+    w.drug,
+    w.blocks.map((b) => [b.name, b.line, b.image]),
+    w.video?.url,
+  ]);
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return h;
+}
+
+// Checks only count for the exact content they were ticked against.
+function activeChecks(w) {
+  return w.checksFor === contentSig(w) ? w.checks || [] : [];
+}
+
+function checklist(w) {
+  const checks = activeChecks(w);
+  const done = reviewChecks.filter((_, i) => checks[i]).length;
+  return (
+    '<div class="formrow checklist" id="checklist"><div class="field-head"><span class="label">发布前药师自查</span><span class="pace' +
+    (done === reviewChecks.length ? " ok" : "") +
+    '" id="check-count">' +
+    done +
+    " / " +
+    reviewChecks.length +
+    "</span></div>" +
+    reviewChecks
+      .map(
+        (t, i) =>
+          '<label class="checkline"><input type="checkbox" data-check="' +
+          i +
+          '"' +
+          (checks[i] ? " checked" : "") +
+          "><span>" +
+          esc(t) +
+          "</span></label>",
+      )
+      .join("") +
+    '<p class="footmeta">修改内容或配图后需重新自查。</p></div>'
+  );
+}
+
 function detail(w) {
   const vid = w.type === "video",
     reviewing = w.stage === "review";
@@ -1354,6 +1459,14 @@ function detail(w) {
   const metaPills = [
     vid ? "视频科普" : "图文科普 · " + w.layout,
     ...(w.drug ? ["关联药品：" + w.drug] : []),
+    ...(vid
+      ? []
+      : (() => {
+          const chars = [w.lead, ...w.blocks.map((b) => b.name + b.line)]
+            .join("")
+            .replace(/\s+/g, "").length;
+          return [chars + " 字 · 约 " + Math.max(1, Math.ceil(chars / 400)) + " 分钟读完"];
+        })()),
     ...(vid
       ? [
           w.settings.ratio,
@@ -1390,7 +1503,7 @@ function detail(w) {
             "</span></div><p>" +
             esc(b.line) +
             "</p>" +
-            pictureControls(w, b, i) +
+            pictureControls(w, b, i, true) +
             "</section>",
         )
         .join("") +
@@ -1406,7 +1519,7 @@ function detail(w) {
             "</h3><p>" +
             esc(b.line) +
             "</p>" +
-            pictureControls(w, b, i) +
+            pictureControls(w, b, i, true) +
             "</section>",
         )
         .join("") +
@@ -1451,7 +1564,9 @@ function detail(w) {
           "tags",
           "secondary widebtn",
         )) +
-    '</div><div class="dividerline"></div><div class="stack-actions">' +
+    "</div>" +
+    (reviewing ? "" : '<div class="dividerline"></div>' + checklist(w)) +
+    '<div class="dividerline"></div><div class="stack-actions">' +
     (reviewing
       ? '<p class="footmeta" style="margin-top:0">当前为本地模拟送审状态，作品已保存在「我的作品」。</p>' +
         btn("查看我的作品", "works", "primary widebtn") +
@@ -1658,18 +1773,30 @@ function authorize(w, count, kind, fn) {
       esc(kind === "video" ? w.settings.resolution : w.settings.imageSize) +
       '</span><span class="pill">画幅 ' +
       esc(w.settings.ratio) +
-      '</span></div><div class="actions">' +
-      btn("确认提交并计费", "confirm-paid", "primary") +
+      '</span></div><div class="actions dialog-actions">' +
       btn("取消", "close", "secondary") +
+      btn("确认提交并计费", "confirm-paid", "primary") +
       "</div>",
     "confirm",
   );
 }
 
+function topicMissing() {
+  const el = $("#topic");
+  if (!el) {
+    notify("请先填写科普主题", "warn");
+    return;
+  }
+  el.classList.add("invalid");
+  el.setAttribute("aria-invalid", "true");
+  el.setAttribute("aria-describedby", "topic-error");
+  $("#topic-error").hidden = false;
+  el.focus();
+}
+
 function generate(w) {
   if (!w.topic.trim()) {
-    notify("请先填写科普主题");
-    $("#topic")?.focus();
+    topicMissing();
     return;
   }
   if (w.settings.mode === "ark" && !config.keyPresent) {
@@ -1762,9 +1889,9 @@ function askDeleteModal(id) {
     "删除这份作品？",
     "<p>将从当前浏览器移除「<b>" +
       esc(target.title || target.topic || "未命名作品") +
-      '</b>」的草稿记录，此操作不可恢复。</p><div class="actions">' +
-      btn("确认删除", "confirm-delete", "danger-outline", id) +
+      '</b>」的草稿记录，此操作不可恢复。</p><div class="actions dialog-actions">' +
       btn("保留作品", "close", "secondary") +
+      btn("确认删除", "confirm-delete", "danger-solid", id) +
       "</div>",
     "confirm",
   );
@@ -1772,17 +1899,16 @@ function askDeleteModal(id) {
 
 function askRegenAllModal(w) {
   if (!w.topic.trim()) {
-    notify("请先填写科普主题");
-    $("#topic")?.focus();
+    topicMissing();
     return;
   }
   openModal(
     "重新生成整篇内容？",
     "<p>重新生成将覆盖当前已编辑的" +
       (w.type === "video" ? "分镜脚本与已合成成片" : "标题、导读与各段正文") +
-      '。</p><div class="actions">' +
-      btn("确认覆盖并重做", "confirm-regen-all", "primary") +
+      '。</p><div class="actions dialog-actions">' +
       btn("取消", "close", "secondary") +
+      btn("确认覆盖并重做", "confirm-regen-all", "primary") +
       "</div>",
     "confirm",
   );
@@ -1803,7 +1929,7 @@ async function copyArticleText(w) {
     .join("\n");
   try {
     await navigator.clipboard.writeText(text);
-    notify("已复制全文到剪贴板");
+    notify("已复制全文到剪贴板", "ok");
   } catch {
     const area = document.createElement("textarea");
     area.value = text;
@@ -1811,7 +1937,7 @@ async function copyArticleText(w) {
     area.select();
     document.execCommand("copy");
     area.remove();
-    notify("已复制全文到剪贴板");
+    notify("已复制全文到剪贴板", "ok");
   }
 }
 
@@ -1843,6 +1969,8 @@ function render(preserveScroll = false) {
 function changed(w) {
   w.updated = Date.now();
   save();
+  const state = $("#save-state");
+  if (state) state.textContent = savedLabel(w);
 }
 
 function applySettingMutation(s, key, val) {
@@ -1869,12 +1997,18 @@ document.addEventListener("input", (e) => {
     regenModal.prompt = el.value;
     return;
   }
+  if (el.classList.contains("autogrow")) autoGrow(el);
   if (!w) return;
   if (el.dataset.bind) {
     w[el.dataset.bind] = el.value;
     if (el.id === "topic") {
       const counter = $("#chars");
       if (counter) counter.textContent = el.value.length + " / 300";
+      if (el.value.trim() && el.classList.contains("invalid")) {
+        el.classList.remove("invalid");
+        el.removeAttribute("aria-invalid");
+        $("#topic-error").hidden = true;
+      }
     }
     changed(w);
   }
@@ -1939,6 +2073,18 @@ document.addEventListener("change", (e) => {
   }
   if (el.id === "picture-size" && regenModal) {
     regenModal.imageSize = el.value;
+    return;
+  }
+  if (el.dataset.check !== undefined && w) {
+    w.checks = [...activeChecks(w)];
+    w.checks[Number(el.dataset.check)] = el.checked;
+    w.checksFor = contentSig(w);
+    changed(w);
+    const done = reviewChecks.filter((_, i) => w.checks[i]).length;
+    const count = $("#check-count");
+    count.textContent = done + " / " + reviewChecks.length;
+    count.classList.toggle("ok", done === reviewChecks.length);
+    $("#checklist").classList.remove("attention");
     return;
   }
   if (el.dataset.seconds !== undefined && w) {
@@ -2138,7 +2284,7 @@ document.addEventListener("click", async (e) => {
         break;
       case "preview":
         if (!w.title.trim()) {
-          notify("请填写作品标题");
+          notify("请填写作品标题", "warn");
           return;
         }
         w.editing = false;
@@ -2157,19 +2303,19 @@ document.addEventListener("click", async (e) => {
         if (w.video) w.videoDirty = true;
         changed(w);
         render(true);
-        notify("已补齐本地示例分镜图");
+        notify("已补齐本地示例分镜图", "ok");
         break;
       case "compose": {
         if (!w.title.trim()) {
-          notify("请先填写作品标题");
+          notify("请先填写作品标题", "warn");
           return;
         }
         if (w.blocks.some((b) => !b.line.trim())) {
-          notify("请补全每一幕的口播台词");
+          notify("请补全每一幕的口播台词", "warn");
           return;
         }
         if (w.blocks.some((b) => !b.image)) {
-          notify("还有分镜缺少配图，请先为该幕配图");
+          notify("还有分镜缺少配图，请先为该幕配图", "warn");
           return;
         }
         if (
@@ -2179,6 +2325,7 @@ document.addEventListener("click", async (e) => {
         ) {
           notify(
             "存在单镜时长超过当前模型上限，请调短单镜时长或切换 Seedance 2.5",
+            "warn",
           );
           return;
         }
@@ -2206,7 +2353,7 @@ document.addEventListener("click", async (e) => {
       case "append": {
         const vid = w.type === "video";
         if (vid && w.blocks.length >= 12) {
-          notify("最多支持 12 幕分镜");
+          notify("最多支持 12 幕分镜", "warn");
           return;
         }
         const idx = w.blocks.length;
@@ -2260,7 +2407,7 @@ document.addEventListener("click", async (e) => {
         const idx = Number(v);
         if (w.blocks[idx]?.job) return;
         if (w.blocks.length <= 2) {
-          notify("至少保留两段内容");
+          notify("至少保留两段内容", "warn");
           return;
         }
         w.blocks.splice(idx, 1);
@@ -2280,7 +2427,7 @@ document.addEventListener("click", async (e) => {
         const i = Number(v),
           prompt = ($("#imageprompt", dialogBody)?.value || "").trim();
         if (!prompt) {
-          notify("请填写画面提示词");
+          notify("请填写画面提示词", "warn");
           return;
         }
         const isArk = action === "regen";
@@ -2353,7 +2500,14 @@ document.addEventListener("click", async (e) => {
       case "submit":
         if (!w.tags.length) {
           tagsModal(w);
-          notify("请先选择至少一个作品分类");
+          notify("请先选择至少一个作品分类", "warn");
+          break;
+        }
+        if (activeChecks(w).filter(Boolean).length < reviewChecks.length) {
+          const box = $("#checklist");
+          box?.classList.add("attention");
+          box?.scrollIntoView({ block: "center", behavior: "smooth" });
+          notify("请先完成发布前药师自查", "warn");
           break;
         }
         w.stage = "review";
@@ -2361,14 +2515,14 @@ document.addEventListener("click", async (e) => {
         w.viewingSetup = false;
         changed(w);
         render();
-        notify("已提交本地模拟审核");
+        notify("已提交本地模拟审核", "ok");
         break;
       case "withdraw":
         w.stage = "draft";
         w.editing = false;
         changed(w);
         render();
-        notify("已撤回至成品草稿");
+        notify("已撤回至成品草稿", "ok");
         break;
       case "copy-article":
         await copyArticleText(w);
@@ -2383,7 +2537,7 @@ document.addEventListener("click", async (e) => {
           save();
         }
         dialog.close();
-        notify("作品已删除");
+        notify("作品已删除", "ok");
         if (route()[0] === "work" && route()[1] === v) {
           tab = "works";
           navigate("home");
@@ -2394,7 +2548,7 @@ document.addEventListener("click", async (e) => {
       }
     }
   } catch (error) {
-    notify(error.message);
+    notify(error.message, "err");
   }
 });
 
