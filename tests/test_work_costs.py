@@ -40,6 +40,16 @@ class WorkCostsTests(unittest.TestCase):
         actual = work_costs.speech_cost(12, "示例台词", "流畅女声 2.0", 0)
         self.assertEqual(actual["amount"], "0.0036")
         self.assertEqual(work_costs.speech_cost(0, "示例", "女声", 0)["amount"], "0.0000")
+        avatar = work_costs.avatar_cost("videoretalk", 60.0)
+        self.assertEqual(avatar["amount"], "4.8000")
+        self.assertIn("60.00 秒", avatar["usage"])
+        wan_avatar = work_costs.avatar_cost("wan2.2-s2v", 15.0, resolution="480P")
+        self.assertEqual(wan_avatar["amount"], "7.5000")
+        wan_hd = work_costs.avatar_cost("wan2.2-s2v", 10.0, resolution="720P")
+        self.assertEqual(wan_hd["amount"], "9.0000")
+        avatar_cached = work_costs.avatar_cost("videoretalk", 60.0, cached=True)
+        self.assertEqual(avatar_cached["amount"], "0")
+        self.assertIn("复用", avatar_cached["usage"])
 
     def test_work_total_includes_attempts_and_only_its_own_legacy_assets(self):
         work_id = str(uuid4())

@@ -23,6 +23,89 @@
     summary: "要点收口",
   };
 
+  const LAYOUT_MODES = [
+    { id: "hook", name: "提问开场" },
+    { id: "explain", name: "常规讲解" },
+  ];
+
+  const DEFAULT_LAYOUT_BY_TYPE = {
+    cover: "hook",
+    compare: "explain",
+    steps: "explain",
+    warning: "explain",
+    summary: "explain",
+  };
+
+  const DEFAULT_FOCUS_REGIONS = {
+    cover: {
+      question: { x: 4, y: 6, w: 92, h: 36 },
+      answer: { x: 4, y: 42, w: 92, h: 52 },
+    },
+    compare: {
+      "0": { x: 3.5, y: 25, w: 45, h: 58 },
+      "1": { x: 51.5, y: 25, w: 45, h: 58 },
+      action: { x: 3.5, y: 84.5, w: 93, h: 12 },
+    },
+    steps: {
+      "0": { x: 3, y: 24.5, w: 30.5, h: 59 },
+      "1": { x: 34.8, y: 24.5, w: 30.5, h: 59 },
+      "2": { x: 66.5, y: 24.5, w: 30.5, h: 59 },
+      action: { x: 3.5, y: 85, w: 93, h: 11.5 },
+    },
+    warning: {
+      "0": { x: 3.5, y: 24.5, w: 45.5, h: 27.5 },
+      "1": { x: 51, y: 24.5, w: 45.5, h: 27.5 },
+      "2": { x: 3.5, y: 54, w: 45.5, h: 27.5 },
+      "3": { x: 51, y: 54, w: 45.5, h: 27.5 },
+      top: { x: 3.5, y: 24.5, w: 93, h: 27.5 },
+      bottom: { x: 3.5, y: 54, w: 93, h: 27.5 },
+      action: { x: 3.5, y: 84, w: 93, h: 12 },
+    },
+    summary: {
+      "0": { x: 4, y: 24, w: 92, h: 21 },
+      "1": { x: 4, y: 47, w: 92, h: 21 },
+      "2": { x: 4, y: 70, w: 92, h: 21 },
+      action: { x: 4, y: 85, w: 92, h: 11.5 },
+    },
+  };
+
+  const FOCUS_OPTIONS_BY_TYPE = {
+    cover: [
+      { id: "question", label: "开场提问" },
+      { id: "answer", label: "直接结论" },
+      { id: "all", label: "整页展示" },
+    ],
+    compare: [
+      { id: "0", label: "左侧栏" },
+      { id: "1", label: "右侧栏" },
+      { id: "action", label: "底部原则" },
+      { id: "all", label: "双栏总览" },
+    ],
+    steps: [
+      { id: "0", label: "第 1 步" },
+      { id: "1", label: "第 2 步" },
+      { id: "2", label: "第 3 步" },
+      { id: "all", label: "三步回顾" },
+    ],
+    warning: [
+      { id: "top", label: "上排信号" },
+      { id: "bottom", label: "下排信号" },
+      { id: "0", label: "信号 1" },
+      { id: "1", label: "信号 2" },
+      { id: "2", label: "信号 3" },
+      { id: "3", label: "信号 4" },
+      { id: "action", label: "行动指令" },
+      { id: "all", label: "全部警示" },
+    ],
+    summary: [
+      { id: "0", label: "第 1 句" },
+      { id: "1", label: "第 2 句" },
+      { id: "2", label: "第 3 句" },
+      { id: "all", label: "三句总览" },
+      { id: "outro", label: "结尾定格" },
+    ],
+  };
+
   const DEFAULT_PHARMACIST = {
     name: "李明远",
     hospital: "北京协和医院",
@@ -32,18 +115,6 @@
 
   const DEFAULT_DISCLAIMER = "科普内容仅供参考，具体诊疗与用药请遵医嘱";
 
-  const SAMPLE_INFOGRAPHICS = [
-    { label: "儿童退烧 · 单一成分对比", src: "/assets/template-info-fever.jpg" },
-    { label: "腿抽筋 · 钙钾与诱因解析", src: "/assets/template-info-cramp.jpg" },
-    { label: "降压药漏服 · 补服时机", src: "/assets/template-info-bp.jpg" },
-    { label: "感冒药配退烧药 · 成分重叠", src: "/assets/template-info-cold.jpg" },
-    { label: "他汀降脂药 · 短效与长效", src: "/assets/template-info-statin.jpg" },
-    { label: "肠溶片与缓释片 · 勿掰开", src: "/assets/template-info-tablet.jpg" },
-    { label: "滴眼液 · 正确 4 步图解", src: "/assets/template-info-eyedrop.jpg" },
-    { label: "抗生素 · 足疗程防耐药", src: "/assets/template-info-antibiotic.jpg" },
-    { label: "胃药 · 饭前饭后分类图", src: "/assets/template-info-stomach.jpg" },
-  ];
-
   const EXAMPLES = [
     {
       topic: "孩子发烧，退烧药怎么吃才安全？",
@@ -52,7 +123,8 @@
       theme: "medical",
       presenter: "digital",
       title: "孩子发烧，退烧药怎么吃才安全",
-      chapters: ["看温度", "选对药", "算剂量", "何时就医"],
+      shortTitle: "儿童退烧 · 安全用药",
+      chapters: ["选对药", "核剂量", "何时就医", "记口诀"],
       disclaimer: DEFAULT_DISCLAIMER,
       previewSlideIndex: 1,
       slides: [
@@ -73,7 +145,7 @@
         {
           type: "compare",
           name: "认准两种成分",
-          chapterIndex: 1,
+          chapterIndex: 0,
           contentImage: "/assets/template-info-fever.jpg",
           imageSource: "preset",
           headline: "退烧别乱选！认准这两种单一成分",
@@ -111,7 +183,7 @@
         {
           type: "steps",
           name: "按体重核剂量",
-          chapterIndex: 2,
+          chapterIndex: 1,
           headline: "喂药前核对这 3 个关键点，避免多喂或少喂",
           accentPhrase: "3 个关键点",
           imagePrompt: "横向三步实操科普信息图，标题「喂药前核对这 3 个关键点」，三个淡蓝圆角卡片依次排开：第1步先称当前体重（认公斤数不按年龄）、第2步核对剂型与浓度（滴剂浓度高于混悬液）、第3步用原配量器取药（不用家用汤匙），底部4个小圆角自查标签",
@@ -140,7 +212,7 @@
         {
           type: "warning",
           name: "4 类就医信号",
-          chapterIndex: 3,
+          chapterIndex: 2,
           headline: "出现这 4 类危险信号，别只在家等退烧",
           accentPhrase: "4 类危险信号",
           imagePrompt: "2x2四格风险警示科普信息图，标题「出现这 4 类危险信号，及时就医」，四张淡珊瑚色圆角警示卡配简洁医学图标：小于3月龄婴儿发热、退烧后仍精神萎靡、呼吸急促抽搐或皮疹、持续高热超过3天，底部提示禁止酒精擦浴和厚被捂汗",
@@ -202,7 +274,8 @@
       theme: "medical",
       presenter: "digital",
       title: "腿抽筋，先别急着补钙",
-      chapters: ["找原因", "辨差异", "怎么做", "何时就医"],
+      shortTitle: "腿抽筋 · 找准原因",
+      chapters: ["辨原因", "怎么做", "何时就医", "记口诀"],
       disclaimer: DEFAULT_DISCLAIMER,
       previewSlideIndex: 0,
       slides: [
@@ -225,7 +298,7 @@
         {
           type: "compare",
           name: "钙钾分工对比",
-          chapterIndex: 1,
+          chapterIndex: 0,
           headline: "钙与钾分工不同，先查清楚再决定怎么补",
           accentPhrase: "分工不同",
           imagePrompt: "左右双栏对比科普信息图，标题「钙与钾分工不同，先查清楚再补」，左栏淡蓝卡片「钙（Ca）参与收缩」列饮食来源与评估建议，右栏暖橙卡片「钾（K）调节放松」列大量出汗腹泻与部分利尿药诱因，底部提醒慢病患者勿自行乱补钾片",
@@ -261,7 +334,7 @@
         {
           type: "steps",
           name: "日常三步排查",
-          chapterIndex: 2,
+          chapterIndex: 1,
           headline: "遇到反复腿抽筋，建议按这 3 步排查处理",
           accentPhrase: "3 步排查处理",
           imagePrompt: "三步实操科普信息图，标题「遇到反复腿抽筋，按这 3 步排查处理」，三张横向淡蓝圆角卡片配简洁矢量图标：第1步急性发作轻柔勾脚拉伸、第2步排查受凉出汗与补液、第3步带上药盒问药师勿擅自停慢病药",
@@ -290,7 +363,7 @@
         {
           type: "warning",
           name: "何时需要就医",
-          chapterIndex: 3,
+          chapterIndex: 2,
           headline: "伴随这 4 种表现，建议尽快去医院检查",
           accentPhrase: "4 种表现",
           imagePrompt: "2x2警示科普信息图，标题「腿抽筋伴随这 4 种表现，建议尽快就医」，四张淡珊瑚色圆角卡：抽筋频繁加重影响睡眠、伴明显乏力或心慌、单侧下肢肿胀发凉麻木、近期调整过慢病用药",
@@ -352,7 +425,8 @@
       theme: "medical",
       presenter: "digital",
       title: "降压药忘吃了，要不要补吃双倍",
-      chapters: ["先别慌", "看时间", "防漏服", "何时就医"],
+      shortTitle: "降压药 · 漏服处理",
+      chapters: ["看时间", "防漏服", "何时就医", "记口诀"],
       disclaimer: DEFAULT_DISCLAIMER,
       previewSlideIndex: 1,
       slides: [
@@ -373,7 +447,7 @@
         {
           type: "compare",
           name: "补服时间原则",
-          chapterIndex: 1,
+          chapterIndex: 0,
           contentImage: "/assets/template-info-bp.jpg",
           imageSource: "preset",
           headline: "降压药漏服？千万别补双倍",
@@ -411,7 +485,7 @@
         {
           type: "steps",
           name: "三招减少漏服",
-          chapterIndex: 2,
+          chapterIndex: 1,
           headline: "做好这 3 个小习惯，慢病服药更少忘",
           accentPhrase: "3 个小习惯",
           imagePrompt: "三步实操科普信息图，标题「做好这 3 个小习惯，降压药更少忘」，三张横向淡蓝卡片配图标：1 绑定日常固定动作如刷牙早餐、2 使用带星期刻度的分格药盒、3 设手机闹钟并随手勾选记录",
@@ -440,7 +514,7 @@
         {
           type: "warning",
           name: "异常波动就医",
-          chapterIndex: 3,
+          chapterIndex: 2,
           headline: "出现这 4 种情况，别硬扛尽快就医",
           accentPhrase: "4 种情况",
           imagePrompt: "2x2四格警示信息图，标题「血压波动伴这 4 种情况，尽快就医」，四张淡珊瑚色圆角卡：血压明显飙升伴头痛、胸闷胸痛或呼吸困难、肢体麻木言语不清、误服双倍后头晕心慌",
@@ -502,7 +576,8 @@
       theme: "warm",
       presenter: "cartoon",
       title: "感冒药和退烧药同吃，小心成分重叠",
-      chapters: ["查成分", "辨重叠", "怎么选", "何时就医"],
+      shortTitle: "感冒退烧 · 防叠药",
+      chapters: ["辨重叠", "怎么选", "何时就医", "记口诀"],
       disclaimer: DEFAULT_DISCLAIMER,
       previewSlideIndex: 1,
       slides: [
@@ -523,7 +598,7 @@
         {
           type: "compare",
           name: "复方与单方对比",
-          chapterIndex: 1,
+          chapterIndex: 0,
           contentImage: "/assets/template-info-cold.jpg",
           imageSource: "preset",
           headline: "感冒药配退烧药？小心成分重叠",
@@ -561,7 +636,7 @@
         {
           type: "steps",
           name: "选药三步自查",
-          chapterIndex: 2,
+          chapterIndex: 1,
           headline: "家里吃感冒退烧药，记住这 3 步不吃重",
           accentPhrase: "3 步不吃重",
           imagePrompt: "暖色手绘风格三步信息图，标题「吃感冒退烧药记住这 3 步」，三张暖色细描边卡片：第1步翻看药盒成分栏找通用名、第2步对照症状优先选单一成分、第3步同服两种以上先问药师",
@@ -590,7 +665,7 @@
         {
           type: "warning",
           name: "过量与就医信号",
-          chapterIndex: 3,
+          chapterIndex: 2,
           headline: "出现这 4 种情况，请尽快就医评估",
           accentPhrase: "4 种情况",
           imagePrompt: "暖色手绘2x2警示信息图，标题「感冒用药遇这 4 种情况尽快就医」，四张卡片：怀疑重复吃重药量、持续高热超过三天、恶心呕吐或右上腹不适、呼吸困难胸痛或皮疹",
@@ -651,147 +726,263 @@
       drug: "阿托伐他汀钙片",
       theme: "medical",
       presenter: "digital",
-      title: "降脂药他汀，为什么常建议晚上吃",
-      chapters: ["看规律", "分类型", "记细节", "何时就医"],
+      title: "阿托伐他汀，一定要晚上吃吗",
+      shortTitle: "阿托伐他汀 · 服用时间",
+      chapters: ["先弄清楚", "怎么吃", "注意啥", "记心里"],
       disclaimer: DEFAULT_DISCLAIMER,
       previewSlideIndex: 1,
       slides: [
         {
           type: "cover",
-          name: "夜间合成规律",
+          layoutMode: "hook",
+          name: "一定要晚上吃吗",
           chapterIndex: 0,
-          headline: "他汀类降脂药，一定要晚上吃吗？",
+          headline: "阿托伐他汀，一定要晚上吃吗？",
           accentPhrase: "一定要晚上吃吗",
-          lead: "人体胆固醇多在夜间合成，但不是每一种他汀都必须睡前吃。",
-          pills: ["短效他汀适合睡前", "长效他汀固定时间即可", "长期规律服药最关键"],
-          imagePrompt: "医疗白蓝风封面科普信息图，标题「他汀类降脂药，一定要晚上吃吗？」，简洁时钟昼夜图标与药片插画，三个要点胶囊：短效适合睡前、长效固定时间、规律坚持最关键",
-          footerNote: "先认清自己吃的是哪一种他汀，比死记“必须晚上吃”更重要。",
-          highlightWords: ["晚上吃", "每一种他汀"],
-          line: "很多人听说吃他汀必须晚上睡前吃，结果经常忘。其实人体胆固醇多在夜间合成，但并不是每种他汀都必须晚上吃。",
-          seconds: 13,
+          question: "阿托伐他汀，一定要晚上吃吗？",
+          answer: "一般一天中任意时间均可服用，每天固定时间更关键",
+          lead: "具体服用时间按说明书和医嘱执行，不必为了“必须睡前吃”而漏服。",
+          pills: ["短效他汀适合晚间", "阿托伐他汀长效任意时间", "每天固定更易坚持"],
+          imagePrompt: "医疗白蓝风破题信息图，上半部居中大标题「阿托伐他汀，一定要晚上吃吗？」与绿底结论「任意时间均可，每天固定更关键」，下半部画昼夜时钟与药盒扁平矢量插画及三个短词标签，留白充足，不画人物与免责声明",
+          footerNote: "具体服药时间请以药品说明书与医嘱为准。",
+          highlightWords: ["晚上吃", "任意时间", "固定时间"],
+          beats: [
+            {
+              label: "核心疑问",
+              focus: "question",
+              line: "阿托伐他汀，一定要晚上吃吗？",
+              highlightWords: ["晚上吃"],
+            },
+            {
+              label: "直接结论",
+              focus: "answer",
+              line: "一般可以在一天中的任意时间服用，尽量每天固定时间，具体按医嘱执行。",
+              highlightWords: ["任意时间", "固定时间"],
+            },
+          ],
+          line: "阿托伐他汀，一定要晚上吃吗？一般可以在一天中的任意时间服用，尽量每天固定时间，具体按医嘱执行。",
+          seconds: 10,
         },
         {
           type: "compare",
+          layoutMode: "focus",
           name: "短效与长效区分",
-          chapterIndex: 1,
+          chapterIndex: 0,
           contentImage: "/assets/template-info-statin.jpg",
           imageSource: "preset",
           headline: "他汀类降脂药，何时吃有讲究",
           accentPhrase: "何时吃",
-          imagePrompt: "左右双栏对比科普信息图，标题「他汀类降脂药，何时吃有讲究」，左栏淡蓝卡片「短效他汀」配弯月图标：常建议晚上或睡前服、契合夜间合成高峰；右栏暖黄卡片「长效他汀」配日月图标：每天固定时间均可、如阿托伐他汀等长效款；底部提示条：具体服药时间请以药品说明书与医嘱为准，勿擅自停药",
+          imagePrompt: "严格左右等宽双栏对比医疗信息图，顶部居中大标题「他汀类降脂药，何时吃有讲究」，左栏淡蓝卡「短效他汀」配弯月图标列3短词：辛伐/普伐他汀、停留时间短、常建议晚间服；右栏暖黄卡「长效他汀」配日月图标列3短词：阿托伐/瑞舒伐他汀、作用时间长、固定时间即可；底部单行提示条：具体以说明书与医嘱为准",
           columns: [
             {
               title: "短效他汀",
               badge: "常建议晚间服",
               points: [
-                "如辛伐他汀、普伐他汀、洛伐他汀等",
-                "在体内停留时间相对较短",
-                "睡前或晚间服更契合夜间胆固醇合成高峰",
+                "如辛伐他汀、普伐他汀等",
+                "体内停留时间相对较短",
+                "晚间服更契合夜间合成高峰",
               ],
               footLabel: "服药时机",
-              footValue: "按说明书于晚间或睡前服",
+              footValue: "常建议晚间或睡前服",
             },
             {
               title: "长效他汀",
               badge: "固定时间即可",
               points: [
-                "如阿托伐他汀、瑞舒伐他汀、匹伐他汀等",
-                "药效维持时间较长，白天晚上均可起效",
-                "选每天最不易忘记的固定时间坚持服用",
+                "如阿托伐他汀、瑞舒伐他汀",
+                "药效维持长，早晚均可起效",
+                "挑每天最不易忘的时间坚持",
               ],
               footLabel: "服药时机",
               footValue: "每天同一时间规律服用",
             },
           ],
-          footerNote: "提示：具体属于哪种他汀及是否与餐同服，请核对您手上药盒的通用名和说明书。",
+          footerNote: "提示：具体属于哪种他汀及是否与餐同服，请核对药盒通用名和说明书。",
           highlightWords: ["短效他汀", "长效他汀", "固定时间"],
-          line: "像辛伐他汀这类短效他汀，通常建议晚上或睡前吃；而阿托伐他汀、瑞舒伐他汀等长效他汀，每天挑固定时间吃就行。",
-          seconds: 14,
+          beats: [
+            {
+              label: "短效他汀",
+              focus: "0",
+              line: "像辛伐他汀这类短效他汀，体内停留时间短，常建议晚上或睡前吃，配合夜间胆固醇合成高峰。",
+              highlightWords: ["短效他汀", "睡前吃"],
+            },
+            {
+              label: "长效他汀",
+              focus: "1",
+              line: "而阿托伐他汀、瑞舒伐他汀等长效他汀作用时间长，早晚都能起效，每天挑固定时间就行。",
+              highlightWords: ["长效他汀", "固定时间"],
+            },
+            {
+              label: "核对原则",
+              focus: "action",
+              line: "关键不是跟风别人，而是先认清药名，按说明书和医嘱坚持规律服用。",
+              highlightWords: ["按说明书", "规律服用"],
+            },
+          ],
+          line: "像辛伐他汀这类短效他汀，体内停留时间短，常建议晚上或睡前吃，配合夜间胆固醇合成高峰。而阿托伐他汀、瑞舒伐他汀等长效他汀作用时间长，早晚都能起效，每天挑固定时间就行。关键不是跟风别人，而是先认清药名，按说明书和医嘱坚持规律服用。",
+          seconds: 15,
         },
         {
           type: "steps",
-          name: "日常服药 3 细节",
-          chapterIndex: 2,
-          headline: "长期吃他汀降脂，注意这 3 个用药细节",
-          accentPhrase: "3 个用药细节",
-          imagePrompt: "三步实操医疗科普信息图，标题「长期吃他汀注意这 3 个细节」，三张淡蓝圆角卡片：1 避开大量西柚或西柚汁、2 血脂达标也不自行停药、3 按医嘱定期复查血脂肝功",
+          layoutMode: "focus",
+          name: "按时服药三步",
+          chapterIndex: 1,
+          headline: "按时服药的三步小清单",
+          accentPhrase: "三步",
+          imagePrompt: "严格横向等宽三栏医疗信息图，顶部居中大标题「按时服药的三步小清单」，主体三张等宽圆角蓝卡并列齐平：第1步固定时间（绑定晚饭或刷牙）、第2步设好提醒（分格药盒或闹钟）、第3步复诊带清单（合用新药先沟通）；底部简洁一行提示：坚持规律服药更易达标，不堆砌小字",
           steps: [
             {
-              title: "留意西柚与饮酒",
-              desc: "部分他汀与大量西柚或西柚汁同服可能影响代谢；同时尽量减少大量饮酒。",
-              key: "避坑：服药期间少碰西柚类饮品",
+              title: "固定一个时间",
+              desc: "把吃药与晚饭后、洗漱等固定动作绑定。",
+              key: "每天同一时间",
             },
             {
-              title: "血脂正常别自行停药",
-              desc: "血脂降下来往往是药物维持的结果，擅自停药容易让指标再次反弹。",
-              key: "原则：减量或换药须经医生评估",
+              title: "设好提醒工具",
+              desc: "用周分格药盒或手机闹钟，减少遗忘漏服。",
+              key: "让提醒替你记",
             },
             {
-              title: "按期复查肝功与血脂",
-              desc: "开始服药或调药后，遵医嘱复查血脂、肝功能等指标，评估疗效与安全性。",
-              key: "习惯：带齐化验单复诊沟通",
+              title: "复诊带用药清单",
+              desc: "定期复查血脂肝功，合用新药先告知医生药师。",
+              key: "指标达标勿擅停",
             },
           ],
-          checks: ["认准药品通用名", "避免大量西柚汁", "按期复查血脂肝功", "不因达标自行停药"],
-          highlightWords: ["西柚", "自行停药", "复查"],
-          line: "长期吃他汀还要注意，尽量避开大量西柚汁，按医嘱定期复查血脂和肝功能，指标达标也不要自己停药。",
-          seconds: 13,
+          checks: ["绑定日常动作", "善用分格药盒", "少碰大量西柚", "定期复查指标"],
+          highlightWords: ["固定时间", "提醒闹钟", "复诊"],
+          beats: [
+            {
+              label: "固定时间",
+              focus: "0",
+              line: "第一步，把服药时间和每天固定的事绑在一起，比如晚饭后。",
+              highlightWords: ["固定", "晚饭后"],
+            },
+            {
+              label: "设好提醒",
+              focus: "1",
+              line: "第二步，用周分格药盒或手机提醒闹钟，减少遗忘漏服。",
+              highlightWords: ["提醒闹钟", "漏服"],
+            },
+            {
+              label: "复诊沟通",
+              focus: "2",
+              line: "第三步，定期复查血脂肝功，复诊时把正在吃的药都告诉医生和药师。",
+              highlightWords: ["复查", "医生和药师"],
+            },
+            {
+              label: "三步回顾",
+              focus: "all",
+              line: "做到这三步，就能更稳地坚持规律服药。",
+              highlightWords: ["规律服药"],
+            },
+          ],
+          line: "第一步，把服药时间和每天固定的事绑在一起，比如晚饭后。第二步，用周分格药盒或手机提醒闹钟，减少遗忘漏服。第三步，定期复查血脂肝功，复诊时把正在吃的药都告诉医生和药师。做到这三步，就能更稳地坚持规律服药。",
+          seconds: 15,
         },
         {
           type: "warning",
-          name: "异常反应复诊",
-          chapterIndex: 3,
-          headline: "服药期间出现这 4 种表现，及时联系医生",
-          accentPhrase: "4 种表现",
-          imagePrompt: "2x2四格警示科普信息图，标题「吃他汀期间出现这 4 种表现及时复诊」，四张淡珊瑚卡片：不明原因肌肉酸痛无力、尿色变深呈茶色、明显乏力食欲差或黄疸、合用新药前未核对",
+          layoutMode: "focus",
+          name: "异常及时就医",
+          chapterIndex: 2,
+          headline: "出现这些情况，别硬扛尽快就医",
+          accentPhrase: "尽快就医",
+          imagePrompt: "严格2x2四格对称警示医疗信息图，顶部居中大标题「出现这些情况，别硬扛尽快就医」，四张淡珊瑚圆角卡两行两列对齐：肌肉酸痛无力、尿色变深如茶、持续恶心腹不适、皮肤或眼白发黄；底部醒目珊瑚红行动条：出现严重信号立即就医评估，按医嘱处理",
           warnings: [
             {
-              title: "不明原因的肌肉酸痛或无力",
-              desc: "并非运动拉伤却持续出现全身或下肢肌肉酸痛、压痛或发软，建议检查肌酸激酶。",
+              title: "不明原因肌肉酸痛无力",
+              desc: "非运动拉伤却持续酸痛、压痛或发软。",
             },
             {
-              title: "尿色明显加深如浓茶色",
-              desc: "若伴随明显肌痛乏力，请尽快停药评估并及时前往医院检查。",
+              title: "尿色明显变深如浓茶",
+              desc: "尤其伴随明显肌痛乏力，属于紧急信号。",
             },
             {
-              title: "持续乏力、恶心或眼白发黄",
-              desc: "提示需复查肝功能，切勿硬扛观察。",
+              title: "持续恶心或右上腹不适",
+              desc: "伴食欲明显下降，提示需排查肝功能。",
             },
             {
-              title: "新加用了其他处方药或中草药",
-              desc: "部分抗菌药、抗真菌药可能与他汀有相互作用，加药前请主动告知医生或药师。",
+              title: "皮肤或眼白发黄",
+              desc: "切勿硬扛观察，尽快前往医院检查评估。",
             },
           ],
-          footerNote: "温馨提示：绝大多数患者规范服用他汀耐受良好，出现不适及时复诊调整，切忌盲目停药。",
-          highlightWords: ["肌肉酸痛", "浓茶色", "复查"],
-          line: "服药期间如果出现不明原因的肌肉酸痛无力、尿色变成浓茶色，或者明显乏力恶心，请及时联系医生复查。",
-          seconds: 13,
+          footerNote: "行动提醒：出现上述严重信号请立即就医评估，按说明书和医生指导处理；拿不准也可先咨询药师。",
+          highlightWords: ["肌肉酸痛", "浓茶", "立即就医"],
+          beats: [
+            {
+              label: "肌痛与尿色",
+              focus: "top",
+              line: "服药期间如果出现不明原因的肌肉酸痛无力，或者尿色明显变深像浓茶色。",
+              highlightWords: ["肌肉酸痛", "浓茶色"],
+            },
+            {
+              label: "肝功信号",
+              focus: "bottom",
+              line: "或者持续恶心、右上腹不舒服、皮肤和眼白发黄。",
+              highlightWords: ["右上腹", "发黄"],
+            },
+            {
+              label: "立即就医",
+              focus: "action",
+              line: "出现这些严重信号别硬扛，请立即就医评估，按说明书和医生指导处理。",
+              highlightWords: ["立即就医"],
+            },
+          ],
+          line: "服药期间如果出现不明原因的肌肉酸痛无力，或者尿色明显变深像浓茶色。或者持续恶心、右上腹不舒服、皮肤和眼白发黄。出现这些严重信号别硬扛，请立即就医评估，按说明书和医生指导处理。",
+          seconds: 14,
         },
         {
           type: "summary",
-          name: "他汀用药口诀",
+          layoutMode: "focus",
+          name: "三句口诀收口",
           chapterIndex: 3,
-          headline: "他汀降脂记住这 3 条，安心控脂少走弯路",
-          accentPhrase: "安心控脂",
-          imagePrompt: "三条总结要点科普信息图，标题「他汀降脂记住这 3 条」，三条淡蓝编号卡片：1 短效晚服长效固定时间、2 指标达标不擅自停药、3 定期复查留意肌痛与肝功",
+          headline: "三句口诀记住他汀服药要点",
+          accentPhrase: "三句口诀",
+          imagePrompt: "严格纵向三条总结构图医疗信息图，顶部居中大标题「三句口诀记住他汀服药要点」，主体居中纵向三张等宽圆角蓝条：1 时间看医嘱（长效固定时间即可）、2 每天别漏服（闹钟药盒帮坚持）、3 异常早就医（肌痛黄疸立即查）；不画药瓶堆砌与免责声明",
           points: [
             {
-              title: "先分短效长效，再定服药时间",
-              desc: "短效他汀常建议晚间服，长效他汀选固定时间更易坚持。",
+              title: "时间按说明书和医嘱来",
+              desc: "短效常晚间服，阿托伐他汀等长效选固定时间即可。",
             },
             {
-              title: "规律坚持，达标不自行停药",
-              desc: "稳住血脂靠长期管理，调药前先与心内科医生沟通。",
+              title: "每天固定时间别漏服",
+              desc: "日常指标达标不擅自停药，用闹钟与药盒帮坚持。",
             },
             {
-              title: "定期复查，留意肌肉与肝功信号",
-              desc: "合用新药前主动告知正在吃他汀，少喝西柚汁更稳妥。",
+              title: "有异常及时就医问药师",
+              desc: "留意肌痛、浓茶尿和黄疸信号，及时就诊评估。",
             },
           ],
+          outroNote: "每天固定时间按医嘱服药，有异常及时就医问药师",
+          outroImagePrompt: "温暖安心的医疗白蓝风16:9结尾收口卡片，居中大字核心行动金句「每天固定时间按医嘱服药，有异常及时就医问药师」，配柔和蓝色健康盾牌、小药盒与温和星光勾选扁平矢量插画，留白充足，不画医生人物头像、免责声明与二维码",
           footerNote: DEFAULT_DISCLAIMER,
-          highlightWords: ["短效长效", "定期复查"],
-          line: "分清短效长效、选好固定时间、按期复查不擅自停药，科学吃他汀就能把血脂稳稳管住。",
-          seconds: 11,
+          highlightWords: ["说明书和医嘱", "固定时间", "就医问药师"],
+          beats: [
+            {
+              label: "时间看医嘱",
+              focus: "0",
+              line: "第一句，时间按说明书和医嘱来。",
+              highlightWords: ["说明书和医嘱"],
+            },
+            {
+              label: "每天要固定",
+              focus: "1",
+              line: "第二句，每天固定时间别漏服。",
+              highlightWords: ["固定时间"],
+            },
+            {
+              label: "异常早就医",
+              focus: "2",
+              line: "第三句，有异常及时就医问药师。",
+              highlightWords: ["及时就医"],
+            },
+            {
+              label: "行动提醒",
+              focus: "outro",
+              line: "把这三句记住，用药更安心。",
+              highlightWords: ["更安心"],
+            },
+          ],
+          line: "第一句，时间按说明书和医嘱来。第二句，每天固定时间别漏服。第三句，有异常及时就医问药师。把这三句记住，用药更安心。",
+          seconds: 12,
         },
       ],
     },
@@ -802,7 +993,8 @@
       theme: "warm",
       presenter: "cartoon",
       title: "肠溶片与缓释片，别随便掰开吃",
-      chapters: ["看药名", "辨原理", "吞服难", "问药师"],
+      shortTitle: "缓释肠溶 · 别掰碎",
+      chapters: ["辨原理", "怎么吞", "注意啥", "记口诀"],
       disclaimer: DEFAULT_DISCLAIMER,
       previewSlideIndex: 1,
       slides: [
@@ -823,7 +1015,7 @@
         {
           type: "compare",
           name: "肠溶与缓释原理",
-          chapterIndex: 1,
+          chapterIndex: 0,
           contentImage: "/assets/template-info-tablet.jpg",
           imageSource: "preset",
           headline: "肠溶片与缓释片，别随便掰开吃",
@@ -861,7 +1053,7 @@
         {
           type: "steps",
           name: "吞咽困难怎么办",
-          chapterIndex: 2,
+          chapterIndex: 1,
           headline: "老人或孩子吞药困难，按这 3 步安全解决",
           accentPhrase: "3 步安全解决",
           imagePrompt: "暖色手绘三步信息图，标题「吞药困难按这 3 步安全解决」，三张暖色细描边卡片：第1步查药盒完整名称与说明、第2步请医生或药师换用替代剂型、第3步采用正确饮水低头吞咽姿势",
@@ -890,7 +1082,7 @@
         {
           type: "warning",
           name: "警惕特殊异常",
-          chapterIndex: 3,
+          chapterIndex: 2,
           headline: "遇到这 4 种情况，别自行处理快问药师",
           accentPhrase: "快问药师",
           imagePrompt: "暖色手绘2x2警示信息图，标题「遇到这 4 种情况及时咨询」，四张暖珊瑚色卡片：已经嚼碎缓释控释片、鼻饲管喂药需磨粉、排便见完整药壳担心未吸收、老人频繁呛咳",
@@ -952,7 +1144,8 @@
       theme: "medical",
       presenter: "none",
       title: "滴眼液怎么滴，才不会流出来白费",
-      chapters: ["先准备", "滴对位", "按泪囊", "看期限"],
+      shortTitle: "滴眼液 · 正确滴法",
+      chapters: ["滴对位", "看顺序", "看期限", "记口诀"],
       disclaimer: DEFAULT_DISCLAIMER,
       previewSlideIndex: 1,
       slides: [
@@ -973,7 +1166,7 @@
         {
           type: "steps",
           name: "正确 4 步图解",
-          chapterIndex: 1,
+          chapterIndex: 0,
           contentImage: "/assets/template-info-eyedrop.jpg",
           imageSource: "preset",
           headline: "滴眼液正确 4 步，吸收好不浪费",
@@ -1004,7 +1197,7 @@
         {
           type: "compare",
           name: "多种眼药顺序",
-          chapterIndex: 2,
+          chapterIndex: 1,
           headline: "同时用两种眼药？顺序与间隔别搞反",
           accentPhrase: "顺序与间隔",
           imagePrompt: "左右双栏对比医疗信息图，标题「同时用两种眼药，顺序与间隔别搞反」，左栏淡蓝卡片「先水后膏」：先滴清亮滴眼液、再滴混悬液、最后涂眼膏或凝胶；右栏暖黄卡片「间隔片刻」：两种眼药间隔约5到10分钟、避免先滴的药被冲走稀释，底部提示先摘隐形眼镜",
@@ -1040,7 +1233,7 @@
         {
           type: "warning",
           name: "开封期限与避坑",
-          chapterIndex: 3,
+          chapterIndex: 2,
           headline: "滴眼液开封别放太久！警惕这 4 个误区",
           accentPhrase: "4 个误区",
           imagePrompt: "2x2四格警示医疗信息图，标题「滴眼液使用警惕这 4 个误区」，四张淡珊瑚卡片：开封超过说明期限仍继续用、全家共用同一瓶滴眼液、药液变浑浊有絮状物、眼红剧痛视力模糊自己买药滴",
@@ -1102,7 +1295,8 @@
       theme: "medical",
       presenter: "digital",
       title: "吃抗生素，症状好转能马上停吗",
-      chapters: ["分清药", "按疗程", "避误区", "何时就医"],
+      shortTitle: "抗生素 · 别早停药",
+      chapters: ["按疗程", "辨误区", "何时就医", "记口诀"],
       disclaimer: DEFAULT_DISCLAIMER,
       previewSlideIndex: 1,
       slides: [
@@ -1123,7 +1317,7 @@
         {
           type: "steps",
           name: "早停药的后果",
-          chapterIndex: 1,
+          chapterIndex: 0,
           contentImage: "/assets/template-info-antibiotic.jpg",
           imageSource: "preset",
           headline: "症状好转就停抗生素？易复发耐药",
@@ -1154,7 +1348,7 @@
         {
           type: "compare",
           name: "抗生素与感冒区分",
-          chapterIndex: 2,
+          chapterIndex: 1,
           headline: "抗生素不是万能消炎药！先分清这 2 类",
           accentPhrase: "不是万能消炎药",
           imagePrompt: "左右双栏对比医疗信息图，标题「抗生素不是万能消炎药，分清这 2 类」，左栏淡蓝卡片「抗菌药物（抗生素）」：如阿莫西林头孢等、只对细菌感染有效、需医生评估开方；右栏暖黄卡片「普通病毒感冒/无菌炎症」：普通感冒多由病毒引起、吃抗生素无效且伤菌群、对症护理为主",
@@ -1190,7 +1384,7 @@
         {
           type: "warning",
           name: "停药与就医信号",
-          chapterIndex: 3,
+          chapterIndex: 2,
           headline: "吃抗生素遇这 4 种情况，别硬扛快联系医生",
           accentPhrase: "快联系医生",
           imagePrompt: "2x2四格警示医疗信息图，标题「吃抗生素遇这 4 种情况快联系医生」，四张淡珊瑚卡片：起皮疹瘙痒或嘴唇肿、呼吸困难胸闷过敏反应、严重水样腹泻或腹痛、按时服药两三天丝毫不见好转",
@@ -1252,7 +1446,8 @@
       theme: "warm",
       presenter: "cartoon",
       title: "胃药饭前还是饭后吃？看清类型",
-      chapters: ["分类型", "看时机", "避同服", "何时就医"],
+      shortTitle: "胃药 · 饭前或饭后",
+      chapters: ["分类型", "错开吃", "何时就医", "记口诀"],
       disclaimer: DEFAULT_DISCLAIMER,
       previewSlideIndex: 1,
       slides: [
@@ -1273,7 +1468,7 @@
         {
           type: "compare",
           name: "饭前饭后分类",
-          chapterIndex: 1,
+          chapterIndex: 0,
           contentImage: "/assets/template-info-stomach.jpg",
           imageSource: "preset",
           headline: "胃药别乱吃！饭前饭后看类型",
@@ -1311,7 +1506,7 @@
         {
           type: "steps",
           name: "多药错开 3 步",
-          chapterIndex: 2,
+          chapterIndex: 1,
           headline: "同时吃多种胃药？牢记这 3 个小窍门",
           accentPhrase: "3 个小窍门",
           imagePrompt: "暖色手绘三步科普信息图，标题「同时吃多种胃药记住这 3 点」，三张暖色细描边卡片：1 胃黏膜保护剂与其他药错开时间、2 铝碳酸镁嚼碎吃而肠溶拉唑整粒吞、3 少喝浓茶咖啡配服",
@@ -1340,7 +1535,7 @@
         {
           type: "warning",
           name: "胃部红线信号",
-          chapterIndex: 3,
+          chapterIndex: 2,
           headline: "胃部不适伴这 4 种表现，别光吃胃药快就医",
           accentPhrase: "别光吃胃药",
           imagePrompt: "暖色手绘2x2警示信息图，标题「胃不适伴这 4 种表现别硬扛」，四张暖珊瑚卡片：黑便柏油样或呕血、反复剧烈上腹痛、不明原因体重骤降吞咽梗阻、自行吃胃药两周无缓解",
@@ -1411,6 +1606,64 @@
     return JSON.parse(JSON.stringify(src));
   }
 
+  function deriveShortTitle(title) {
+    const clean = String(title || "").replace(/[？?！!。，,：:]+/g, " ").trim();
+    if (!clean) return "用药科普";
+    return clean.length <= 14 ? clean : clean.slice(0, 14);
+  }
+
+  function defaultBeatLabel(slideType, focus, index) {
+    const opts = FOCUS_OPTIONS_BY_TYPE[slideType] || [];
+    const hit = opts.find((o) => o.id === String(focus || ""));
+    if (hit) return hit.label;
+    if (focus === "outro") return "结尾收口";
+    if (focus === "all") return "全页回顾";
+    return `要点 ${index + 1}`;
+  }
+
+  function normalizeBeats(rawBeats) {
+    if (!Array.isArray(rawBeats)) return [];
+    const valid = new Set(["all", "0", "1", "2", "3", "top", "bottom", "question", "answer", "action", "outro"]);
+    const out = [];
+    for (const raw of rawBeats.slice(0, 6)) {
+      if (!raw || typeof raw !== "object") continue;
+      const line = String(raw.line || "").trim().slice(0, 140);
+      if (!line) continue;
+      const rawFocus = raw.focus !== undefined && raw.focus !== null ? String(raw.focus).trim() : "all";
+      const focus = valid.has(rawFocus) ? rawFocus : "all";
+      const label = String(raw.label || "").trim().slice(0, 10);
+      const highlightWords = Array.isArray(raw.highlightWords)
+        ? raw.highlightWords.map((w) => String(w || "").trim()).filter(Boolean).slice(0, 3)
+        : [];
+      out.push({ label, focus, line, highlightWords });
+    }
+    return out;
+  }
+
+  function normalizeFocusRegions(rawRegions) {
+    if (!rawRegions || typeof rawRegions !== "object") return {};
+    const out = {};
+    for (const [key, box] of Object.entries(rawRegions)) {
+      if (!box || typeof box !== "object") continue;
+      const x = Number(box.x);
+      const y = Number(box.y);
+      const w = Number(box.w);
+      const h = Number(box.h);
+      if (
+        Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(w) && Number.isFinite(h) &&
+        w > 4 && h > 4 && x >= 0 && y >= 0 && x + w <= 100.5 && y + h <= 100.5
+      ) {
+        out[key] = {
+          x: Math.max(0, Math.min(96, x)),
+          y: Math.max(0, Math.min(96, y)),
+          w: Math.max(4, Math.min(100 - Math.max(0, x), w)),
+          h: Math.max(4, Math.min(100 - Math.max(0, y), h)),
+        };
+      }
+    }
+    return out;
+  }
+
   function normalizeSlide(raw, idx, chapLen) {
     const s = raw && typeof raw === "object" ? raw : {};
     const type = SLIDE_TYPES[s.type] ? s.type : "steps";
@@ -1420,9 +1673,18 @@
     const highlightWords = Array.isArray(s.highlightWords)
       ? s.highlightWords.map((w) => String(w || "").trim()).filter(Boolean).slice(0, 4)
       : [];
+    const rawLayout = s.layoutMode === "focus" ? "explain" : s.layoutMode;
+    const layoutMode = LAYOUT_MODES.some((m) => m.id === rawLayout)
+      ? rawLayout
+      : (DEFAULT_LAYOUT_BY_TYPE[type] || "explain");
+    const beats = normalizeBeats(s.beats);
+    const joinedLine = beats.length ? beats.map((b) => b.line).join("") : "";
+    const line = String(s.line || joinedLine || "");
+    const focusRegions = normalizeFocusRegions(s.focusRegions);
     const normalized = {
       ...s,
       type,
+      layoutMode,
       name,
       chapterIndex,
       headline,
@@ -1430,7 +1692,14 @@
       contentImage: String(s.contentImage || "").trim(),
       imagePrompt: String(s.imagePrompt || s.spotPrompt || "").trim().slice(0, 400),
       highlightWords,
-      line: String(s.line || ""),
+      line,
+      beats,
+      focusRegions,
+      question: String(s.question || (type === "cover" ? headline : "")).trim().slice(0, 50),
+      answer: String(s.answer || (type === "cover" ? (s.lead || "") : "")).trim().slice(0, 90),
+      outroNote: String(s.outroNote || "").trim().slice(0, 60),
+      outroImage: String(s.outroImage || "").trim(),
+      outroImagePrompt: String(s.outroImagePrompt || "").trim().slice(0, 400),
       seconds: Math.max(4, Number(s.seconds) || 10),
     };
     return normalized;
@@ -1439,9 +1708,10 @@
   function normalizeDeck(raw, fallbackTitle) {
     const base = raw && typeof raw === "object" ? raw : cloneExample(0);
     const title = String(base.title || fallbackTitle || "用药科普讲解").trim().slice(0, 40);
+    const shortTitle = String(base.shortTitle || deriveShortTitle(title)).trim().slice(0, 20);
     const chapters = Array.isArray(base.chapters) && base.chapters.length
       ? base.chapters.slice(0, 4).map((c) => String(c || "").trim().slice(0, 8) || "要点")
-      : ["看问题", "辨要点", "怎么做", "何时就医"];
+      : ["先弄清楚", "怎么吃", "注意啥", "记心里"];
     while (chapters.length < 4) chapters.push(`章节${chapters.length + 1}`);
     const rawSlides = Array.isArray(base.slides) && base.slides.length
       ? base.slides
@@ -1458,6 +1728,7 @@
       theme: base.theme === "warm" ? "warm" : "medical",
       presenter: PRESENTERS.some((p) => p.id === base.presenter) ? base.presenter : "digital",
       title,
+      shortTitle,
       chapters,
       pharmacist,
       disclaimer,
@@ -1496,6 +1767,61 @@
     });
   }
 
+  function getSlideCues(slide, maxChars) {
+    const limit = maxChars || 22;
+    const beats = Array.isArray(slide?.beats) ? slide.beats.filter((b) => b && String(b.line || "").trim()) : [];
+    if (beats.length) {
+      const cues = [];
+      beats.forEach((beat, bi) => {
+        const chunks = splitSubtitleChunks(beat.line, limit);
+        const list = chunks.length ? chunks : [{ text: String(beat.line || "").trim(), weight: 1 }];
+        const focus = String(beat.focus || "all");
+        const label = beat.label || defaultBeatLabel(slide.type, focus, bi);
+        const hl = (Array.isArray(beat.highlightWords) && beat.highlightWords.length)
+          ? beat.highlightWords
+          : (slide.highlightWords || []);
+        list.forEach((chunk, ci) => {
+          const isBeatStart = ci === 0 && bi > 0;
+          const isStageSwap = focus === "outro" || (slide.layoutMode === "hook" && !slide.contentImage);
+          cues.push({
+            text: chunk.text,
+            weight: chunk.weight,
+            focus,
+            beatIndex: bi,
+            beatLabel: isStageSwap ? label : "",
+            highlightWords: hl,
+            transition: isBeatStart && isStageSwap ? (focus === "outro" ? "outro" : "fade") : "cut",
+            holdSeconds: 0,
+          });
+        });
+      });
+      if (cues.length) return cues;
+    }
+
+    const fallbackChunks = splitSubtitleChunks(slide?.line || "", limit);
+    const list = fallbackChunks.length ? fallbackChunks : [{ text: String(slide?.line || "").trim(), weight: 1 }];
+    return list.map((chunk) => ({
+      text: chunk.text,
+      weight: chunk.weight,
+      focus: "all",
+      beatIndex: 0,
+      beatLabel: "",
+      highlightWords: slide?.highlightWords || [],
+      transition: "cut",
+      holdSeconds: 0,
+    }));
+  }
+
+  function resolveFocusBox(slide, focusKey) {
+    const key = String(focusKey || "all");
+    if (!key || key === "all" || key === "outro") return null;
+    if (slide?.focusRegions && slide.focusRegions[key]) {
+      return slide.focusRegions[key];
+    }
+    const presets = DEFAULT_FOCUS_REGIONS[slide?.type] || {};
+    return presets[key] || null;
+  }
+
   function highlightText(text, words, className) {
     const raw = String(text || "");
     const list = (Array.isArray(words) ? words : [words])
@@ -1523,63 +1849,167 @@
     return "/assets/template-doctor-digital.jpg";
   }
 
-  function summarizeSlidePoints(slide) {
+  function summarizeSlideVisualLabels(slide) {
     const type = slide.type || "steps";
     if (type === "cover") {
-      const pills = (slide.pills || []).filter(Boolean).join("、");
-      return [slide.lead, pills && `核心要点：${pills}`, slide.footerNote].filter(Boolean).join("；");
+      const pills = (slide.pills || []).filter(Boolean).slice(0, 3).join(" / ");
+      return [
+        slide.question && `核心问题「${slide.question.slice(0, 20)}」`,
+        slide.answer && `结论「${slide.answer.slice(0, 28)}」`,
+        pills && `3个短词标签：${pills}`,
+      ].filter(Boolean).join("；");
     }
     if (type === "compare") {
-      return (slide.columns || [])
-        .map((c) => `${c.title || ""}${c.badge ? `（${c.badge}）` : ""}：${(c.points || []).slice(0, 3).join("，")}`)
+      return (slide.columns || []).slice(0, 2)
+        .map((c, i) => `${i === 0 ? "左栏" : "右栏"}「${(c.title || "").slice(0, 10)}」：${(c.points || []).slice(0, 3).map((p) => String(p).slice(0, 14)).join("、")}`)
         .filter(Boolean)
         .join("；");
     }
     if (type === "steps") {
-      return (slide.steps || [])
-        .map((st, i) => `第${i + 1}步 ${st.title || ""}（${st.key || st.desc || ""}）`)
+      return (slide.steps || []).slice(0, 3)
+        .map((st, i) => `第${i + 1}步「${(st.title || "").slice(0, 10)}」（${String(st.key || st.desc || "").slice(0, 12)}）`)
         .filter(Boolean)
         .join("；");
     }
     if (type === "warning") {
-      return (slide.warnings || [])
-        .map((w) => `${w.title || ""}（${w.desc || ""}）`)
+      return (slide.warnings || []).slice(0, 4)
+        .map((w, i) => `格${i + 1}「${(w.title || "").slice(0, 12)}」`)
         .filter(Boolean)
         .join("；");
     }
-    return (slide.points || [])
-      .map((pt, i) => `${i + 1}. ${pt.title || ""}（${pt.desc || ""}）`)
+    return (slide.points || []).slice(0, 3)
+      .map((pt, i) => `第${i + 1}条「${(pt.title || "").slice(0, 14)}」`)
       .filter(Boolean)
       .join("；");
+  }
+
+  function gridRuleForType(type) {
+    if (type === "compare") {
+      return "固定网格分区（方便后期分步聚焦）：顶部 0–20% 居中 1 行大标题；主体 21%–81% 为严格左右等宽的两张并列圆角对比卡片（左栏占 3%–49%、右栏占 51%–97%，禁止在最左侧单独画大药瓶挤压左栏）；底部 82%–96% 为居中单行提示条。";
+    }
+    if (type === "steps") {
+      return "固定网格分区（方便后期分步聚焦）：顶部 0–21% 居中 1 行大标题；主体 22%–84% 为严格等宽并列的 3 张圆角步骤卡片（第1步左三分之一、第2步中三分之一、第3步右三分之一，三卡等高齐平）；底部 85%–96% 为极简一行提示或干净留白。";
+    }
+    if (type === "warning") {
+      return "固定网格分区（方便后期分步聚焦）：顶部 0–19% 居中 1 行大标题；主体 20%–78% 为严格 2×2 对称四格圆角警示卡片（左上、右上、左下、右下齐平）；底部 79%–96% 为居中醒目珊瑚橙行动指令条（仅写就医或咨询行动，严禁写「不要自行停药」）。";
+    }
+    if (type === "summary") {
+      return "固定网格分区（方便后期分步聚焦）：顶部 0–20% 居中 1 行大标题；主体 21%–91% 为居中纵向排布的 3 条等宽圆角口诀横条（序号 1、2、3 居左，居中铺满主区域，不在左右堆砌多余药瓶或重复装饰卡）。";
+    }
+    return "固定网格分区：上半部 6%–42% 居中排布大字问题与结论卡片；下半部 44%–93% 放 1 组简洁医学主视觉插画与 2–3 个大字短词标签。";
   }
 
   function buildCardImagePrompt(rawDeck, slideIndex, customPrompt, drug) {
     const deck = normalizeDeck(rawDeck);
     const slide = deck.slides[slideIndex] || deck.slides[0];
     const themeRule = deck.theme === "warm"
-      ? "视觉风格：暖色手绘医学信息图，米白底色（#fdf5e7）配纯白圆角内卡与深炭蓝细描边（#2c3e50），暖砖红（#cf5228）、柔和草绿（#5c9145）与淡琥珀色分组底色，亲切清晰的扁平手绘插画。"
-      : "视觉风格：现代清爽医疗白蓝科普信息图，柔和浅蓝白底框配纯白圆角内卡，深藏青色主文字（#122d4c）、医学蓝（#1466cc）与少量珊瑚橙（#e6592d）强调重点，干净的扁平矢量医学插画。";
+      ? "视觉风格：暖色手绘医学信息图，整张画布采用柔和暖米白无缝满铺底色（#fffdf9 至 #fdf5e7），深炭蓝细描边（#2c3e50）分组卡片与亲切扁平手绘医学插画；暖砖红（#cf5228）、柔和草绿（#5c9145）与淡琥珀色点缀分区。"
+      : "视觉风格：现代清爽医疗白蓝科普信息图，整张画布采用极浅白蓝或纯白无缝满铺底色（#ffffff 至 #f7fbff），浅蓝/淡琥珀分组信息卡片与干净扁平矢量医学插画；深藏青色主文字（#122d4c）、医学蓝（#1466cc）与少量珊瑚橙（#e6592d）强调重点。";
     const desc = String(customPrompt !== undefined ? customPrompt : slide.imagePrompt || "").trim();
-    const structured = summarizeSlidePoints(slide);
+    const visualLabels = summarizeSlideVisualLabels(slide);
     const headline = slide.headline || slide.name || deck.title;
-    const footer = slide.footerNote && slide.footerNote !== deck.disclaimer ? slide.footerNote : "";
+    const footer = slide.footerNote && slide.footerNote !== deck.disclaimer && !slide.footerNote.includes("科普内容仅供参考")
+      ? slide.footerNote.slice(0, 42)
+      : "";
 
     return [
-      "用途：横向 16:9 医院药师用药科普信息图卡片（置于科普视频右侧主视觉槽位），版面干净清晰，手机小屏播放也易读。",
+      "用途：严格 16:9 横屏医院药师用药科普整张信息图（宽:高 = 16:9，直接平铺填入视频右侧 16:9 恒定内容区，对应模板标准 1360×765 / 2560×1440），手机小屏播放必须清晰大字易读。",
+      "画幅与铺满要求：严格锁定 16:9 宽屏比例，底色与画面构图 100% 满画幅平铺至最外四边，整张图本身就是完整内容页；严禁在画布外圈画外边框、上下/左右装饰留边条、浅蓝底框、投影画框或悬浮圆角大白卡套框（绝不做画中画/卡中卡）；仅让文字与核心图标距画布四边保持约 4%（1360×765 约 56px）的透明内安全区，避免贴边。",
+      gridRuleForType(slide.type),
+      "文字精简铁律：坚持「1 句主标题（大字号、最多两行）+ 1 组简洁扁平医学图标/插画 + 最多 3–4 条极短词条（每条不超过 10 个中文字）」，字号大、行距宽、留白足，严禁在卡片内写大段解释性小字或抄写口播正文。",
       themeRule,
       desc
         ? `画面与排版设计：${desc}`
-        : `画面与排版设计：顶部居中醒目大标题「${headline}」，主体用简洁分组圆角卡片与扁平医学图标清晰呈现本页要点。`,
-      !desc && structured && `卡片需呈现的精简中文要点：${structured.slice(0, 260)}`,
-      !desc && footer && `底部圆角提示条文字：${footer.slice(0, 80)}`,
-      slide.line && `对应口播语境（帮助理解重点，不要把整段口播抄成字幕）：${slide.line.slice(0, 140)}`,
-      drug && `涉及药品：${drug}（使用常见通用外形，不出现品牌名与商品Logo）。`,
-      "文字与安全规范：只使用准确工整的简体中文，字数精炼、排版对齐、四周保留充足留白边距（至少 6%）避免边缘裁切；不要画医生或主讲人头像，不要画顶部章节导航栏，不要画底部视频字幕，不出现英文乱码、水印、红十字标志或药品价格品牌。",
+        : `画面与排版设计：顶部居中醒目大标题「${headline}」，按上述固定网格清晰排布本页核心词条与扁平医学图标。`,
+      visualLabels && `图内核心词条（保持精简）：${visualLabels.slice(0, 200)}`,
+      footer && slide.type !== "summary" && `底部单行提示条：${footer}`,
+      drug && `涉及药品：${drug}（通用外观，不画品牌名、商品Logo与价格）。`,
+      "禁用元素：不要画医生或主讲人头像，不要画顶部章节导航栏，不要画底部视频字幕，不要在图内写「科普内容仅供参考」等免责声明，不出现英文乱码、水印或红十字标志。",
     ].filter(Boolean).join("\n").slice(0, 2100);
   }
 
-  function renderFallbackCard(slide) {
+  function slideHasOutroBeat(slide) {
+    return Boolean(
+      slide && Array.isArray(slide.beats) && slide.beats.some((b) => b && String(b.focus || "") === "outro")
+    );
+  }
+
+  function buildOutroImagePrompt(rawDeck, slideIndex, customPrompt, drug) {
+    const deck = normalizeDeck(rawDeck);
+    const slide = deck.slides[slideIndex] || deck.slides[deck.slides.length - 1] || deck.slides[0];
+    const themeRule = deck.theme === "warm"
+      ? "视觉风格：暖色手绘医学结尾卡片，整张画布采用柔和暖米白无缝满铺底色（#fffdf9 至 #fdf5e7），深炭蓝细描边（#2c3e50）与暖砖红（#cf5228）、柔和草绿（#5c9145）点缀，画面温暖亲切、留白充足。"
+      : "视觉风格：现代清爽医疗白蓝科普结尾卡片，整张画布采用极浅白蓝或纯白无缝满铺底色（#ffffff 至 #f3f9ff），深藏青色主文字（#122d4c）、医学蓝（#1466cc）与柔和安心绿（#1e8e5a）点缀，画面温暖安心、留白充足。";
+    const desc = String(customPrompt !== undefined ? customPrompt : slide.outroImagePrompt || "").trim();
+    const note = slide.outroNote
+      || (Array.isArray(slide.points) && slide.points.length
+        ? slide.points.map((pt) => pt.title).filter(Boolean).slice(0, 2).join("，")
+        : "按说明书和医嘱规律服药，有异常及时就医问药师");
+    const shortTopic = deck.shortTitle || deck.title;
+
+    return [
+      "用途：严格 16:9 横屏医院药师用药科普视频「结尾收口定格卡片」（宽:高 = 16:9，直接平铺填入视频右侧 16:9 恒定内容区），结尾停留 1–2 秒，一眼记住唯一核心提醒。",
+      "画幅与铺满要求：严格锁定 16:9 宽屏比例，底色与画面构图 100% 满画幅平铺至最外四边；严禁外边框、上下/左右装饰留边条、悬浮大白卡套框或卡中卡；仅留约 4% 透明内安全边距。",
+      "构图与精简铁律：上方放 1 枚简洁医疗守护主视觉图标/温暖扁平插画（如安心盾牌、勾选药盒或家庭健康守护意象），居中以超大醒目工整简体中文字体呈现核心行动金句（最多两行），画面克制干净，绝不堆砌多条小字列表。",
+      themeRule,
+      desc
+        ? `画面与排版设计：${desc}`
+        : `画面与排版设计：围绕「${shortTopic}」设计温暖安心的结尾收口卡片，突出核心行动金句「${note}」，配简洁医疗安心守护扁平矢量插画与柔和光晕层次。`,
+      `图内唯一核心大字金句：「${note}」`,
+      drug && `涉及药品语境：${drug}（如有药盒元素仅用极简通用轮廓，不出现品牌名与价格）。`,
+      "禁用元素：不要画医生或主讲人头像，不要画顶部章节导航栏，不要画底部视频字幕，不要写「科普内容仅供参考」等免责声明，不要出现二维码、点赞关注收藏字样、英文乱码、水印或红十字标志。",
+    ].filter(Boolean).join("\n").slice(0, 2100);
+  }
+
+  function roundedRectPath(x, y, w, h, r) {
+    const rr = Math.max(0, Math.min(r, w / 2, h / 2));
+    return (
+      `M ${x + rr} ${y} H ${x + w - rr} ` +
+      `A ${rr} ${rr} 0 0 1 ${x + w} ${y + rr} ` +
+      `V ${y + h - rr} ` +
+      `A ${rr} ${rr} 0 0 1 ${x + w - rr} ${y + h} ` +
+      `H ${x + rr} ` +
+      `A ${rr} ${rr} 0 0 1 ${x} ${y + h - rr} ` +
+      `V ${y + rr} ` +
+      `A ${rr} ${rr} 0 0 1 ${x + rr} ${y} Z`
+    );
+  }
+
+  function renderSpotlightSvg(slide, focusKey, theme) {
+    const box = resolveFocusBox(slide, focusKey);
+    if (!box) return "";
+    const W = 1000;
+    const H = 562.5;
+    const x = +(box.x * W / 100).toFixed(1);
+    const y = +(box.y * H / 100).toFixed(1);
+    const w = +(box.w * W / 100).toFixed(1);
+    const h = +(box.h * H / 100).toFixed(1);
+    const r = Math.min(20, w * 0.08, h * 0.14);
+    const veil = theme === "warm" ? "rgba(38, 28, 18, 0.44)" : "rgba(14, 34, 60, 0.45)";
+    const isWarnAccent = slide.type === "warning" || focusKey === "action";
+    const accent = isWarnAccent
+      ? (theme === "warm" ? "#cf5228" : "#e6592d")
+      : (theme === "warm" ? "#cf5228" : "#1a73e8");
+    const outerPath = `M 0 0 H ${W} V ${H} H 0 Z ` + roundedRectPath(x, y, w, h, r);
+    return (
+      `<svg class="pt-spotlight-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">` +
+      `<path d="${outerPath}" fill="${veil}" fill-rule="evenodd" />` +
+      `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${r.toFixed(1)}" fill="none" stroke="${accent}" stroke-opacity="0.26" stroke-width="11" />` +
+      `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${r.toFixed(1)}" fill="none" stroke="${accent}" stroke-width="4" />` +
+      `</svg>`
+    );
+  }
+
+  function focusItemClass(hasFocus, isMatch) {
+    if (!hasFocus) return "pt-focus-target";
+    return isMatch ? "pt-focus-target is-focused" : "pt-focus-target is-dimmed";
+  }
+
+  function renderFallbackCard(slide, focusKey) {
     const type = slide.type || "steps";
+    const fKey = String(focusKey || "all");
+    const hasFocus = Boolean(fKey && fKey !== "all" && fKey !== "outro");
+    const cardCls = `pt-card-fallback${hasFocus ? " pt-has-focus" : ""}${type === "warning" ? " pt-warn-card" : ""}`;
     const hlHeadline = (cls) =>
       highlightText(slide.headline || slide.name || "", slide.accentPhrase ? [slide.accentPhrase] : [], cls);
 
@@ -1591,10 +2021,10 @@
         '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#e6592d" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4m0 4h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>',
       ];
       return `
-        <div class="pt-card-fallback">
+        <div class="${cardCls}">
           <div class="pt-fb-cover">
             <div class="pt-fb-cover-title">${hlHeadline("pt-hl-coral")}</div>
-            ${slide.lead ? `<p class="pt-fb-cover-lead">${xmlEsc(slide.lead)}</p>` : ""}
+            ${slide.answer || slide.lead ? `<p class="pt-fb-cover-lead">${xmlEsc(slide.answer || slide.lead)}</p>` : ""}
             ${pills.length ? `
               <div class="pt-fb-pills">
                 ${pills.map((p, i) => `<span class="pt-fb-pill">${pillIcons[i % 3]}${xmlEsc(p)}</span>`).join("")}
@@ -1611,11 +2041,11 @@
       const colClasses = ["blue-box", "amber-box"];
       const strokeColors = ["#1466cc", "#d98218"];
       return `
-        <div class="pt-card-fallback">
+        <div class="${cardCls}">
           <div class="pt-fb-headline">${hlHeadline("pt-hl-coral")}</div>
           <div class="pt-fb-compare-grid">
             ${cols.map((col, idx) => `
-              <div class="pt-fb-compare-col ${colClasses[idx % 2]}">
+              <div class="pt-fb-compare-col ${colClasses[idx % 2]} ${focusItemClass(hasFocus, fKey === String(idx))}">
                 <div>
                   <div class="pt-fb-compare-head">
                     <span class="pt-fb-chip">${xmlEsc(col.title || "")}</span>
@@ -1639,7 +2069,7 @@
               </div>
             `).join("")}
           </div>
-          ${slide.footerNote ? `<div class="pt-fb-tip-bar">${xmlEsc(slide.footerNote)}</div>` : ""}
+          ${slide.footerNote ? `<div class="pt-fb-tip-bar ${focusItemClass(hasFocus, fKey === "action")}">${xmlEsc(slide.footerNote)}</div>` : ""}
         </div>
       `;
     }
@@ -1653,11 +2083,11 @@
         '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1466cc" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m9 12 2 2 4-4"/></svg>',
       ];
       return `
-        <div class="pt-card-fallback">
+        <div class="${cardCls}">
           <div class="pt-fb-headline">${hlHeadline("pt-hl-blue")}</div>
           <div class="pt-fb-steps-row">
             ${steps.map((st, idx) => `
-              <div class="pt-fb-step-tile">
+              <div class="pt-fb-step-tile ${focusItemClass(hasFocus, fKey === String(idx))}">
                 <div class="pt-fb-step-top">
                   <span class="pt-fb-step-badge">第 ${idx + 1} 步</span>
                   ${stepIcons[idx % 3]}
@@ -1669,7 +2099,7 @@
             `).join("")}
           </div>
           ${checks.length ? `
-            <div class="pt-fb-check-strip">
+            <div class="pt-fb-check-strip ${focusItemClass(hasFocus, fKey === "action")}">
               ${checks.map((ck) => `
                 <div class="pt-fb-check-cell">
                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m9 12 2 2 4-4"/></svg>
@@ -1690,12 +2120,16 @@
         '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4m0 4h.01"/></svg>',
         '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>',
       ];
+      const warnMatches = (idx) =>
+        fKey === String(idx) ||
+        (fKey === "top" && (idx === 0 || idx === 1)) ||
+        (fKey === "bottom" && (idx === 2 || idx === 3));
       return `
-        <div class="pt-card-fallback">
+        <div class="${cardCls}">
           <div class="pt-fb-headline">${hlHeadline("pt-hl-coral")}</div>
           <div class="pt-fb-warn-grid">
             ${warns.map((item, idx) => `
-              <div class="pt-fb-warn-tile">
+              <div class="pt-fb-warn-tile ${focusItemClass(hasFocus, warnMatches(idx))}">
                 <div class="pt-fb-warn-icon">${warnIcons[idx % 4]}</div>
                 <div>
                   <h3>${xmlEsc(item.title || "")}</h3>
@@ -1704,7 +2138,7 @@
               </div>
             `).join("")}
           </div>
-          ${slide.footerNote ? `<div class="pt-fb-tip-bar">${xmlEsc(slide.footerNote)}</div>` : ""}
+          ${slide.footerNote ? `<div class="pt-fb-tip-bar ${focusItemClass(hasFocus, fKey === "action")}">${xmlEsc(slide.footerNote)}</div>` : ""}
         </div>
       `;
     }
@@ -1712,11 +2146,11 @@
     // Default / summary
     const points = (Array.isArray(slide.points) ? slide.points : []).slice(0, 3);
     return `
-      <div class="pt-card-fallback">
+      <div class="${cardCls}">
         <div class="pt-fb-headline">${hlHeadline("pt-hl-blue")}</div>
         <div class="pt-fb-summary-list">
           ${points.map((pt, idx) => `
-            <div class="pt-fb-summary-row">
+            <div class="pt-fb-summary-row ${focusItemClass(hasFocus, fKey === String(idx))}">
               <span class="pt-fb-summary-num">${idx + 1}</span>
               <div class="pt-fb-summary-text">
                 <strong>${xmlEsc(pt.title || "")}</strong>
@@ -1725,12 +2159,80 @@
             </div>
           `).join("")}
         </div>
-        ${slide.footerNote ? `<div class="pt-fb-tip-bar">${xmlEsc(slide.footerNote)}</div>` : ""}
+        ${slide.footerNote ? `<div class="pt-fb-tip-bar ${focusItemClass(hasFocus, fKey === "action")}">${xmlEsc(slide.footerNote)}</div>` : ""}
       </div>
     `;
   }
 
-  function renderLeftBlock(deck, mapSrc) {
+  function renderBeatRail(slide, activeBeatIdx) {
+    const beats = Array.isArray(slide.beats)
+      ? slide.beats.filter((b) => b && b.focus !== "outro")
+      : [];
+    if (beats.length < 2) return "";
+    return `
+      <div class="pt-beat-rail">
+        <div class="pt-beat-rail-head">当前讲解重点</div>
+        ${beats.map((b, bi) => {
+          const isAct = activeBeatIdx === bi;
+          const isDone = activeBeatIdx > bi;
+          const cls = `pt-beat-item${isAct ? " is-active" : isDone ? " is-done" : ""}`;
+          const lbl = b.label || defaultBeatLabel(slide.type, b.focus, bi);
+          return `
+            <div class="${cls}">
+              <span class="pt-beat-dot">${bi + 1}</span>
+              <span class="pt-beat-text">${xmlEsc(lbl)}</span>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    `;
+  }
+
+  function estimateSlideSeconds(slide) {
+    const explicit = Number(slide?.seconds);
+    if (explicit > 0) return Math.max(4, explicit);
+    const chars = String(slide?.line || "").replace(/\s+/g, "").length;
+    return Math.max(4, Math.ceil(chars / 4.2) || 6);
+  }
+
+  function computeDeckProgress(rawDeck, slideIndex, cueIndex) {
+    const deck = normalizeDeck(rawDeck);
+    const slides = deck.slides || [];
+    if (!slides.length) return 1;
+    const idx = Math.max(0, Math.min(slides.length - 1, Number(slideIndex) || 0));
+    const secs = slides.map(estimateSlideSeconds);
+    const total = secs.reduce((sum, v) => sum + v, 0) || 1;
+    let before = 0;
+    for (let i = 0; i < idx; i++) before += secs[i];
+    const cues = getSlideCues(slides[idx], 22);
+    const cueList = cues.length ? cues : [{ weight: 1 }];
+    const ci = Math.max(0, Math.min(cueList.length - 1, Number(cueIndex) || 0));
+    const totalWeight = cueList.reduce((sum, c) => sum + (Number(c.weight) || 1), 0) || 1;
+    let cumWeight = 0;
+    for (let j = 0; j <= ci; j++) cumWeight += Number(cueList[j].weight) || 1;
+    const frac = cumWeight / totalWeight;
+    return Math.max(0, Math.min(1, (before + secs[idx] * frac) / total));
+  }
+
+  function renderAvatarRing(avatarSrc, progress, strokeRatio = 3.5) {
+    const p = Math.max(0, Math.min(1, Number(progress) || 0));
+    const sw = Math.max(2, Number(strokeRatio) || 3.5);
+    const r = 50 - sw / 2;
+    const circ = 2 * Math.PI * r;
+    let progressCircle = "";
+    if (p >= 0.999) {
+      progressCircle = `<circle cx="50" cy="50" r="${r.toFixed(2)}" fill="none" stroke="var(--v-ring-outer)" stroke-width="${sw.toFixed(2)}" />`;
+    } else if (p > 0.002) {
+      const dash = Math.max(0.01, circ * p);
+      progressCircle = `<circle cx="50" cy="50" r="${r.toFixed(2)}" fill="none" stroke="var(--v-ring-outer)" stroke-width="${sw.toFixed(2)}" stroke-linecap="round" stroke-dasharray="${dash.toFixed(2)} ${(circ + 10).toFixed(2)}" transform="rotate(-90 50 50)" />`;
+    }
+    const svgHtml = progressCircle
+      ? `<svg class="pt-avatar-progress" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" aria-hidden="true">${progressCircle}</svg>`
+      : "";
+    return `<div class="pt-avatar-ring">${svgHtml}<div class="pt-avatar-inner"><img src="${xmlEsc(avatarSrc)}" alt="" /></div></div>`;
+  }
+
+  function renderLeftBlock(deck, mapSrc, layoutMode, slide, activeBeatIdx, ringProgress) {
     const a = deck.pharmacist || DEFAULT_PHARMACIST;
     const disclaimerHtml = deck.disclaimer
       ? `<div class="pt-disclaimer">${xmlEsc(deck.disclaimer)}</div>`
@@ -1763,11 +2265,7 @@
     return `
       <aside class="pt-left">
         <div class="pt-avatar-wrap">
-          <div class="pt-avatar-ring">
-            <div class="pt-avatar-inner">
-              <img src="${xmlEsc(avatarSrc)}" alt="" />
-            </div>
-          </div>
+          ${renderAvatarRing(avatarSrc, ringProgress, 3.45)}
           <div class="pt-plaque">
             <div class="pt-plaque-top">
               <span class="pt-plaque-name">${xmlEsc(a.name || "药师")}</span>
@@ -1781,46 +2279,177 @@
     `;
   }
 
+  function renderHookStage(deck, slide, mapSrc, focusKey, ringProgress) {
+    const a = deck.pharmacist || DEFAULT_PHARMACIST;
+    const questionText = slide.question || slide.headline || deck.title;
+    const answerText = slide.answer || slide.lead || slide.footerNote || "请按药品说明书和医嘱规律服用";
+    const pills = (Array.isArray(slide.pills) ? slide.pills : []).filter(Boolean).slice(0, 3);
+    const questionHtml = highlightText(questionText, slide.accentPhrase ? [slide.accentPhrase] : [], "pt-hl-coral");
+    const isQuestionBeat = focusKey === "question";
+
+    const avatarPart = deck.presenter === "none"
+      ? `<div class="pt-author-emblem"><svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v16M4 12h16"/></svg></div>`
+      : renderAvatarRing(mapSrc(resolveAvatarSrc(deck)), ringProgress, 4.9);
+
+    if (isQuestionBeat) {
+      return `
+        <div class="pt-hook-stage is-question">
+          <div class="pt-hook-question-card">
+            <span class="pt-hook-eyebrow">用药常见疑问 · 药师来解答</span>
+            <div class="pt-hook-question-hero">${questionHtml}</div>
+          </div>
+          <div class="pt-hook-presenter-bar">
+            ${avatarPart}
+            <div class="pt-hook-presenter-meta">
+              <div class="pt-plaque-top">
+                <span class="pt-plaque-name">${xmlEsc(a.name || "药师")}</span>
+                ${a.role ? `<span class="pt-plaque-role">${xmlEsc(a.role)}</span>` : ""}
+              </div>
+              ${a.hospital ? `<div class="pt-plaque-hosp">${xmlEsc(a.hospital)}</div>` : ""}
+            </div>
+          </div>
+          ${deck.disclaimer ? `<div class="pt-disclaimer">${xmlEsc(deck.disclaimer)}</div>` : ""}
+        </div>
+      `;
+    }
+
+    const miniAvatar = deck.presenter === "none"
+      ? ""
+      : renderAvatarRing(mapSrc(resolveAvatarSrc(deck)), ringProgress, 5.7);
+    const checkSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m9 12 2 2 4-4"/></svg>';
+
+    return `
+      <div class="pt-hook-stage is-answer">
+        <div class="pt-hook-q-mini">
+          <span class="pt-hook-q-tag">问</span>
+          <span>${xmlEsc(questionText)}</span>
+        </div>
+        <div class="pt-hook-answer-card">
+          <span class="pt-hook-answer-badge">${checkSvg}直接看结论</span>
+          <div class="pt-hook-answer-text">${xmlEsc(answerText)}</div>
+          ${pills.length ? `
+            <div class="pt-hook-pills">
+              ${pills.map((p) => `<span class="pt-hook-pill">${xmlEsc(p)}</span>`).join("")}
+            </div>
+          ` : ""}
+        </div>
+        <div class="pt-hook-mini-foot">
+          <div class="pt-mini-presenter">
+            ${miniAvatar}
+            <div>
+              <span class="pt-mini-presenter-text">${xmlEsc(a.name || "药师")}${a.role ? " · " + xmlEsc(a.role) : ""}</span>
+              ${a.hospital ? `<span class="pt-mini-presenter-sub">${xmlEsc(a.hospital)}</span>` : ""}
+            </div>
+          </div>
+          ${deck.disclaimer ? `<div class="pt-disclaimer" style="width:auto;text-align:right">${xmlEsc(deck.disclaimer)}</div>` : ""}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderOutroStage(deck, slide, mapSrc, ringProgress) {
+    const a = deck.pharmacist || DEFAULT_PHARMACIST;
+    const note = slide.outroNote
+      || (Array.isArray(slide.points) && slide.points.length
+        ? slide.points.map((pt) => pt.title).filter(Boolean).slice(0, 2).join("，")
+        : "按说明书和医嘱规律服药，有异常及时就医问药师");
+    const avatarPart = deck.presenter === "none"
+      ? `<div class="pt-author-emblem" style="width:76px;height:76px"><svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v16M4 12h16"/></svg></div>`
+      : renderAvatarRing(mapSrc(resolveAvatarSrc(deck)), ringProgress, 3.7);
+
+    return `
+      <div class="pt-outro-stage">
+        <div class="pt-outro-card">
+          ${avatarPart}
+          <div class="pt-plaque-top">
+            <span class="pt-plaque-name" style="font-size:24px">${xmlEsc(a.name || "药师")}</span>
+            ${a.role ? `<span class="pt-plaque-role" style="font-size:14px">${xmlEsc(a.role)}</span>` : ""}
+          </div>
+          ${a.hospital ? `<div class="pt-plaque-hosp" style="margin-top:-8px;font-size:15.5px">${xmlEsc(a.hospital)}</div>` : ""}
+          <div class="pt-outro-divider"></div>
+          <span class="pt-outro-eyebrow">记住这一条</span>
+          <div class="pt-outro-note">${xmlEsc(note)}</div>
+          ${deck.disclaimer ? `<div class="pt-outro-disclaimer">${xmlEsc(deck.disclaimer)}</div>` : ""}
+        </div>
+      </div>
+    `;
+  }
+
   function renderFrameHtml(rawDeck, slideIndex, options) {
     const opts = options || {};
     const deck = normalizeDeck(rawDeck);
     const idx = Math.max(0, Math.min(deck.slides.length - 1, Number(slideIndex) || 0));
     const slide = deck.slides[idx];
     const chapIdx = Math.max(0, Math.min(deck.chapters.length - 1, Number(slide.chapterIndex) || 0));
+    const focusKey = opts.focus !== undefined
+      ? String(opts.focus || "all")
+      : (slide.layoutMode === "hook" && !slide.contentImage ? "answer" : "all");
+    const isOutro = focusKey === "outro";
     const chaptersHtml = deck.chapters.map((name, ci) => {
       let cls = "pt-chap";
-      if (ci === chapIdx) cls += " active";
+      if (isOutro) cls += ci === deck.chapters.length - 1 ? " active" : " done";
+      else if (ci === chapIdx) cls += " active";
       else if (ci < chapIdx) cls += " done";
       return `<span class="${cls}">${xmlEsc(name || `章节${ci + 1}`)}</span>`;
     }).join("");
 
-    const chunks = splitSubtitleChunks(slide.line, 22);
+    const cues = getSlideCues(slide, 22);
+    const activeBeatIdx = Number.isInteger(opts.beatIndex) ? opts.beatIndex : -1;
     const subtitleRaw = opts.subtitleText !== undefined
       ? opts.subtitleText
-      : (chunks[0] ? chunks[0].text : slide.line || "");
-    const subtitleHtml = highlightText(subtitleRaw, slide.highlightWords || [], "pt-sub-hl");
+      : (cues[0] ? cues[0].text : slide.line || "");
+    const hlWords = Array.isArray(opts.highlightWords) && opts.highlightWords.length
+      ? opts.highlightWords
+      : (slide.highlightWords || []);
+    const subtitleHtml = highlightText(subtitleRaw, hlWords, "pt-sub-hl");
 
     const mapSrc = (src) => (opts.imgMap && src && opts.imgMap.get(src)) ? opts.imgMap.get(src) : (src || "");
-    const mediaHtml = slide.contentImage
-      ? `<img class="pt-media-img" src="${xmlEsc(mapSrc(slide.contentImage))}" alt="" />`
-      : renderFallbackCard(slide);
+    const hasOutroImage = isOutro && Boolean(slide.outroImage);
+    const effectiveLayout = isOutro
+      ? (hasOutroImage ? "explain" : "outro")
+      : (slide.layoutMode === "hook" && !slide.contentImage)
+        ? "hook"
+        : (slide.layoutMode === "focus" ? "focus" : "explain");
+    const ringProgress = opts.progress !== undefined
+      ? Math.max(0, Math.min(1, Number(opts.progress) || 0))
+      : computeDeckProgress(deck, idx, opts.cueIndex ?? 0);
 
-    return `
-      <div class="pt-frame theme-${deck.theme}">
-        <div class="pt-glow-1"></div>
-        <div class="pt-glow-2"></div>
+    let bodyHtml = "";
+    if (effectiveLayout === "outro") {
+      bodyHtml = renderOutroStage(deck, slide, mapSrc, ringProgress);
+    } else if (effectiveLayout === "hook") {
+      bodyHtml = renderHookStage(deck, slide, mapSrc, focusKey, ringProgress);
+    } else {
+      const activeImage = hasOutroImage ? slide.outroImage : slide.contentImage;
+      const mediaHtml = activeImage
+        ? `<img class="pt-media-img" src="${xmlEsc(mapSrc(activeImage))}" alt="" />`
+        : renderFallbackCard(slide, "all");
+      bodyHtml = `
+        ${renderLeftBlock(deck, mapSrc, effectiveLayout, slide, activeBeatIdx, ringProgress)}
+        <section class="pt-media-slot">
+          ${mediaHtml}
+        </section>
+      `;
+    }
+
+    const headerTitle = deck.shortTitle || deck.title;
+    const headerHtml = effectiveLayout === "hook"
+      ? ""
+      : `
         <header class="pt-header">
           <div class="pt-title-pill">
             <span class="pt-title-dot"></span>
-            <span>${xmlEsc(deck.title)}</span>
+            <span>${xmlEsc(headerTitle)}</span>
           </div>
           <div class="pt-chapters">${chaptersHtml}</div>
-        </header>
+        </header>`;
+    return `
+      <div class="pt-frame theme-${deck.theme} layout-${effectiveLayout}">
+        <div class="pt-glow-1"></div>
+        <div class="pt-glow-2"></div>
+        ${headerHtml}
         <div class="pt-body">
-          ${renderLeftBlock(deck, mapSrc)}
-          <section class="pt-media-slot">
-            ${mediaHtml}
-          </section>
+          ${bodyHtml}
         </div>
         <footer class="pt-footer">
           ${subtitleRaw ? `<div class="pt-subtitle">${subtitleHtml}</div>` : ""}
@@ -1858,23 +2487,93 @@
     return dataUrl;
   }
 
-  async function exportSlideCuePng(rawDeck, slideIndex, subtitleText) {
+  function measureCueAvatarRect(rawDeck, slideIndex, subtitleOrCue) {
+    const deck = normalizeDeck(rawDeck);
+    if (deck.presenter === "none") return null;
+    const cueObj = (subtitleOrCue && typeof subtitleOrCue === "object")
+      ? subtitleOrCue
+      : { text: subtitleOrCue, focus: "all" };
+    const host = document.createElement("div");
+    host.style.cssText =
+      "position:fixed;left:-99999px;top:0;width:1280px;height:720px;overflow:hidden;visibility:hidden;pointer-events:none;z-index:-1;";
+    host.innerHTML = renderFrameHtml(deck, slideIndex, {
+      subtitleText: cueObj.text,
+      focus: cueObj.focus !== undefined ? cueObj.focus : "all",
+      beatIndex: cueObj.beatIndex,
+      highlightWords: cueObj.highlightWords,
+    });
+    document.body.appendChild(host);
+    try {
+      const frameEl = host.querySelector(".pt-frame");
+      const innerEl = host.querySelector(".pt-avatar-inner");
+      const ringEl = host.querySelector(".pt-avatar-ring");
+      if (!frameEl || !innerEl) return null;
+      const frameBox = frameEl.getBoundingClientRect();
+      const innerBox = innerEl.getBoundingClientRect();
+      const style = getComputedStyle(innerEl);
+      const bw = parseFloat(style.borderLeftWidth) || 0;
+      const x = innerBox.left - frameBox.left + bw;
+      const y = innerBox.top - frameBox.top + bw;
+      const w = innerBox.width - bw * 2;
+      const h = innerBox.height - bw * 2;
+      if (!(w > 16 && h > 16)) return null;
+      const cx = x + w / 2;
+      const cy = y + h / 2;
+      const r = Math.min(w, h) / 2;
+      const pad = Math.max(2, Math.min(5, bw + 1));
+      const size = Math.max(24, Math.ceil((Math.max(w, h) + pad * 2) / 2) * 2);
+      const boxX = Math.max(0, Math.min(1280 - size, Math.round(cx - size / 2)));
+      const boxY = Math.max(0, Math.min(720 - size, Math.round(cy - size / 2)));
+      let ring = null;
+      if (ringEl) {
+        const ringBox = ringEl.getBoundingClientRect();
+        const ringStyle = getComputedStyle(ringEl);
+        const stroke = parseFloat(ringStyle.paddingTop) || 6;
+        if (ringBox.width > 16) {
+          ring = {
+            x: Math.round((ringBox.left - frameBox.left) * 10) / 10,
+            y: Math.round((ringBox.top - frameBox.top) * 10) / 10,
+            size: Math.round(ringBox.width * 10) / 10,
+            stroke: Math.round(stroke * 10) / 10,
+            color: deck.theme === "warm" ? "#2c3e50" : "#e67835",
+          };
+        }
+      }
+      return { cx, cy, r, box: { x: boxX, y: boxY, size }, ring };
+    } finally {
+      host.remove();
+    }
+  }
+
+  async function exportSlideCuePng(rawDeck, slideIndex, subtitleOrCue, exportOpts) {
     const deck = normalizeDeck(rawDeck);
     const slide = deck.slides[slideIndex];
+    const cueObj = (subtitleOrCue && typeof subtitleOrCue === "object")
+      ? subtitleOrCue
+      : { text: subtitleOrCue, focus: "all" };
     const cssText = await loadTemplateCss();
     const neededUrls = new Set();
     if (deck.presenter !== "none") {
       neededUrls.add(resolveAvatarSrc(deck));
     }
-    if (slide.contentImage) {
+    if (cueObj.focus === "outro") {
+      if (slide.outroImage) neededUrls.add(slide.outroImage);
+    } else if (slide.contentImage) {
       neededUrls.add(slide.contentImage);
     }
     const imgMap = new Map();
     for (const url of neededUrls) {
       if (url) imgMap.set(url, await imageToDataUrl(url));
     }
-    const frameXhtml = renderFrameHtml(deck, slideIndex, { subtitleText, imgMap })
-      .replace(/<svg\b(?![^>]*\bxmlns=)/g, '<svg xmlns="http://www.w3.org/2000/svg"');
+    const frameXhtml = renderFrameHtml(deck, slideIndex, {
+      subtitleText: cueObj.text,
+      focus: cueObj.focus !== undefined ? cueObj.focus : "all",
+      beatIndex: cueObj.beatIndex,
+      highlightWords: cueObj.highlightWords,
+      cueIndex: cueObj.cueIndex,
+      progress: exportOpts && exportOpts.progress !== undefined ? exportOpts.progress : cueObj.progress,
+      imgMap,
+    }).replace(/<svg\b(?![^>]*\bxmlns=)/g, '<svg xmlns="http://www.w3.org/2000/svg"');
     const safeCss = cssText.replace(/]]>/g, "]]&gt;");
     const svg =
       `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">` +
@@ -1899,6 +2598,18 @@
     ctx.fillStyle = deck.theme === "warm" ? "#fdf5e7" : "#edf6fe";
     ctx.fillRect(0, 0, 1280, 720);
     ctx.drawImage(img, 0, 0, 1280, 720);
+
+    const cutout = exportOpts && exportOpts.cutoutAvatar
+      ? (exportOpts.cutoutRect || measureCueAvatarRect(deck, slideIndex, cueObj))
+      : null;
+    if (cutout && cutout.r > 2) {
+      ctx.save();
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.beginPath();
+      ctx.arc(cutout.cx, cutout.cy, Math.max(1, cutout.r - 0.5), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
     return canvas.toDataURL("image/png");
   }
 
@@ -1906,15 +2617,25 @@
     THEMES,
     PRESENTERS,
     SLIDE_TYPES,
+    LAYOUT_MODES,
+    DEFAULT_FOCUS_REGIONS,
+    FOCUS_OPTIONS_BY_TYPE,
     DEFAULT_PHARMACIST,
     DEFAULT_DISCLAIMER,
-    SAMPLE_INFOGRAPHICS,
     EXAMPLES,
     cloneExample,
     normalizeDeck,
     splitSubtitleChunks,
+    getSlideCues,
+    resolveFocusBox,
+    renderSpotlightSvg,
+    resolveAvatarSrc,
+    measureCueAvatarRect,
+    computeDeckProgress,
+    slideHasOutroBeat,
     highlightText,
     buildCardImagePrompt,
+    buildOutroImagePrompt,
     renderFrameHtml,
     exportSlideCuePng,
   };

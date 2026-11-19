@@ -20,28 +20,48 @@ from http.client import HTTPException
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 import draft_content
+import music_gen
 import work_costs
 
 ROOT = Path(__file__).resolve().parent
 mimetypes.add_type("image/webp", ".webp")
 mimetypes.add_type("text/vtt", ".vtt")
+mimetypes.add_type("audio/flac", ".flac")
+mimetypes.add_type("audio/mpeg", ".mp3")
+mimetypes.add_type("audio/wav", ".wav")
 PUBLIC = ROOT / "public"
 DATA = ROOT / ".studio"
 MEDIA = DATA / "media"
 JOBS = DATA / "jobs"
+AVATAR_CACHE = DATA / "avatar_cache"
+GENERATED_MUSIC_DIR = PUBLIC / "assets" / "music" / "generated"
 KEY_STORAGE = "mac-keychain" if sys.platform == "darwin" else "windows-dpapi" if os.name == "nt" else "session"
 if sys.platform == "darwin":
     import mac_keychain
-for directory in (MEDIA, JOBS):
+for directory in (MEDIA, JOBS, AVATAR_CACHE, GENERATED_MUSIC_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 PORT = int(os.environ.get("STUDIO_PORT", "8765"))
 ORIGIN = f"http://127.0.0.1:{PORT}"
 ARK = "https://ark.cn-beijing.volces.com/api/v3"
 DEEPSEEK = "https://api.deepseek.com"
+DASHSCOPE = "https://dashscope.aliyuncs.com"
+AVATAR_MODELS = {
+    "videoretalk": ("声动人像 VideoRetalk", "0.08"),
+    "wan2.2-s2v": ("万相数字人 Wan2.2-S2V", "0.50"),
+}
+AVATAR_RESOLUTIONS = ("480P", "720P")
+AVATAR_MOTIONS = {
+    "calm": "沉稳播报",
+    "normal": "自然讲解",
+    "active": "活泼表达",
+}
+VIDEORETALK_MAX_CHUNK_SECONDS = 115.0
+WAN_S2V_MAX_CHUNK_SECONDS = 18.0
+AVATAR_MAX_CHUNK_SECONDS = VIDEORETALK_MAX_CHUNK_SECONDS
 TEXT_MODEL_LABELS = {
     "deepseek-flash": "DeepSeek-V4.1-Flash",
     "deepseek-v4-pro": "DeepSeek-V4-Pro",
@@ -179,6 +199,9 @@ def persist_key(account, key):
 PAGE_ARK_KEY = load_saved_key("ark")
 PAGE_DEEPSEEK_KEY = load_saved_key("deepseek")
 PAGE_SPEECH_KEY = load_saved_key("speech")
+PAGE_DASHSCOPE_KEY = load_saved_key("dashscope")
+PAGE_MINIMAX_KEY = load_saved_key("minimax")
+MINIMAX_HOST = ""
 DEEPSEEK_REMOTE_MODELS = []
 
 
@@ -192,6 +215,14 @@ def current_deepseek_key():
 
 def current_speech_key():
     return PAGE_SPEECH_KEY or os.environ.get("VOLC_SPEECH_API_KEY", "").strip()
+
+
+def current_dashscope_key():
+    return PAGE_DASHSCOPE_KEY or os.environ.get("DASHSCOPE_API_KEY", "").strip()
+
+
+def current_minimax_key():
+    return PAGE_MINIMAX_KEY or os.environ.get("MINIMAX_API_KEY", "").strip()
 
 
 def text_models():
@@ -298,6 +329,59 @@ def connect_ark(key):
         return ark_connection()
 
 
+def dashscope_connection():
+    return {
+        "dashscopeKeyPresent": bool(current_dashscope_key()),
+        "dashscopeKeySource": "page"
+        if PAGE_DASHSCOPE_KEY
+        else "environment"
+        if current_dashscope_key()
+        else "",
+        "dashscopeKeySaved": bool(PAGE_DASHSCOPE_KEY and KEY_STORAGE != "session"),
+        "dashscopeKeyWarning": credential_warnings.get("dashscope", ""),
+    }
+
+
+def connect_dashscope(key):
+    global PAGE_DASHSCOPE_KEY
+    if not isinstance(key, str) or not re.fullmatch(r"[!-~]{1,512}", key.strip()):
+        raise ValueError("请输入有效的阿里云百炼 API Key")
+    key = key.strip()
+    policy = dashscope_get_policy("wan2.2-s2v", key=key, timeout=15)
+    if not isinstance(policy, dict) or not policy.get("upload_host"):
+        raise ValueError("阿里云百炼返回的验证结果异常，请稍后重试")
+    with CACHE_LOCK:
+        persist_key("dashscope", key)
+        PAGE_DASHSCOPE_KEY = key
+        return dashscope_connection()
+
+
+def minimax_connection():
+    return {
+        "minimaxKeyPresent": bool(current_minimax_key()),
+        "minimaxKeySource": "page"
+        if PAGE_MINIMAX_KEY
+        else "environment"
+        if current_minimax_key()
+        else "",
+        "minimaxKeySaved": bool(PAGE_MINIMAX_KEY and KEY_STORAGE != "session"),
+        "minimaxKeyWarning": credential_warnings.get("minimax", ""),
+    }
+
+
+def connect_minimax(key):
+    global PAGE_MINIMAX_KEY, MINIMAX_HOST
+    if not isinstance(key, str) or not re.fullmatch(r"[!-~]{1,1024}", key.strip()):
+        raise ValueError("请输入有效的 MiniMax API Key")
+    key = key.strip()
+    verified_host = music_gen.verify_minimax_key(key, timeout=15)
+    with CACHE_LOCK:
+        persist_key("minimax", key)
+        PAGE_MINIMAX_KEY = key
+        MINIMAX_HOST = verified_host
+        return minimax_connection()
+
+
 def write_json(path, data):
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
@@ -383,10 +467,290 @@ def deepseek(path, body=None, *, key=None, timeout=120):
         raise
 
 
+def dashscope_json(path, body=None, *, key=None, extra_headers=None, timeout=120):
+    if key is None:
+        key = getattr(JOB_CREDENTIALS, "dashscope_key", None)
+    if key is None:
+        key = current_dashscope_key()
+    if not key:
+        raise ValueError("请先在「模型配置 → 数字人服务」填写阿里云百炼 API Key。")
+    headers = {"Authorization": "Bearer " + key, "Content-Type": "application/json"}
+    if extra_headers:
+        headers.update(extra_headers)
+    request = Request(
+        DASHSCOPE + path,
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None,
+        headers=headers,
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            return json.load(response)
+    except HTTPError as error:
+        is_verify = path.startswith("/api/v1/uploads?")
+        try:
+            raw_err = error.read().decode("utf-8", "replace")
+            info = json.loads(raw_err)
+            if isinstance(info, dict):
+                nested = info.get("error") if isinstance(info.get("error"), dict) else {}
+                message = str(info.get("message") or nested.get("message") or info.get("code") or "")
+            else:
+                message = ""
+        except (ValueError, AttributeError):
+            message = ""
+        if error.code in (401, 403):
+            hint = "阿里云百炼未接受此 Key，请检查是否复制完整、是否已开通百炼（华北2北京地域）或已失效。"
+            raise ValueError(hint) from None
+        if error.code == 429:
+            raise ValueError(
+                "阿里云百炼当前并发或配额受限（HTTP 429），请稍后继续此任务重试。"
+                + (f" {message.replace(key, '[已隐藏]')[:200]}" if message else "")
+            ) from None
+        if is_verify:
+            raise ValueError(
+                f"阿里云百炼验证失败（HTTP {error.code}）。{message.replace(key, '[已隐藏]')[:300]}"
+            ) from None
+        raise ValueError(
+            f"阿里云百炼返回 {error.code}。{message.replace(key, '[已隐藏]')[:450]}"
+        ) from None
+    except (URLError, TimeoutError, HTTPException):
+        if path.startswith("/api/v1/uploads?"):
+            raise ValueError("暂时连不上阿里云百炼，请检查网络后重试。") from None
+        raise ValueError("阿里云百炼连接中断，请检查网络后继续此任务。") from None
+
+
+def dashscope_get_policy(model, *, key=None, timeout=20):
+    query = urlencode({"action": "getPolicy", "model": model})
+    response = dashscope_json(f"/api/v1/uploads?{query}", key=key, timeout=timeout)
+    data = response.get("data") if isinstance(response, dict) else None
+    if not isinstance(data, dict) or not data.get("upload_host") or not data.get("upload_dir"):
+        raise ValueError("阿里云百炼未返回有效的临时上传凭证，请稍后重试。")
+    return data
+
+
+def dashscope_upload_file(file_path, model, *, key=None, timeout=120):
+    policy = dashscope_get_policy(model, key=key, timeout=20)
+    upload_host = str(policy["upload_host"])
+    upload_dir = str(policy["upload_dir"]).strip("/")
+    ext = file_path.suffix.lower() or ".bin"
+    safe_name = f"{uuid.uuid4().hex}{ext}"
+    object_key = f"{upload_dir}/{safe_name}" if upload_dir else safe_name
+    mime = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+    boundary = "----XiXiDashScope" + uuid.uuid4().hex
+    parts = []
+    fields = [
+        ("OSSAccessKeyId", policy.get("oss_access_key_id", "")),
+        ("Signature", policy.get("signature", "")),
+        ("policy", policy.get("policy", "")),
+    ]
+    if policy.get("x_oss_object_acl") is not None:
+        fields.append(("x-oss-object-acl", str(policy["x_oss_object_acl"])))
+    if policy.get("x_oss_forbid_overwrite") is not None:
+        fields.append(("x-oss-forbid-overwrite", str(policy["x_oss_forbid_overwrite"])))
+    fields.append(("key", object_key))
+    fields.append(("success_action_status", "200"))
+    for name, value in fields:
+        parts.append(
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
+            f"{value}\r\n".encode("utf-8")
+        )
+    parts.append(
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{safe_name}"\r\n'
+        f"Content-Type: {mime}\r\n\r\n".encode("utf-8")
+    )
+    parts.append(file_path.read_bytes())
+    parts.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+    payload = b"".join(parts)
+    request = Request(
+        upload_host,
+        data=payload,
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Content-Length": str(len(payload)),
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            if response.status not in (200, 204):
+                raise ValueError(f"上传素材到阿里云百炼临时空间失败（HTTP {response.status}）。")
+    except HTTPError as error:
+        try:
+            detail = error.read().decode("utf-8", "replace")[:260]
+        except OSError:
+            detail = ""
+        raise ValueError(f"上传素材到阿里云百炼临时空间失败（HTTP {error.code}）。{detail}") from None
+    except (URLError, TimeoutError, HTTPException):
+        raise ValueError("上传素材到阿里云百炼临时空间中断，请检查网络后重试。") from None
+    return f"oss://{object_key}"
+
+
+def dashscope_detect_face(image_path, key):
+    img_hash = hashlib.sha256(image_path.read_bytes()).hexdigest()
+    AVATAR_CACHE.mkdir(parents=True, exist_ok=True)
+    cache_file = AVATAR_CACHE / f"detect-wan22-{img_hash}.json"
+    if cache_file.is_file():
+        try:
+            cached = read_json(cache_file)
+            if cached.get("check_pass") is True:
+                return cached
+        except (OSError, ValueError):
+            pass
+    oss_img = dashscope_upload_file(image_path, "wan2.2-s2v-detect", key=key)
+    response = dashscope_json(
+        "/api/v1/services/aigc/image2video/face-detect",
+        {"model": "wan2.2-s2v-detect", "input": {"image_url": oss_img}},
+        key=key,
+        extra_headers={"X-DashScope-OssResourceResolve": "enable"},
+        timeout=60,
+    )
+    output = response.get("output") if isinstance(response, dict) else None
+    if not isinstance(output, dict):
+        raise ValueError("阿里云百炼人脸检测返回异常，请稍后重试。")
+    if output.get("check_pass") is not True:
+        reason = str(output.get("message") or "").strip()
+        extra = f"（{reason[:180]}）" if reason else ""
+        raise ValueError(
+            "人物肖像未通过阿里云百炼人脸检测，请更换正面清晰、五官无遮挡的半身图" + extra + "。"
+        )
+    write_json(cache_file, {"check_pass": True})
+    return output
+
+
+def build_avatar_base_video(image_path, target_mp4, duration=3.0):
+    if target_mp4.is_file() and target_mp4.stat().st_size > 1024:
+        return target_mp4
+    target_mp4.parent.mkdir(parents=True, exist_ok=True)
+    frames = max(48, round(float(duration) * 24))
+    temp = target_mp4.with_suffix(".tmp.mp4")
+    try:
+        run_ffmpeg(
+            "-i",
+            image_path,
+            "-vf",
+            f"scale=1280:1280:force_original_aspect_ratio=increase,"
+            f"crop=1280:1280:(iw-ow)/2:min(ih-oh\\,(ih-oh)*0.2),"
+            f"zoompan=z='1+0.01*sin(PI*on/{frames})':d={frames}:"
+            f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=640x640:fps=24,"
+            f"setsar=1",
+            "-t",
+            f"{float(duration):.2f}",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            18,
+            "-pix_fmt",
+            "yuv420p",
+            "-an",
+            temp,
+        )
+        temp.replace(target_mp4)
+    finally:
+        temp.unlink(missing_ok=True)
+    return target_mp4
+
+
+def dashscope_avatar_clip(
+    model,
+    source_path,
+    audio_path,
+    params,
+    dest,
+    key,
+    state,
+    save,
+    *,
+    job=None,
+    label="",
+    presenter="digital",
+    on_success=None,
+):
+    if not state.get("remote"):
+        if state.get("submitting"):
+            raise ValueError("上一次数字人任务提交结果未知，请先到阿里云百炼控制台确认任务，以免重复计费。")
+        if job is not None:
+            job["progress"] = f"上传人物素材与配音至阿里云百炼{label}"
+            save()
+        oss_src = dashscope_upload_file(source_path, model, key=key)
+        oss_audio = dashscope_upload_file(audio_path, model, key=key)
+        input_payload = (
+            {"video_url": oss_src, "audio_url": oss_audio}
+            if model == "videoretalk"
+            else {"image_url": oss_src, "audio_url": oss_audio}
+        )
+        state["submitting"] = True
+        save()
+        try:
+            response = dashscope_json(
+                "/api/v1/services/aigc/image2video/video-synthesis",
+                {
+                    "model": model,
+                    "input": input_payload,
+                    "parameters": params,
+                },
+                key=key,
+                extra_headers={
+                    "X-DashScope-Async": "enable",
+                    "X-DashScope-OssResourceResolve": "enable",
+                },
+                timeout=90,
+            )
+        except ValueError:
+            state.pop("submitting", None)
+            save()
+            raise
+        output = response.get("output") if isinstance(response, dict) else None
+        task_id = output.get("task_id") if isinstance(output, dict) else None
+        if not task_id:
+            state.pop("submitting", None)
+            save()
+            raise ValueError("阿里云百炼未返回数字人任务 ID，请稍后重试。")
+        state["remote"] = task_id
+        save()
+    task_id = state["remote"]
+    status_labels = {"PENDING": "排队中", "RUNNING": "生成中"}
+    model_name = AVATAR_MODELS.get(model, (model,))[0]
+    for _ in range(360):
+        response = dashscope_json(f"/api/v1/tasks/{task_id}", key=key, timeout=60)
+        output = response.get("output") if isinstance(response, dict) else None
+        status = str((output or {}).get("task_status") or "").upper()
+        if status == "SUCCEEDED":
+            results = output.get("results") if isinstance(output.get("results"), dict) else {}
+            video_url = results.get("video_url") or output.get("video_url")
+            if not video_url:
+                raise ValueError("阿里云百炼任务已完成，但未返回视频下载地址。")
+            if on_success:
+                on_success(response)
+            temp = dest.with_suffix(".tmp.mp4")
+            try:
+                with urlopen(video_url, timeout=180) as remote, temp.open("wb") as local:
+                    shutil.copyfileobj(remote, local)
+                temp.replace(dest)
+            finally:
+                temp.unlink(missing_ok=True)
+            return
+        if status in ("FAILED", "CANCELED", "UNKNOWN"):
+            state.clear()
+            save()
+            detail = str((output or {}).get("message") or (output or {}).get("code") or status)
+            hint = ""
+            if model == "videoretalk" and presenter == "cartoon":
+                hint = "（提示：声动人像主要面向写实人像，卡通形象请在「模型配置 → 数字人服务」切换为「万相数字人 Wan2.2-S2V」后重试）"
+            raise ValueError(f"阿里云百炼数字人生成未完成：{detail[:400]}{hint}")
+        if job is not None:
+            job["progress"] = f"阿里云百炼 {model_name} 正在生成对口型视频{label}（{status_labels.get(status, '处理中')}…）"
+            save()
+        time.sleep(4)
+    raise ValueError("数字人视频仍在阿里云百炼队列中，可稍后继续本任务查询结果。")
+
+
 def media_path(url):
     if not isinstance(url, str):
         raise ValueError("缺少分镜图")
-    if re.fullmatch(r"/media/[a-f0-9-]+\.(jpg|png|webp|mp4|vtt)", url):
+    if re.fullmatch(r"/media/(?:bgm-)?[a-f0-9-]+\.(jpg|png|webp|mp4|vtt|flac|mp3|wav)", url):
         path = MEDIA / url.split("/")[-1]
     elif re.fullmatch(r"/assets/style-[0-5]\.webp", url):
         path = PUBLIC / url.lstrip("/")
@@ -448,8 +812,19 @@ def save_uploaded_frame(p):
     return {"url": f"/media/{target.name}"}
 
 
+def validate_video_music_settings(s):
+    track = s.get("music", "off")
+    existing = music_path(track, s.get("musicUrl"), allow_missing_auto=True)
+    if track == "auto":
+        music_model = s.get("musicModel") or music_gen.DEFAULT_MUSIC_MODEL
+        if music_model not in music_gen.MUSIC_MODELS:
+            raise ValueError("请选择有效的 MiniMax 音乐模型。")
+        if existing is None and not current_minimax_key():
+            raise ValueError("请先在「模型配置 → 背景音乐」填写 MiniMax API Key，再使用自动搭配生成背景音乐。")
+
+
 def setting_valid(p):
-    if p.get("mode") not in ("demo", "ark") or p.get("kind") not in ("images", "video", "draft"):
+    if p.get("mode") != "ark" or p.get("kind") not in ("images", "video", "draft"):
         raise ValueError("未知的生成方式")
     if p["kind"] == "draft":
         if not current_deepseek_key():
@@ -463,7 +838,7 @@ def setting_valid(p):
         s = p["settings"]
         if s.get("voice") != "无配音" and s.get("voice") not in SPEAKERS:
             raise ValueError("未知配音")
-        music_path(s.get("music", "off"))
+        validate_video_music_settings(s)
         items = p.get("items")
         if not isinstance(items, list) or not 1 <= len(items) <= 12:
             raise ValueError("模板页数应在 1–12 之间")
@@ -474,23 +849,76 @@ def setting_valid(p):
                 raise ValueError("单页时长应在 2–60 秒之间")
             if not isinstance(item.get("line", ""), str) or len(item.get("line", "")) > 450:
                 raise ValueError("每页口播最多 450 字")
+            if "tailPause" in item and (
+                type(item.get("tailPause")) not in (int, float) or not 0.2 <= float(item["tailPause"]) <= 3.0
+            ):
+                raise ValueError("单页收尾停顿应在 0.2–3.0 秒之间")
             cues = item.get("cues")
-            if not isinstance(cues, list) or not 1 <= len(cues) <= 16:
-                raise ValueError("每页至少需要 1 张渲染帧")
+            if not isinstance(cues, list) or not 1 <= len(cues) <= 24:
+                raise ValueError("每页渲染帧数应在 1–24 之间")
             for cue in cues:
                 if not isinstance(cue, dict):
                     raise ValueError("渲染帧数据无效")
                 media_path(cue.get("image", ""))
                 if type(cue.get("weight", 1)) not in (int, float) or float(cue.get("weight", 1)) <= 0:
                     raise ValueError("字幕权重无效")
-        if (
-            s.get("voice") in SPEAKERS
-            and any(item.get("line", "").strip() for item in items)
-            and not current_speech_key()
-        ):
+                if "transition" in cue and cue["transition"] not in ("cut", "fade", "outro"):
+                    raise ValueError("渲染帧转场类型无效")
+                if "holdSeconds" in cue and (
+                    type(cue["holdSeconds"]) not in (int, float) or not 0 <= float(cue["holdSeconds"]) <= 5.0
+                ):
+                    raise ValueError("静止停留时长应在 0–5 秒之间")
+        voiced = s.get("voice") in SPEAKERS and any(item.get("line", "").strip() for item in items)
+        if voiced and not current_speech_key():
             raise ValueError("请先配置火山语音，再继续合成带配音的模板视频。")
+        avatar = p.get("avatar")
+        if avatar is not None:
+            if not isinstance(avatar, dict):
+                raise ValueError("数字人参数无效")
+            if avatar.get("enabled") is True:
+                avatar_model = avatar.get("model") or "videoretalk"
+                if avatar_model == "liveportrait":
+                    raise ValueError("阿里云百炼已于 2026-10-10 下线 liveportrait，请返回分镜编辑重新点击合成（将自动改用在线数字人模型）。")
+                if avatar_model not in AVATAR_MODELS:
+                    raise ValueError("未知数字人模型")
+                if avatar.get("resolution") and avatar["resolution"] not in AVATAR_RESOLUTIONS:
+                    raise ValueError("数字人清晰度无效")
+                if avatar.get("motion") and avatar["motion"] not in AVATAR_MOTIONS:
+                    raise ValueError("未知数字人动作风格")
+                if (avatar.get("presenter") or "digital") not in ("digital", "cartoon"):
+                    raise ValueError("未知数字人形象类型")
+                avatar_file = media_path(avatar.get("image", ""))
+                if avatar_file.suffix not in (".jpg", ".png", ".webp"):
+                    raise ValueError("数字人形象必须是图片素材。")
+                rect = avatar.get("rect")
+                if rect is not None:
+                    if not isinstance(rect, dict):
+                        raise ValueError("数字人圆框坐标无效")
+                    for key_name in ("x", "y", "size"):
+                        if type(rect.get(key_name)) not in (int, float):
+                            raise ValueError("数字人圆框坐标无效")
+                    if not (0 <= float(rect["x"]) <= 1280 and 0 <= float(rect["y"]) <= 720 and 24 <= float(rect["size"]) <= 720):
+                        raise ValueError("数字人圆框尺寸超出画面范围")
+                has_cue_rect = False
+                for item in items:
+                    for cue in item["cues"]:
+                        crect = cue.get("avatarRect")
+                        if crect is None:
+                            continue
+                        if not isinstance(crect, dict):
+                            raise ValueError("分镜数字人圆框坐标无效")
+                        for key_name in ("x", "y", "size"):
+                            if type(crect.get(key_name)) not in (int, float):
+                                raise ValueError("分镜数字人圆框坐标无效")
+                        if not (0 <= float(crect["x"]) <= 1280 and 0 <= float(crect["y"]) <= 720 and 24 <= float(crect["size"]) <= 720):
+                            raise ValueError("分镜数字人圆框尺寸超出画面范围")
+                        has_cue_rect = True
+                if rect is None and not has_cue_rect:
+                    raise ValueError("缺少数字人圆框坐标")
+                if voiced and not current_dashscope_key():
+                    raise ValueError("请先在「模型配置 → 数字人服务」填写阿里云百炼 API Key，再合成动态对口型视频。")
         return
-    if p["mode"] == "ark" and not current_ark_key():
+    if not current_ark_key():
         raise ValueError("请先连接火山方舟")
     s = p["settings"]
     if (
@@ -508,7 +936,7 @@ def setting_valid(p):
     if s["voice"] != "无配音" and s["voice"] not in SPEAKERS:
         raise ValueError("未知配音")
     if p["kind"] == "video":
-        music_path(s.get("music", "off"))
+        validate_video_music_settings(s)
     items = p["items"]
     if not isinstance(items, list) or not 1 <= len(items) <= 12:
         raise ValueError("素材数量应在 1–12 之间")
@@ -552,25 +980,6 @@ def image_references(p, item):
 
 
 def image_item(p, item, index, record=None):
-    style_asset = f"/assets/style-{p['style']}.webp"
-    if p["mode"] == "demo":
-        time.sleep(0.28)
-        if p.get("template") is True:
-            fallback = item.get("fallbackImage")
-            if isinstance(fallback, str) and re.fullmatch(r"/assets/template-[a-z0-9-]+\.(jpg|png|webp)", fallback):
-                if (PUBLIC / fallback.lstrip("/")).is_file():
-                    return fallback
-            pool = sorted(
-                "/assets/" + path.name
-                for path in (PUBLIC / "assets").glob("template-info-*.jpg")
-                if path.is_file()
-            )
-            if pool:
-                return pool[(index + int(item.get("variant", 0))) % len(pool)]
-            return "/assets/template-fever-visual.jpg"
-        if p.get("styleReference") is True:
-            return style_asset
-        return f"/assets/style-{(p['style'] + index + int(item.get('variant', 0))) % 6}.webp"
     s = p["settings"]
     size = SIZES[s["imageSize"]][s["ratio"]]
     body = {
@@ -622,30 +1031,6 @@ def seedance_frame(image, role, folder, width, height):
 
 def source_clip(p, item, dest, state, save, tail_image=None, on_success=None):
     s = p["settings"]
-    if p["mode"] == "demo":
-        width, height = frame_size(s, demo=True)
-        run_ffmpeg(
-            "-loop",
-            1,
-            "-framerate",
-            12,
-            "-i",
-            media_path(item["image"]),
-            "-t",
-            item["seconds"],
-            "-vf",
-            f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},setsar=1",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "ultrafast",
-            "-threads",
-            2,
-            "-pix_fmt",
-            "yuv420p",
-            dest,
-        )
-        return
     if not state.get("remote"):
         if state.get("submitting"):
             raise ValueError(
@@ -702,8 +1087,8 @@ def source_clip(p, item, dest, state, save, tail_image=None, on_success=None):
     raise ValueError("视频仍在方舟队列中，可稍后继续查询本任务。")
 
 
-def frame_size(s, demo=False):
-    short = min(480, int(s["resolution"][:-1])) if demo else int(s["resolution"][:-1])
+def frame_size(s):
+    short = int(s["resolution"][:-1])
     a, b = map(int, s["ratio"].split(":"))
     return tuple(round(short * x / min(a, b) / 2) * 2 for x in (a, b))
 
@@ -784,7 +1169,7 @@ def shot_audio(settings, line, folder, speech_key, index=0, record=None):
 
 def timed_clip(p, item, source, folder, audio, spoken_seconds):
     settings = p["settings"]
-    width, height = frame_size(settings, p["mode"] == "demo")
+    width, height = frame_size(settings)
     seconds = item["seconds"]
     speed = max(1, spoken_seconds / max(1, seconds - 0.15))
     inputs = ["-i", audio] if audio else ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono"]
@@ -867,8 +1252,37 @@ def storyboard_timing(item, spoken_seconds, max_seconds, tail_image):
     return {**item, "seconds": seconds, "prompt": f"{item['prompt']}\n{timing}"}
 
 
-def music_path(track):
+def _resolve_generated_music_url(music_url):
+    if not isinstance(music_url, str):
+        raise ValueError("背景音乐素材路径无效。")
+    if music_url.startswith(music_gen.LIBRARY_URL_PREFIX):
+        filename = unquote(music_url[len(music_gen.LIBRARY_URL_PREFIX) :])
+        if not filename or "/" in filename or "\\" in filename or Path(filename).suffix.lower() not in music_gen.AUDIO_EXTENSIONS:
+            raise ValueError("背景音乐素材路径无效。")
+        path = (GENERATED_MUSIC_DIR / filename).resolve()
+        if GENERATED_MUSIC_DIR.resolve() not in path.parents:
+            raise ValueError("背景音乐素材路径无效。")
+        return path
+    if re.fullmatch(r"/media/(?:bgm-)?[a-f0-9-]+\.(?:flac|mp3|wav)", music_url):
+        return MEDIA / music_url.split("/")[-1]
+    raise ValueError("背景音乐素材路径无效。")
+
+
+def music_path(track, music_url=None, allow_missing_auto=False):
     if track == "off":
+        return None
+    if isinstance(track, str) and track.startswith("library:"):
+        track_id = track.split(":", 1)[1]
+        path, _ = music_gen.resolve_library_track(GENERATED_MUSIC_DIR, track_id)
+        return path
+    if track == "auto":
+        if music_url:
+            path = _resolve_generated_music_url(music_url)
+            if path.is_file():
+                return path
+            if allow_missing_auto:
+                return None
+            raise ValueError("缺少生成的背景音乐文件，请重新生成背景音乐。")
         return None
     if not isinstance(track, str) or track not in MUSIC_TRACKS:
         raise ValueError("请选择有效的背景音乐。")
@@ -878,8 +1292,146 @@ def music_path(track):
     return path
 
 
-def music_mix(duration, voiced, music_index=2):
-    gain = -12 if voiced else -6
+def _make_tracked_deepseek(key, record=None, label="专属背景音乐提示词规划"):
+    if not key:
+        return None
+
+    def request(path, body, **kwargs):
+        result = deepseek(path, body, key=key, **kwargs)
+        if record:
+            record(
+                f"music-text:{uuid.uuid4()}",
+                work_costs.text_cost(label, result.get("model") or body["model"], result.get("usage") or {}),
+            )
+        return result
+
+    return request
+
+
+def resolve_video_music(p, job, save, record=None, deepseek_key=None, minimax_key=None):
+    global MINIMAX_HOST
+    settings = p["settings"]
+    track = settings.get("music", "off")
+    if isinstance(track, str) and track.startswith("library:"):
+        track_id = track.split(":", 1)[1]
+        path, entry = music_gen.resolve_library_track(GENERATED_MUSIC_DIR, track_id)
+        return path, track, entry["url"], entry
+    if track != "auto":
+        return music_path(track), track, None, None
+    existing_url = settings.get("musicUrl")
+    existing_path = music_path("auto", existing_url, allow_missing_auto=True)
+    if existing_path is not None:
+        meta = settings.get("musicMeta") if isinstance(settings.get("musicMeta"), dict) else {"url": existing_url}
+        return existing_path, "auto", existing_url, {**meta, "url": existing_url}
+
+    mm_key = minimax_key if minimax_key is not None else current_minimax_key()
+    if not mm_key:
+        raise ValueError("请先在「模型配置 → 背景音乐」填写 MiniMax API Key，再使用自动搭配生成背景音乐。")
+    music_model = settings.get("musicModel") or music_gen.DEFAULT_MUSIC_MODEL
+    if music_model not in music_gen.MUSIC_MODELS:
+        music_model = music_gen.DEFAULT_MUSIC_MODEL
+
+    job["progress"] = "正在调用 MiniMax 按视频内容生成专属背景音乐"
+    save()
+    raw_ctx = p.get("musicContext") if isinstance(p.get("musicContext"), dict) else {}
+    lines = raw_ctx.get("lines") if isinstance(raw_ctx.get("lines"), list) else []
+    if not lines:
+        lines = [
+            item.get("line", "").strip()
+            for item in p.get("items", [])
+            if isinstance(item, dict) and isinstance(item.get("line"), str) and item.get("line").strip()
+        ]
+    context = {**raw_ctx, "lines": lines}
+    ds_key = deepseek_key if deepseek_key is not None else current_deepseek_key()
+    model = settings.get("textModel") or default_text_model()
+    if model not in text_models():
+        model = default_text_model()
+    generated = music_gen.generate_music(
+        context,
+        GENERATED_MUSIC_DIR,
+        mm_key,
+        music_model=music_model,
+        minimax_host=MINIMAX_HOST or None,
+        deepseek_fn=_make_tracked_deepseek(ds_key, record=record),
+        text_model=model,
+    )
+    if generated.get("host"):
+        with CACHE_LOCK:
+            MINIMAX_HOST = generated["host"]
+    if record:
+        record(f"music:{uuid.uuid4()}", work_costs.music_cost(generated["model"], generated.get("duration")))
+    return _resolve_generated_music_url(generated["url"]), "auto", generated["url"], generated
+
+
+def generate_music_request(p):
+    global MINIMAX_HOST
+    if not isinstance(p, dict):
+        raise ValueError("请求格式无效")
+    mm_key = current_minimax_key()
+    if not mm_key:
+        raise ValueError("请先在「模型配置 → 背景音乐」填写 MiniMax API Key，再生成专属背景音乐。")
+    work_id = p.get("workId")
+    if work_id is not None:
+        if not isinstance(work_id, str):
+            raise ValueError("作品 ID 无效")
+        work_id = str(uuid.UUID(work_id))
+    hint = p.get("hint", "")
+    if hint is not None and (not isinstance(hint, str) or len(hint) > 160):
+        raise ValueError("音乐风格偏好最多 160 字")
+    lines = p.get("lines", [])
+    if lines is not None and (not isinstance(lines, list) or len(lines) > 20 or not all(isinstance(x, str) for x in lines)):
+        raise ValueError("口播台词列表格式无效")
+    music_model = p.get("musicModel") or music_gen.DEFAULT_MUSIC_MODEL
+    if music_model not in music_gen.MUSIC_MODELS:
+        raise ValueError("请选择有效的 MiniMax 音乐模型。")
+    model = p.get("textModel") or default_text_model()
+    if model not in text_models():
+        model = default_text_model()
+
+    costs = {}
+
+    def record_cost(k, row):
+        costs[k] = row
+
+    ds_key = current_deepseek_key()
+    generated = music_gen.generate_music(
+        p,
+        GENERATED_MUSIC_DIR,
+        mm_key,
+        music_model=music_model,
+        minimax_host=MINIMAX_HOST or None,
+        deepseek_fn=_make_tracked_deepseek(ds_key, record=record_cost),
+        text_model=model,
+    )
+    if generated.get("host"):
+        with CACHE_LOCK:
+            MINIMAX_HOST = generated["host"]
+    record_cost(f"music:{uuid.uuid4()}", work_costs.music_cost(generated["model"], generated.get("duration")))
+
+    if work_id and costs:
+        job_id = str(uuid.uuid4())
+        with CACHE_LOCK:
+            write_json(
+                JOBS / (job_id + ".json"),
+                {
+                    "id": job_id,
+                    "request": {"kind": "music", "workId": work_id, "settings": {}},
+                    "status": "done",
+                    "progress": "已生成专属背景音乐",
+                    "error": "",
+                    "costs": costs,
+                    "output": generated,
+                },
+            )
+    return {**generated, "library": music_gen.list_music_library(GENERATED_MUSIC_DIR)}
+
+
+def music_mix(duration, voiced, music_index=2, is_generated=False):
+    if is_generated:
+        # AI-generated studio tracks are mastered louder (~-13 LUFS) than built-in quiet beds (-21 dB).
+        gain = -18 if voiced else -9
+    else:
+        gain = -12 if voiced else -6
     bed = (
         f"[{music_index}:a]atrim=duration={duration},asetpts=PTS-STARTPTS,"
         f"volume={gain}dB,afade=t=in:d=0.7,afade=t=out:st={duration - 1.4:.3f}:d=1.4"
@@ -896,103 +1448,822 @@ def music_mix(duration, voiced, music_index=2):
     )
 
 
-def render_template_video(p, job, save, speech_key, record=None):
+def build_template_speech_wav(entries, target_wav, scratch_dir):
+    pcm_chunks = []
+    for idx, (audio_path, seconds) in enumerate(entries):
+        target_frames = max(1, round(float(seconds) * SPEECH_SAMPLE_RATE))
+        raw = b""
+        if audio_path and Path(audio_path).is_file():
+            source_wav = Path(audio_path)
+            with wave.open(str(source_wav), "rb") as wav:
+                ch, sw, fr = wav.getnchannels(), wav.getsampwidth(), wav.getframerate()
+                if (ch, sw, fr) == (1, 2, SPEECH_SAMPLE_RATE):
+                    raw = wav.readframes(target_frames)
+            if not raw and source_wav.stat().st_size > 44:
+                norm_wav = scratch_dir / f"norm-{idx}.wav"
+                run_ffmpeg(
+                    "-i",
+                    source_wav,
+                    "-ar",
+                    SPEECH_SAMPLE_RATE,
+                    "-ac",
+                    1,
+                    "-c:a",
+                    "pcm_s16le",
+                    norm_wav,
+                )
+                with wave.open(str(norm_wav), "rb") as wav:
+                    raw = wav.readframes(target_frames)
+        actual_frames = len(raw) // 2
+        if actual_frames > target_frames:
+            raw = raw[: target_frames * 2]
+        elif actual_frames < target_frames:
+            raw += b"\x00\x00" * (target_frames - actual_frames)
+        pcm_chunks.append(raw)
+    temp = target_wav.with_suffix(".tmp.wav")
+    with wave.open(str(temp), "wb") as wav:
+        wav.setparams((1, 2, SPEECH_SAMPLE_RATE, 0, "NONE", "not compressed"))
+        for chunk in pcm_chunks:
+            wav.writeframes(chunk)
+    temp.replace(target_wav)
+    return target_wav
+
+
+def partition_avatar_chunks(entries, max_seconds=AVATAR_MAX_CHUNK_SECONDS):
+    chunks = []
+    current = []
+    acc = 0.0
+    for entry in entries:
+        sec = float(entry[1])
+        if current and acc + sec > max_seconds:
+            chunks.append(current)
+            current = [entry]
+            acc = sec
+        else:
+            current.append(entry)
+            acc += sec
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def split_wav_file_balanced(wav_path, max_seconds, out_dir, prefix):
+    with wave.open(str(wav_path), "rb") as wav:
+        params = wav.getparams()
+        total_frames = wav.getnframes()
+        rate = wav.getframerate()
+        total_sec = total_frames / rate
+        if total_sec <= max_seconds:
+            return [(wav_path, total_sec)]
+        parts = max(2, math.ceil(total_sec / max_seconds))
+        per_frames = total_frames // parts
+        out = []
+        for pi in range(parts):
+            frames_to_read = total_frames - pi * per_frames if pi == parts - 1 else per_frames
+            pcm = wav.readframes(frames_to_read)
+            part_path = out_dir / f"{prefix}-p{pi}.wav"
+            with wave.open(str(part_path), "wb") as dst:
+                dst.setparams((params.nchannels, params.sampwidth, params.framerate, 0, "NONE", "not compressed"))
+                dst.writeframes(pcm)
+            out.append((part_path, frames_to_read / rate))
+        return out
+
+
+def generate_template_avatar_video(avatar_cfg, slide_entries, job_dir, job, save, dashscope_key, record=None):
+    model = avatar_cfg.get("model") or "videoretalk"
+    if model == "liveportrait":
+        raise ValueError("阿里云百炼已于 2026-10-10 下线 liveportrait，请返回分镜编辑重新点击合成（将自动改用在线数字人模型）。")
+    presenter = avatar_cfg.get("presenter") or "digital"
+    resolution = avatar_cfg.get("resolution") or "480P"
+    image_path = media_path(avatar_cfg["image"])
+    img_hash = hashlib.sha256(image_path.read_bytes()).hexdigest()
+
+    AVATAR_CACHE.mkdir(parents=True, exist_ok=True)
+    if model == "videoretalk":
+        max_chunk = VIDEORETALK_MAX_CHUNK_SECONDS
+        params = {"video_extension": True}
+        cost_resolution = ""
+    else:
+        max_chunk = WAN_S2V_MAX_CHUNK_SECONDS
+        params = {"resolution": resolution, "style": "speech"}
+        cost_resolution = resolution
+
+    grouped = partition_avatar_chunks(slide_entries, max_seconds=max_chunk)
+    wav_pieces = []
+    for gi, group_entries in enumerate(grouped):
+        group_wav = job_dir / f"avatar-speech-g{gi}.wav"
+        build_template_speech_wav(group_entries, group_wav, job_dir)
+        wav_pieces.extend(split_wav_file_balanced(group_wav, max_chunk, job_dir, f"avatar-speech-g{gi}"))
+
+    chunk_specs = []
+    any_uncached = False
+    for ci, (chunk_wav, chunk_sec) in enumerate(wav_pieces):
+        audio_hash = hashlib.sha256(chunk_wav.read_bytes()).hexdigest()
+        fingerprint = [model, img_hash, audio_hash, params]
+        digest = hashlib.sha256(json.dumps(fingerprint, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        cached_mp4 = AVATAR_CACHE / f"{digest}.mp4"
+        if not cached_mp4.is_file():
+            any_uncached = True
+        chunk_specs.append((ci, chunk_wav, chunk_sec, cached_mp4))
+
+    source_asset = image_path
+    if any_uncached:
+        if model == "videoretalk":
+            job["progress"] = "准备数字人底片视频（640×640）"
+            save()
+            base_mp4 = AVATAR_CACHE / f"base-{img_hash}-640.mp4"
+            source_asset = build_avatar_base_video(image_path, base_mp4, duration=3.0)
+        else:
+            job["progress"] = "校验人物肖像人脸规范（阿里云百炼）"
+            save()
+            dashscope_detect_face(image_path, dashscope_key)
+
+    remote_bucket = job.setdefault("remote", {})
+    chunk_mp4s = []
+    for ci, chunk_wav, chunk_sec, cached_mp4 in chunk_specs:
+        chunk_label = f"（第 {ci + 1}/{len(chunk_specs)} 段）" if len(chunk_specs) > 1 else ""
+        state_key = f"avatar:{ci}"
+        state = remote_bucket.setdefault(state_key, {})
+        if cached_mp4.is_file():
+            if record and not state.get("remote"):
+                record(
+                    f"avatar-cache:{ci}",
+                    work_costs.avatar_cost(model, chunk_sec, cached=True, chunk_label=chunk_label, resolution=cost_resolution),
+                )
+            chunk_mp4s.append(cached_mp4)
+            continue
+
+        def report_avatar(result, _ci=ci, _sec=chunk_sec, _label=chunk_label, _state=state):
+            usage = result.get("usage") if isinstance(result, dict) else {}
+            dur = usage.get("video_duration") if isinstance(usage, dict) else None
+            if type(dur) not in (int, float) or not 0 < float(dur) <= 300:
+                dur = _sec
+            if record:
+                record(
+                    f"avatar:{_ci}:{_state.get('remote', '')}",
+                    work_costs.avatar_cost(model, float(dur), cached=False, chunk_label=_label, resolution=cost_resolution),
+                )
+
+        dashscope_avatar_clip(
+            model,
+            source_asset,
+            chunk_wav,
+            params,
+            cached_mp4,
+            dashscope_key,
+            state,
+            save,
+            job=job,
+            label=chunk_label,
+            presenter=presenter,
+            on_success=report_avatar if record else None,
+        )
+        chunk_mp4s.append(cached_mp4)
+
+    if len(chunk_mp4s) == 1:
+        return chunk_mp4s[0]
+
+    concat_list = job_dir / "avatar-chunks.txt"
+    concat_lines = []
+    for mp4 in chunk_mp4s:
+        escaped = str(mp4.resolve()).replace("\\", "/").replace("'", "'\\''")
+        concat_lines.append(f"file '{escaped}'")
+    concat_list.write_text("\n".join(concat_lines) + "\n", encoding="utf-8")
+    merged = job_dir / "avatar-merged.mp4"
+    run_ffmpeg(
+        "-f",
+        "concat",
+        "-safe",
+        0,
+        "-i",
+        concat_list,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        18,
+        "-pix_fmt",
+        "yuv420p",
+        "-an",
+        merged,
+    )
+    return merged
+
+
+def _norm_avatar_rect(rect):
+    if not isinstance(rect, dict):
+        return None
+    size = max(24, int(round(float(rect["size"]) / 2)) * 2)
+    ox = int(round(float(rect["x"])))
+    oy = int(round(float(rect["y"])))
+    return (ox, oy, size)
+
+
+def _norm_progress_ring(ring):
+    if not isinstance(ring, dict):
+        return None
+    try:
+        rx = float(ring["x"])
+        ry = float(ring["y"])
+        size = float(ring["size"])
+        stroke = float(ring.get("stroke", 6))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (20 <= size <= 400 and 1 <= stroke <= 30 and -64 <= rx <= 1280 and -64 <= ry <= 720):
+        return None
+    color = str(ring.get("color") or "#e67835").strip()
+    m = re.fullmatch(r"#([0-9a-fA-F]{6})", color)
+    if m:
+        hx = m.group(1)
+        rc, gc, bc = int(hx[0:2], 16), int(hx[2:4], 16), int(hx[4:6], 16)
+    else:
+        rc, gc, bc = 230, 120, 53
+    return (round(rx, 1), round(ry, 1), round(size, 1), round(stroke, 1), rc, gc, bc)
+
+
+def _merge_ring_spans(cue_entries):
+    spans = []
+    t = 0.0
+    for entry in cue_entries:
+        dur = entry[1]
+        ring = entry[4]
+        if spans and spans[-1][0] == ring:
+            spans[-1] = (ring, spans[-1][1], t + dur)
+        else:
+            spans.append((ring, t, t + dur))
+        t += dur
+    return [(r, s, e) for r, s, e in spans if r is not None]
+
+
+def _append_ring_overlay(base_filter, in_label, ring_spans, seg_start, seg_dur, total_dur):
+    if not ring_spans or total_dur <= 0:
+        return base_filter, in_label
+    parts = [base_filter] if base_filter else []
+    cur = in_label
+    for idx, (ring, span_start, span_end) in enumerate(ring_spans):
+        rx, ry, rsize, rstroke, rc, gc, bc = ring
+        pad = 2
+        box_sz = int(round(rsize)) + pad * 2
+        ox = int(round(rx)) - pad
+        oy = int(round(ry)) - pad
+        cx = rsize / 2.0 + pad - 0.5
+        cy = cx
+        r_out = rsize / 2.0
+        r_in = max(1.0, r_out - rstroke)
+        r_mid = r_out - rstroke / 2.0
+        r_half = rstroke / 2.0
+        sweep = f"(2*PI*min(1,(({seg_start:.3f}+T)/{total_dur:.3f})))"
+        ang = f"mod(atan2(X-{cx:.2f},{cy:.2f}-Y)+2*PI,2*PI)"
+        dist = f"hypot(X-{cx:.2f},Y-{cy:.2f})"
+        rad = f"(clip({r_out:.2f}-{dist}+0.5,0,1)*clip({dist}-{r_in:.2f}+0.5,0,1))"
+        arc = f"({rad}*clip(({sweep}-{ang})*{r_mid:.2f}+0.5,0,1))"
+        cap0 = f"clip({r_half:.2f}+0.5-hypot(X-{cx:.2f},Y-{cy - r_mid:.2f}),0,1)"
+        cap1 = f"clip({r_half:.2f}+0.5-hypot(X-({cx:.2f}+{r_mid:.2f}*sin({sweep})),Y-({cy:.2f}-{r_mid:.2f}*cos({sweep}))),0,1)"
+        alpha = f"255*max({arc},gt({sweep},0.02)*max({cap0},{cap1}))"
+        rlbl = f"ring{idx}"
+        olbl = f"vring{idx}"
+        parts.append(
+            f"color=c=black@0.0:s={box_sz}x{box_sz}:r=24:d={seg_dur + 0.5:.3f},"
+            f"format=rgba,geq=r={rc}:g={gc}:b={bc}:a='{alpha}'[{rlbl}]"
+        )
+        full_cover = span_start <= 0.02 and span_end >= seg_dur - 0.05
+        enable = "" if full_cover else f":enable='between(t,{span_start:.3f},{span_end:.3f})'"
+        parts.append(
+            f"{cur}[{rlbl}]overlay=x={ox}:y={oy}:shortest=1:format=auto{enable}[{olbl}]"
+        )
+        cur = f"[{olbl}]"
+    final = "vout_ring"
+    parts.append(f"{cur}format=yuv420p[{final}]")
+    return ";".join(parts), f"[{final}]"
+
+
+def _write_cue_concat(path, cue_pairs):
+    lines = []
+    last_img = ""
+    for img_file, dur in cue_pairs:
+        escaped = str(img_file).replace("\\", "/").replace("'", "'\\''")
+        lines.append(f"file '{escaped}'")
+        lines.append(f"duration {dur:.3f}")
+        last_img = escaped
+    if last_img:
+        lines.append(f"file '{last_img}'")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _build_template_slide_xfade(cue_specs, prev_img=None):
+    """Build FFmpeg inputs and filter_complex for exact-duration cue cuts and xfade dissolves.
+
+    cue_specs: list of (Path, duration_seconds, transition_name)
+    Returns: (input_args, filter_complex, video_out_label)
+    """
+    n = len(cue_specs)
+    norm_vf = (
+        "scale=1280:720:force_original_aspect_ratio=decrease,"
+        "pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24,format=yuv420p,settb=AVTB"
+    )
+    fades = []
+    for k in range(n - 1):
+        d_cur = cue_specs[k][1]
+        d_next = cue_specs[k + 1][1]
+        trans = cue_specs[k + 1][2]
+        raw_f = 0.28 if trans == "outro" else (0.22 if trans == "fade" else 0.0)
+        f = round(min(raw_f, 0.35 * d_cur, 0.35 * d_next), 3) if raw_f > 0 else 0.0
+        fades.append(f if f >= 0.08 else 0.0)
+
+    lead_fade = 0.0
+    if prev_img is not None and n >= 1:
+        f_lead = round(min(0.24, 0.35 * cue_specs[0][1]), 3)
+        if f_lead >= 0.08:
+            lead_fade = f_lead
+
+    input_args = []
+    filters = []
+    in_idx = 0
+
+    prev_label = None
+    if lead_fade > 0:
+        input_args.extend(["-loop", "1", "-t", f"{lead_fade + 0.08:.3f}", "-i", prev_img])
+        prev_label = f"s{in_idx}"
+        filters.append(f"[{in_idx}:v]{norm_vf}[{prev_label}]")
+        in_idx += 1
+
+    cue_labels = []
+    for k, (img_file, dur, _) in enumerate(cue_specs):
+        extra = (fades[k] + 0.08) if (k < n - 1 and fades[k] > 0) else 0.0
+        stream_dur = dur + extra
+        input_args.extend(["-loop", "1", "-t", f"{stream_dur:.3f}", "-i", img_file])
+        lbl = f"s{in_idx}"
+        filters.append(f"[{in_idx}:v]{norm_vf}[{lbl}]")
+        cue_labels.append(lbl)
+        in_idx += 1
+
+    step = 0
+    if prev_label is not None:
+        acc = f"acc{step}"
+        filters.append(
+            f"[{prev_label}][{cue_labels[0]}]xfade=transition=fade:duration={lead_fade:.3f}:offset=0[{acc}]"
+        )
+        step += 1
+    else:
+        acc = cue_labels[0]
+
+    timeline = cue_specs[0][1]
+    for k in range(n - 1):
+        nxt = cue_labels[k + 1]
+        f = fades[k]
+        out = f"acc{step}"
+        if f > 0:
+            filters.append(
+                f"[{acc}][{nxt}]xfade=transition=fade:duration={f:.3f}:offset={timeline:.3f}[{out}]"
+            )
+        else:
+            filters.append(f"[{acc}][{nxt}]concat=n=2:v=1:a=0,settb=AVTB[{out}]")
+        acc = out
+        step += 1
+        timeline += cue_specs[k + 1][1]
+
+    return input_args, ";".join(filters), f"[{acc}]", in_idx
+
+
+def render_template_video(p, job, save, speech_key, record=None, dashscope_key="", deepseek_key=None, minimax_key=None):
     settings = p["settings"]
-    track = settings.get("music", "off")
-    music = music_path(track)
-    segments = []
+    music, track, music_url, music_meta = resolve_video_music(
+        p, job, save, record=record, deepseek_key=deepseek_key, minimax_key=minimax_key
+    )
+    music_extra = {"musicUrl": music_url, "musicMeta": music_meta} if music_url else {}
+    items = p["items"]
+    voiced = settings.get("voice") in SPEAKERS and any(item.get("line", "").strip() for item in items)
+    avatar_cfg = p.get("avatar") if isinstance(p.get("avatar"), dict) else None
+    use_avatar = bool(avatar_cfg and avatar_cfg.get("enabled") is True and voiced)
+    default_rect = _norm_avatar_rect(avatar_cfg.get("rect")) if use_avatar else None
+
     vtt_cues = ["WEBVTT\n"]
     start = 0.0
     shot_seconds = []
-    items = p["items"]
+    base = job["id"]
+    job_dir = JOBS / base
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    # First prepare narration WAVs and exact per-slide timing.
+    slide_data = []
     for i, item in enumerate(items):
-        folder = JOBS / job["id"] / str(i)
+        folder = job_dir / str(i)
         folder.mkdir(parents=True, exist_ok=True)
         line = item.get("line", "").strip()
         job["progress"] = f"准备第 {i + 1} / {len(items)} 页配音"
         save()
         audio, spoken = shot_audio(settings, line, folder, speech_key, i, record)
-        seconds = max(3.5, round(spoken + 0.55, 2)) if spoken else float(item["seconds"])
-        job["progress"] = f"合成第 {i + 1} / {len(items)} 页模板画面"
-        save()
+        raw_pause = item.get("tailPause", 0.55)
+        tail_pause = max(0.2, min(3.0, float(raw_pause))) if type(raw_pause) in (int, float) else 0.55
+        seconds = max(3.5, round(spoken + tail_pause, 2)) if spoken else float(item["seconds"])
         cues = item["cues"]
-        total_weight = sum(float(c.get("weight", 1)) for c in cues)
-        audible = max(1.0, spoken) if spoken else seconds
-        lines = []
+        hold_total = sum(
+            max(0.2, min(5.0, float(c["holdSeconds"])))
+            for c in cues
+            if type(c.get("holdSeconds")) in (int, float) and float(c["holdSeconds"]) > 0
+        )
+        spoken_cues = [c for c in cues if not (type(c.get("holdSeconds")) in (int, float) and float(c["holdSeconds"]) > 0)]
+        total_weight = sum(float(c.get("weight", 1)) for c in (spoken_cues or cues))
+        spoken_budget = max(0.4 * max(1, len(spoken_cues)), seconds - hold_total) if hold_total > 0 else (max(1.0, spoken) if spoken else seconds)
+        cue_entries = []
         elapsed = 0.0
         for ci, cue in enumerate(cues):
             img_file = media_path(cue["image"]).resolve()
-            escaped = str(img_file).replace("\\", "/").replace("'", "'\\''")
+            has_hold = type(cue.get("holdSeconds")) in (int, float) and float(cue["holdSeconds"]) > 0
             if ci == len(cues) - 1:
                 dur = max(0.4, round(seconds - elapsed, 3))
-            else:
-                dur = max(0.4, round(audible * float(cue.get("weight", 1)) / total_weight, 3))
+            elif has_hold:
+                dur = max(0.2, min(5.0, round(float(cue["holdSeconds"]), 3)))
                 elapsed += dur
-            lines.append(f"file '{escaped}'")
-            lines.append(f"duration {dur:.3f}")
-        last_img = str(media_path(cues[-1]["image"]).resolve()).replace("\\", "/").replace("'", "'\\''")
-        lines.append(f"file '{last_img}'")
-        cue_list = folder / "cues.txt"
-        cue_list.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-        audio_in = ["-i", audio] if audio else ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono"]
-        clip = folder / "clip.mp4"
-        run_ffmpeg(
-            "-f",
-            "concat",
-            "-safe",
-            0,
-            "-i",
-            cue_list,
-            *audio_in,
-            "-map",
-            "0:v:0",
-            "-map",
-            "1:a:0",
-            "-t",
-            f"{seconds:.3f}",
-            "-vf",
-            "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24",
-            "-af",
-            "apad",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "fast",
-            "-crf",
-            19,
-            "-threads",
-            2,
-            "-pix_fmt",
-            "yuv420p",
-            "-c:a",
-            "aac",
-            "-ar",
-            44100,
-            "-ac",
-            1,
-            clip,
-        )
-        segments.append(clip)
+            else:
+                dur = max(0.4, round(spoken_budget * float(cue.get("weight", 1)) / total_weight, 3))
+                elapsed += dur
+            crect = _norm_avatar_rect(cue["avatarRect"]) if "avatarRect" in cue else default_rect
+            cring = _norm_progress_ring(cue.get("progressRing"))
+            trans = cue.get("transition", "cut")
+            cue_entries.append((img_file, dur, crect, trans, cring))
         if line:
             vtt_cues.extend(shot_captions(line, start, min(spoken, seconds - 0.15) if spoken else seconds, "16:9"))
         shot_seconds.append(round(seconds))
+        slide_data.append((i, folder, audio, seconds, cue_entries, start))
         start += seconds
+
+    captions = MEDIA / (base + ".vtt")
+    captions.write_text("\n".join(vtt_cues), encoding="utf-8")
+
+    if use_avatar:
+        slide_entries = [(audio, seconds) for _, _, audio, seconds, _, _ in slide_data]
+        full_speech = job_dir / "full-speech.wav"
+        build_template_speech_wav(slide_entries, full_speech, job_dir)
+        avatar_mp4 = generate_template_avatar_video(
+            avatar_cfg, slide_entries, job_dir, job, save, dashscope_key or current_dashscope_key(), record
+        )
+        job["progress"] = "合成数字人对口型与高清模板画面"
+        save()
+
+        # Group consecutive cues sharing identical avatar and ring coordinates into continuous layout runs.
+        runs = []
+        cursor = 0.0
+        for _, _, _, _, cue_entries, _ in slide_data:
+            for img_file, dur, crect, _, cring in cue_entries:
+                if runs and runs[-1]["rect"] == crect and runs[-1]["ring"] == cring:
+                    runs[-1]["cues"].append((img_file, dur))
+                    runs[-1]["dur"] += dur
+                else:
+                    runs.append({"start": cursor, "dur": dur, "rect": crect, "ring": cring, "cues": [(img_file, dur)]})
+                cursor += dur
+
+        composed = job_dir / "composed.mp4" if music else MEDIA / (base + ".mp4")
+        extra_flags = [] if music else ["-movflags", "+faststart"]
+
+        if len(runs) == 1 and runs[0]["rect"] is not None:
+            all_cues = job_dir / "all-cues.txt"
+            _write_cue_concat(all_cues, runs[0]["cues"])
+            ox, oy, size = runs[0]["rect"]
+            filter_complex = (
+                f"color=c=black:s=1280x720:r=24[base];"
+                f"[0:v]fps=24,tpad=stop_mode=clone:stop_duration=3,"
+                f"scale={size}:{size}:force_original_aspect_ratio=increase,"
+                f"crop={size}:{size}:(iw-ow)/2:min(ih-oh\\,(ih-oh)*0.2),setsar=1[av];"
+                f"[base][av]overlay=x={ox}:y={oy}:format=rgb[with_av];"
+                f"[1:v]fps=24,tpad=stop_mode=clone:stop_duration=2,scale=1280:720:flags=lanczos,format=rgba[ov];"
+                f"[with_av][ov]overlay=0:0:format=rgb,format=yuv420p[vout]"
+            )
+            vout_lbl = "[vout]"
+            if runs[0]["ring"] is not None:
+                filter_complex, vout_lbl = _append_ring_overlay(
+                    filter_complex, vout_lbl, [(runs[0]["ring"], 0.0, start)], 0.0, start, start
+                )
+            run_ffmpeg(
+                "-i",
+                avatar_mp4,
+                "-f",
+                "concat",
+                "-safe",
+                0,
+                "-i",
+                all_cues,
+                "-i",
+                full_speech,
+                "-filter_complex",
+                filter_complex,
+                "-map",
+                vout_lbl,
+                "-map",
+                "2:a:0",
+                "-t",
+                f"{start:.3f}",
+                "-af",
+                "apad",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                19,
+                "-threads",
+                2,
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-ar",
+                44100,
+                "-ac",
+                1,
+                *extra_flags,
+                composed,
+            )
+        else:
+            run_files = []
+            for ri, run in enumerate(runs):
+                run_cues = job_dir / f"run-{ri}-cues.txt"
+                _write_cue_concat(run_cues, run["cues"])
+                run_mp4 = job_dir / f"run-{ri}.mp4"
+                run_dur = run["dur"]
+                t0 = run["start"]
+                if run["rect"] is not None:
+                    ox, oy, size = run["rect"]
+                    filter_complex = (
+                        f"color=c=black:s=1280x720:r=24[base];"
+                        f"[0:v]fps=24,tpad=stop_mode=clone:stop_duration=5,"
+                        f"trim=start={t0:.3f}:duration={run_dur + 2:.3f},setpts=PTS-STARTPTS,"
+                        f"scale={size}:{size}:force_original_aspect_ratio=increase,"
+                        f"crop={size}:{size}:(iw-ow)/2:min(ih-oh\\,(ih-oh)*0.2),setsar=1[av];"
+                        f"[base][av]overlay=x={ox}:y={oy}:format=rgb[with_av];"
+                        f"[1:v]fps=24,tpad=stop_mode=clone:stop_duration=2,scale=1280:720:flags=lanczos,format=rgba[ov];"
+                        f"[with_av][ov]overlay=0:0:format=rgb,format=yuv420p[vout]"
+                    )
+                    vout_lbl = "[vout]"
+                    if run["ring"] is not None:
+                        filter_complex, vout_lbl = _append_ring_overlay(
+                            filter_complex, vout_lbl, [(run["ring"], 0.0, run_dur)], t0, run_dur, start
+                        )
+                    run_ffmpeg(
+                        "-i",
+                        avatar_mp4,
+                        "-f",
+                        "concat",
+                        "-safe",
+                        0,
+                        "-i",
+                        run_cues,
+                        "-filter_complex",
+                        filter_complex,
+                        "-map",
+                        vout_lbl,
+                        "-t",
+                        f"{run_dur:.3f}",
+                        "-c:v",
+                        "libx264",
+                        "-preset",
+                        "fast",
+                        "-crf",
+                        19,
+                        "-threads",
+                        2,
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-an",
+                        run_mp4,
+                    )
+                else:
+                    if run["ring"] is not None:
+                        fc = "[0:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24[vbase]"
+                        fc, vout_lbl = _append_ring_overlay(fc, "[vbase]", [(run["ring"], 0.0, run_dur)], t0, run_dur, start)
+                        run_ffmpeg(
+                            "-f", "concat", "-safe", 0, "-i", run_cues,
+                            "-filter_complex", fc, "-map", vout_lbl,
+                            "-t", f"{run_dur:.3f}",
+                            "-c:v", "libx264", "-preset", "fast", "-crf", 19, "-threads", 2, "-pix_fmt", "yuv420p", "-an",
+                            run_mp4,
+                        )
+                    else:
+                        run_ffmpeg(
+                            "-f",
+                            "concat",
+                            "-safe",
+                            0,
+                            "-i",
+                            run_cues,
+                            "-t",
+                            f"{run_dur:.3f}",
+                            "-vf",
+                            "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24",
+                            "-c:v",
+                            "libx264",
+                            "-preset",
+                            "fast",
+                            "-crf",
+                            19,
+                            "-threads",
+                            2,
+                            "-pix_fmt",
+                            "yuv420p",
+                            "-an",
+                            run_mp4,
+                        )
+                run_files.append(run_mp4)
+            runs_list = job_dir / "runs.txt"
+            runs_list.write_text(
+                "\n".join(f"file 'run-{ri}.mp4'" for ri in range(len(run_files))) + "\n",
+                encoding="utf-8",
+            )
+            run_ffmpeg(
+                "-f",
+                "concat",
+                "-safe",
+                1,
+                "-i",
+                runs_list,
+                "-i",
+                full_speech,
+                "-map",
+                "0:v:0",
+                "-map",
+                "1:a:0",
+                "-t",
+                f"{start:.3f}",
+                "-af",
+                "apad",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-ar",
+                44100,
+                "-ac",
+                1,
+                *extra_flags,
+                composed,
+            )
+        if music:
+            job["progress"] = "混入背景音乐并封装成片"
+            save()
+            run_ffmpeg(
+                "-i",
+                composed,
+                "-stream_loop",
+                -1,
+                "-i",
+                music,
+                "-map",
+                "0:v",
+                "-filter_complex",
+                music_mix(start, True, music_index=1, is_generated=(track == "auto" or str(track).startswith("library:"))),
+                "-map",
+                "[mix]",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "160k",
+                "-movflags",
+                "+faststart",
+                MEDIA / (base + ".mp4"),
+            )
+        return {"url": f"/media/{base}.mp4", "captions": f"/media/{base}.vtt", "music": track, "shotSeconds": shot_seconds, **music_extra}
+
+    segments = []
+    prev_last_img = None
+    for i, folder, audio, seconds, cue_entries, seg_start in slide_data:
+        job["progress"] = f"合成第 {i + 1} / {len(items)} 页模板画面"
+        save()
+        cue_specs = [(img_file, dur, trans) for img_file, dur, _, trans, _ in cue_entries]
+        ring_spans = _merge_ring_spans(cue_entries)
+        has_transition = prev_last_img is not None or any(t in ("fade", "outro") for _, _, t in cue_specs[1:])
+        audio_in = ["-i", audio] if audio else ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono"]
+        clip = folder / "clip.mp4"
+
+        if has_transition:
+            v_inputs, v_filter, v_out, audio_idx = _build_template_slide_xfade(cue_specs, prev_img=prev_last_img)
+            if ring_spans:
+                v_filter, v_out = _append_ring_overlay(v_filter, v_out, ring_spans, seg_start, seconds, start)
+            run_ffmpeg(
+                *v_inputs,
+                *audio_in,
+                "-filter_complex",
+                v_filter,
+                "-map",
+                v_out,
+                "-map",
+                f"{audio_idx}:a:0",
+                "-t",
+                f"{seconds:.3f}",
+                "-af",
+                "apad",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                19,
+                "-threads",
+                2,
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-ar",
+                44100,
+                "-ac",
+                1,
+                clip,
+            )
+        else:
+            cue_list = folder / "cues.txt"
+            _write_cue_concat(cue_list, [(img_file, dur) for img_file, dur, _, _, _ in cue_entries])
+            if ring_spans:
+                base_fc = "[0:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24[vbase]"
+                fc, v_out = _append_ring_overlay(base_fc, "[vbase]", ring_spans, seg_start, seconds, start)
+                run_ffmpeg(
+                    "-f",
+                    "concat",
+                    "-safe",
+                    0,
+                    "-i",
+                    cue_list,
+                    *audio_in,
+                    "-filter_complex",
+                    fc,
+                    "-map",
+                    v_out,
+                    "-map",
+                    "1:a:0",
+                    "-t",
+                    f"{seconds:.3f}",
+                    "-af",
+                    "apad",
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "fast",
+                    "-crf",
+                    19,
+                    "-threads",
+                    2,
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-c:a",
+                    "aac",
+                    "-ar",
+                    44100,
+                    "-ac",
+                    1,
+                    clip,
+                )
+            else:
+                run_ffmpeg(
+                    "-f",
+                    "concat",
+                    "-safe",
+                    0,
+                    "-i",
+                    cue_list,
+                    *audio_in,
+                    "-map",
+                    "0:v:0",
+                    "-map",
+                    "1:a:0",
+                    "-t",
+                    f"{seconds:.3f}",
+                    "-vf",
+                    "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24",
+                    "-af",
+                    "apad",
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "fast",
+                    "-crf",
+                    19,
+                    "-threads",
+                    2,
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-c:a",
+                    "aac",
+                    "-ar",
+                    44100,
+                    "-ac",
+                    1,
+                    clip,
+                )
+        prev_last_img = cue_specs[-1][0]
+        segments.append(clip)
 
     job["progress"] = "合并模板画面、配音与背景音乐" if music else "封装模板科普视频"
     save()
-    base = job["id"]
-    captions = MEDIA / (base + ".vtt")
-    captions.write_text("\n".join(vtt_cues), encoding="utf-8")
-    listing = JOBS / base / "clips.txt"
+    listing = job_dir / "clips.txt"
     listing.write_text(
         "\n".join(f"file '{i}/clip.mp4'" for i in range(len(segments))),
         encoding="utf-8",
     )
     music_input = ["-stream_loop", -1, "-i", music] if music else []
-    voiced = settings.get("voice") in SPEAKERS and any(item.get("line", "").strip() for item in items)
     audio_args = (
-        ["-filter_complex", music_mix(start, voiced, music_index=1), "-map", "[mix]", "-c:a", "aac", "-b:a", "160k"]
+        ["-filter_complex", music_mix(start, voiced, music_index=1, is_generated=(track == "auto" or str(track).startswith("library:"))), "-map", "[mix]", "-c:a", "aac", "-b:a", "160k"]
         if music else ["-map", "0:a", "-c:a", "copy"]
     )
     run_ffmpeg(
@@ -1012,15 +2283,17 @@ def render_template_video(p, job, save, speech_key, record=None):
         "+faststart",
         MEDIA / (base + ".mp4"),
     )
-    return {"url": f"/media/{base}.mp4", "captions": f"/media/{base}.vtt", "music": track, "shotSeconds": shot_seconds}
+    return {"url": f"/media/{base}.mp4", "captions": f"/media/{base}.vtt", "music": track, "shotSeconds": shot_seconds, **music_extra}
 
 
-def render_video(p, job, save, speech_key, record=None):
+def render_video(p, job, save, speech_key, record=None, dashscope_key="", deepseek_key=None, minimax_key=None):
     if p.get("template") is True:
-        return render_template_video(p, job, save, speech_key, record)
+        return render_template_video(p, job, save, speech_key, record, dashscope_key, deepseek_key, minimax_key)
     settings = p["settings"]
-    track = settings.get("music", "off")
-    music = music_path(track)
+    music, track, music_url, music_meta = resolve_video_music(
+        p, job, save, record=record, deepseek_key=deepseek_key, minimax_key=minimax_key
+    )
+    music_extra = {"musicUrl": music_url, "musicMeta": music_meta} if music_url else {}
     segments = []
     cues = ["WEBVTT\n"]
     start = 0
@@ -1036,7 +2309,7 @@ def render_video(p, job, save, speech_key, record=None):
             job["progress"] = f"准备第 {i + 1} 幕配音"
             save()
             audio, spoken = shot_audio(settings, line, folder, speech_key, i, record)
-            if p["mode"] == "ark" and i + 1 < len(items) and item.get("matchNext") is True:
+            if i + 1 < len(items) and item.get("matchNext") is True:
                 tail = items[i + 1]["image"]
             item = storyboard_timing(item, spoken, VIDEO_MODELS[settings["videoModel"]][2], tail)
         job["progress"] = f"制作分镜 {i + 1} / {len(p['items'])}"
@@ -1074,7 +2347,7 @@ def render_video(p, job, save, speech_key, record=None):
 
             source_clip(p, item, temp, state, save, tail, report_video if record else None)
             temp.replace(source)
-        elif record and p["mode"] == "ark" and not state.get("remote"):
+        elif record and not state.get("remote"):
             record(f"video-cache:{i}", work_costs.entry(
                 f"第 {i + 1} 幕动画", settings["videoModel"], "复用本地视频", 0, i,
             ))
@@ -1100,7 +2373,7 @@ def render_video(p, job, save, speech_key, record=None):
     music_input = ["-stream_loop", -1, "-i", music] if music else []
     voiced = settings["voice"] in SPEAKERS and any(item["line"].strip() for item in p["items"])
     audio = (
-        ["-filter_complex", music_mix(start, voiced), "-map", "[mix]", "-c:a", "aac", "-b:a", "160k"]
+        ["-filter_complex", music_mix(start, voiced, is_generated=(track == "auto" or str(track).startswith("library:"))), "-map", "[mix]", "-c:a", "aac", "-b:a", "160k"]
         if music else ["-map", "0:a", "-c:a", "copy"]
     )
     run_ffmpeg(
@@ -1128,7 +2401,7 @@ def render_video(p, job, save, speech_key, record=None):
         "+faststart",
         MEDIA / (base + ".mp4"),
     )
-    return {"url": f"/media/{base}.mp4", "captions": f"/media/{base}.vtt", "music": track, "shotSeconds": shot_seconds}
+    return {"url": f"/media/{base}.mp4", "captions": f"/media/{base}.vtt", "music": track, "shotSeconds": shot_seconds, **music_extra}
 
 
 def write_draft(p, job, save, record=None):
@@ -1174,7 +2447,7 @@ def write_draft(p, job, save, record=None):
         )
 
 
-def work(job, key=None, speech_key="", deepseek_key=None):
+def work(job, key=None, speech_key="", deepseek_key=None, dashscope_key="", minimax_key=None):
     def save():
         with CACHE_LOCK:
             write_json(JOBS / (job["id"] + ".json"), job)
@@ -1187,6 +2460,7 @@ def work(job, key=None, speech_key="", deepseek_key=None):
 
     JOB_CREDENTIALS.key = key
     JOB_CREDENTIALS.deepseek_key = deepseek_key
+    JOB_CREDENTIALS.dashscope_key = dashscope_key
     try:
         with SLOTS:
             p = job["request"]
@@ -1202,7 +2476,7 @@ def work(job, key=None, speech_key="", deepseek_key=None):
             elif p["kind"] == "draft":
                 write_draft(p, job, save, record)
             else:
-                job["output"] = render_video(p, job, save, speech_key, record)
+                job["output"] = render_video(p, job, save, speech_key, record, dashscope_key, deepseek_key, minimax_key)
             job["status"] = "done"
     except Exception as error:
         job.update(status="failed", error=str(error)[:650])
@@ -1279,7 +2553,8 @@ def cost_details(request):
     amounts = [float(row["amount"]) for row in rows if row["amount"] is not None]
     return {"rows": rows, "total": math.fsum(amounts) if amounts else None, "unresolved": unresolved,
             "priceDate": work_costs.PRICE_DATE, "arkPrice": work_costs.ARK_PRICE,
-            "deepseekPrice": work_costs.DEEPSEEK_PRICE, "speechPrice": work_costs.SPEECH_PRICE}
+            "deepseekPrice": work_costs.DEEPSEEK_PRICE, "speechPrice": work_costs.SPEECH_PRICE,
+            "dashscopePrice": work_costs.DASHSCOPE_PRICE, "minimaxPrice": work_costs.MINIMAX_PRICE}
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -1310,16 +2585,27 @@ class Handler(SimpleHTTPRequestHandler):
                     "videoModels": VIDEO_MODELS,
                     "textModels": text_models(),
                     "textModel": default_text_model(),
+                    "avatarModels": AVATAR_MODELS,
+                    "avatarMotions": AVATAR_MOTIONS,
+                    "avatarLipSync": True,
+                    "musicModels": music_gen.MUSIC_MODELS,
+                    "musicModel": music_gen.DEFAULT_MUSIC_MODEL,
+                    "musicLibrary": music_gen.list_music_library(GENERATED_MUSIC_DIR),
                     "workCosts": True,
                     "videoBackgroundMusic": True,
+                    "videoAutoMusicGeneration": True,
                     "imageStyleReference": True,
                     **ark_connection(),
                     **deepseek_connection(),
+                    **dashscope_connection(),
+                    **minimax_connection(),
                     "encoder": bool(FFMPEG),
                     **speech_connection(),
                     "keyStorage": KEY_STORAGE,
                 },
             )
+        if path == "/api/music-library":
+            return self.send_json(200, {"tracks": music_gen.list_music_library(GENERATED_MUSIC_DIR)})
         if m := re.fullmatch(r"/api/jobs/([a-f0-9-]{36})", path):
             file = JOBS / (m[1] + ".json")
             if file.is_file():
@@ -1338,9 +2624,10 @@ class Handler(SimpleHTTPRequestHandler):
             except ValueError:
                 return self.send_error(404)
             return self.file_response(file)
+        decoded_path = unquote(path)
         file = (
-            (PUBLIC / path.lstrip("/")).resolve()
-            if path != "/"
+            (PUBLIC / decoded_path.lstrip("/")).resolve()
+            if decoded_path != "/"
             else PUBLIC / "index.html"
         )
         if PUBLIC not in file.parents or not file.is_file():
@@ -1387,7 +2674,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         if (
-            self.path not in ("/api/jobs", "/api/costs", "/api/ark-key", "/api/deepseek-key", "/api/speech-key", "/api/upload-frame")
+            self.path not in ("/api/jobs", "/api/costs", "/api/ark-key", "/api/deepseek-key", "/api/speech-key", "/api/dashscope-key", "/api/minimax-key", "/api/upload-frame", "/api/generate-music", "/api/music-library/rename", "/api/music-library/delete")
             or not self.allowed()
             or self.headers.get("Origin") not in (ORIGIN, f"http://localhost:{PORT}")
             or self.headers.get_content_type() != "application/json"
@@ -1395,7 +2682,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_error(403)
         try:
             n = int(self.headers.get("Content-Length", "0"))
-            max_bytes = 8_000_000 if self.path == "/api/upload-frame" else (100000 if self.path in ("/api/jobs", "/api/costs") else 4096)
+            max_bytes = 8_000_000 if self.path == "/api/upload-frame" else (100000 if self.path in ("/api/jobs", "/api/costs", "/api/generate-music") else 4096)
             if not 0 < n <= max_bytes:
                 raise ValueError("请求大小无效")
             p = json.loads(self.rfile.read(n))
@@ -1403,13 +2690,27 @@ class Handler(SimpleHTTPRequestHandler):
                 raise ValueError("请求格式无效")
             if self.path == "/api/upload-frame":
                 return self.send_json(200, save_uploaded_frame(p))
+            if self.path == "/api/generate-music":
+                return self.send_json(200, generate_music_request(p))
+            if self.path == "/api/music-library/rename":
+                with CACHE_LOCK:
+                    track, library = music_gen.rename_library_track(GENERATED_MUSIC_DIR, p.get("id"), p.get("title"))
+                return self.send_json(200, {"track": track, "library": library})
+            if self.path == "/api/music-library/delete":
+                with CACHE_LOCK:
+                    library = music_gen.delete_library_track(GENERATED_MUSIC_DIR, p.get("id"))
+                return self.send_json(200, {"library": library})
             if self.path == "/api/costs":
                 return self.send_json(200, cost_details(p))
-            if self.path in ("/api/ark-key", "/api/deepseek-key", "/api/speech-key"):
+            if self.path in ("/api/ark-key", "/api/deepseek-key", "/api/speech-key", "/api/dashscope-key", "/api/minimax-key"):
                 if self.path == "/api/speech-key":
                     return self.send_json(200, configure_speech(p.get("key")))
                 if self.path == "/api/deepseek-key":
                     return self.send_json(200, connect_deepseek(p.get("key")))
+                if self.path == "/api/dashscope-key":
+                    return self.send_json(200, connect_dashscope(p.get("key")))
+                if self.path == "/api/minimax-key":
+                    return self.send_json(200, connect_minimax(p.get("key")))
                 return self.send_json(200, connect_ark(p.get("key")))
             job_id = str(uuid.UUID(p["id"]))
             if "workId" in p and (not isinstance(p["workId"], str) or str(uuid.UUID(p["workId"])) != p["workId"]):
@@ -1428,10 +2729,14 @@ class Handler(SimpleHTTPRequestHandler):
                 job.update(status="queued", progress="等待本地工作台处理", error="")
                 write_json(file, job)
                 ACTIVE.add(job_id)
-                key = current_ark_key() if p["mode"] == "ark" else None
-                ds_key = current_deepseek_key() if p["kind"] == "draft" else None
+                key = current_ark_key()
+                needs_auto_music = p["kind"] == "video" and p.get("settings", {}).get("music") == "auto"
+                needs_deepseek = p["kind"] == "draft" or needs_auto_music
+                ds_key = current_deepseek_key() if needs_deepseek else None
+                dash_key = current_dashscope_key() if p["kind"] == "video" and p.get("template") is True else ""
+                mm_key = current_minimax_key() if needs_auto_music else None
                 threading.Thread(
-                    target=work, args=(job, key, current_speech_key(), ds_key), daemon=True
+                    target=work, args=(job, key, current_speech_key(), ds_key, dash_key, mm_key), daemon=True
                 ).start()
                 self.send_json(202, visible(job))
         except (ValueError, KeyError, TypeError) as error:

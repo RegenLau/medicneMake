@@ -39,10 +39,10 @@ EDITORIAL_RULES = """你是医院药师的科普写作助手，为药师起草�
 - 口吻像药师在窗口当面讲解：平实、具体，不说教，不吓唬。
 
 【内容安全】
-- 只写一般用药知识。不诊断，不给个体化剂量、疗程或换药方案，不建议读者自行停药、加药或换药。涉及具体用法用量时，请读者按说明书和医嘱核对。
-- 以公认、可核实的事实为限。不编造指南、研究、统计数字或引用；没有把握的饮食禁忌和药物相互作用不写。
+- 只写一般用药知识。不诊断，不给个体化剂量、疗程或换药方案；日常依从性提醒中不建议读者因指标好转或个人担心自行停药、加药或换药；但涉及说明书警示的严重不良反应信号（如明显肌痛无力伴浓茶色尿、黄疸、严重过敏等）时，不得用「不要自行停药」笼统覆盖，应明确提示立即就医评估并按说明书或医生指导处理。涉及具体用法用量时，请读者按说明书和医嘱核对。
+- 以公认、可核实的说明书层面事实为限；公认的通用服药规则（如长效药可在一天中任意时间服用、建议每天固定时间）应直接说清楚，避免含糊回避。不编造指南、研究、统计数字或引用；没有把握的饮食禁忌和药物相互作用不写。
 - 提到说明书时，提醒读者查看对应栏目，不替说明书下结论，例如不写「说明书明确标注」。
-- 有需要尽快就医的情形时，写清出现哪些表现要立即就医。
+- 有需要尽快就医的情形时，写清出现哪些表现要立即就医，并与日常坚持服药的提醒分开表述。
 - 输入里有个人病历或身份信息时，只写一般知识，不复述个人信息。
 
 【审核要求】
@@ -319,33 +319,105 @@ def video_draft(ark, model, item, reference_seconds, max_seconds, ratio="9:16"):
     return {"title": title, "setting": setting, "shots": time_video(beats, max_seconds)}
 
 
+VALID_LAYOUT_MODES = ("hook", "explain", "focus")
+VALID_BEAT_FOCUSES = ("all", "0", "1", "2", "3", "top", "bottom", "question", "answer", "action", "outro")
+DEFAULT_LAYOUT_BY_TYPE = {
+    "cover": "hook",
+    "compare": "focus",
+    "steps": "focus",
+    "warning": "focus",
+    "summary": "focus",
+}
+
+
+def _default_short_title(title, drug=""):
+    clean = re.sub(r"[？?！!。，,：:]+", " ", title).strip()
+    if len(clean) <= 12:
+        return clean
+    if drug:
+        short_drug = re.sub(r"(钙片|缓释片|控释片|肠溶胶囊|肠溶片|混悬液|滴眼液|胶囊|片)$", "", drug.strip())
+        short_drug = short_drug[:6] if short_drug else drug.strip()[:6]
+        rest = clean.replace(drug.strip(), "").replace(short_drug, "").strip(" ·｜-")
+        rest = re.sub(r"^(为什么|怎么|如何|能否|可以|要不要|常建议|一定要)", "", rest).strip()
+        if rest:
+            return f"{short_drug} · {rest[:5]}"[:14]
+    return clean[:12]
+
+
+def _normalize_beats(raw_beats, fallback_focus="all"):
+    if not isinstance(raw_beats, list):
+        return []
+    beats = []
+    for raw in raw_beats[:6]:
+        if not isinstance(raw, dict):
+            continue
+        line = str(raw.get("line") or "").strip()[:120]
+        if not line:
+            continue
+        focus_raw = raw.get("focus", fallback_focus)
+        focus = str(focus_raw).strip() if focus_raw is not None else fallback_focus
+        if focus not in VALID_BEAT_FOCUSES:
+            focus = fallback_focus
+        label = str(raw.get("label") or "").strip()[:10]
+        hl = raw.get("highlightWords") or []
+        if not isinstance(hl, list):
+            hl = []
+        beats.append({
+            "label": label,
+            "focus": focus,
+            "line": line,
+            "highlightWords": [str(w).strip()[:16] for w in hl if str(w).strip()][:2],
+        })
+    return beats
+
+
 def template_video_draft(ark, model, item):
     instruction = EDITORIAL_RULES + drug_rule(item.get("drug", "")) + (
-        "【任务】写一条 16:9 信息图模板讲解形式的用药科普视频脚本，固定输出 5 页结构化卡片、右侧 AI 科普信息图提示词与配套口播。\n"
-        "【整体版式】左侧固定展示药师主讲人与底部免责声明，顶部展示主标题和 4 个章节条，右侧固定为 884×544 横向科普信息图卡片，底部为自动切分的口播字幕。\n"
-        "【5 页固定顺序】\n"
-        "1. 第 1 页 type=\"cover\"（封面破题页，chapterIndex=0）：点明患者最关心的问题，给出 3 个简短要点标签（每条不超过 10 字）与一句温和提示 footerNote。\n"
-        "2. 第 2 页 type=\"compare\"（双栏对比页，chapterIndex=1）：用 2 栏对比讲清核心区分（如两种常见做法、误区与正确做法、两种常见成分或剂型区别），每栏含 title、badge（2–8字）、3 条要点 points、footLabel 与 footValue，底部写一句说明书或医嘱提醒 footerNote。\n"
-        "3. 第 3 页 type=\"steps\"（步骤清单页，chapterIndex=2）：拆成 3 个实操步骤 steps（每步含 title、desc、key 一句核心原则），底部配 4 条简短自查标签 checks（每条不超过 8 字）。\n"
-        "4. 第 4 页 type=\"warning\"（风险警示页，chapterIndex=3）：列出 4 条需要及时就医或咨询药师的信号 warnings（每条含 title、desc），底部写一句护理或避坑提醒 footerNote。\n"
-        "5. 第 5 页 type=\"summary\"（结尾收口页，chapterIndex=3）：用 3 句口诀 points（每条含 title、desc）总结全片，footerNote 固定写「科普内容仅供参考，具体诊疗与用药请遵医嘱」。\n"
-        "【口播与字段要求】\n"
-        "- chapters：4 个顶部章节胶囊名，每个 2 到 5 字。\n"
-        "- disclaimer：全片底部免责声明，默认「科普内容仅供参考，具体诊疗与用药请遵医嘱」。\n"
+        "【任务】写一条 16:9 信息图模板讲解形式的用药科普视频脚本，固定输出 5 页结构化卡片、页内口播节拍（beats）与右侧精简科普信息图描述。\n"
+        "【整体版式与节奏】\n"
+        "- 左上角显示精简短主题 shortTitle（≤12 字，如「阿托伐他汀 · 服用时间」），不与第 1 页大标题重复；右上角显示 4 个章节胶囊。\n"
+        "- 每页内置 2–4 个口播节拍 beats，每个节拍 12–34 字（约 3–6 秒），对应一个画面聚焦重点（focus），让观众始终“讲到哪里、画面突出哪里”。\n"
+        "- 全片口播总长约 45–60 秒，紧凑利落，黄金前 8 秒必须直接回答核心问题。\n"
+        "【4 个章节与 5 页强语义绑定】\n"
+        "- chapters 必须固定为 4 个 2–5 字的阶段名，按顺序严格对应：\n"
+        "  * chapters[0] = 破题与辨析（覆盖第 1 页 cover 与第 2 页 compare，例如「先弄清楚」）\n"
+        "  * chapters[1] = 实操做法（对应第 3 页 steps，例如「怎么吃」）\n"
+        "  * chapters[2] = 风险与就医（对应第 4 页 warning，例如「注意啥」）\n"
+        "  * chapters[3] = 要点总结（对应第 5 页 summary，例如「记心里」）\n"
+        "【5 页固定顺序与节拍规则】\n"
+        "1. 第 1 页 type=\"cover\"，layoutMode=\"hook\"，chapterIndex=0（提问→直接给结论）：\n"
+        "   - 必含 question（≤18 字的直击痛点问句）、answer（≤30 字的明确直接结论，不打太极）、pills（2–3 条极短要点，每条 ≤10 字）、footerNote。\n"
+        "   - beats 固定 2 拍：第 1 拍 focus=\"question\"（2–3 秒抛出明确问题）；第 2 拍 focus=\"answer\"（紧接着直接给出明确答案与一句简明原理）。\n"
+        "2. 第 2 页 type=\"compare\"，layoutMode=\"focus\"，chapterIndex=0（左右双栏对比）：\n"
+        "   - columns 固定 2 栏（如常见疑问/误区 vs 更稳妥做法，或两类药品区分），每栏含 title（≤8 字）、badge（2–6 字）、2–3 条极短 points（每条 ≤14 字）、footLabel、footValue；底部写 footerNote。\n"
+        "   - beats 固定 3 拍：第 1 拍 focus=\"0\"（讲左栏）、第 2 拍 focus=\"1\"（讲右栏）、第 3 拍 focus=\"action\"（讲底部原则）。\n"
+        "3. 第 3 页 type=\"steps\"，layoutMode=\"focus\"，chapterIndex=1（横向等宽三步清单）：\n"
+        "   - steps 固定 3 步（每步含 title ≤8 字、desc ≤26 字、key 极短关键词 ≤12 字），底部 checks（3–4 条，每条 ≤8 字）。\n"
+        "   - beats 3–4 拍：依次 focus=\"0\"（第一步）、focus=\"1\"（第二步）、focus=\"2\"（第三步），可加第 4 拍 focus=\"all\"（一句总结回顾）。\n"
+        "4. 第 4 页 type=\"warning\"，layoutMode=\"focus\"，chapterIndex=2（2×2 风险警示与行动指令）：\n"
+        "   - warnings 固定 4 条（每条 title ≤10 字、desc ≤24 字），footerNote 写明需要采取的就医/咨询行动指令。\n"
+        "   - 安全红线：本页列举的是严重不良反应红旗信号，严禁在 warnings 或 footerNote 中写「不要因为担心就自行停药」或「不要自行停药」，必须明确提示立即就医评估并按说明书/医生指导处理。\n"
+        "   - beats 固定 3 拍：第 1 拍 focus=\"top\"（讲前两条信号）、第 2 拍 focus=\"bottom\"（讲后两条信号）、第 3 拍 focus=\"action\"（单独强调立即就医或咨询药师的行动指令）。\n"
+        "5. 第 5 页 type=\"summary\"，layoutMode=\"focus\"，chapterIndex=3（三条口诀 + 简洁收尾）：\n"
+        "   - points 固定 3 条口诀（每条 title ≤12 字、desc ≤22 字），outroNote（≤24 字的一句核心行动提醒，用于结尾定格），outroImagePrompt（≤120 字，结尾定格卡 16:9 画面描述：突出 outroNote 核心行动金句配 1 组温暖安心的医疗守护插画，不画医生头像、免责声明、二维码与点赞关注），footerNote 写「科普内容仅供参考，具体诊疗与用药请遵医嘱」。\n"
+        "   - beats 固定 4 拍：依次 focus=\"0\"（第一句）、focus=\"1\"（第二句）、focus=\"2\"（第三句）、第 4 拍 focus=\"outro\"（一句简洁收口，如「把这三句记住，用药更安心。」）。\n"
+        "【出图减负与口播要求】\n"
+        "- disclaimer：全片免责声明，默认「科普内容仅供参考，具体诊疗与用药请遵医嘱」。\n"
         "- 每页必含：\n"
-        "  * name：页签短标题（3 到 8 字，用于编辑页顶部 tab 切换）。\n"
-        "  * headline：卡片主标题（不超过 22 字）。\n"
+        "  * name：页签短标题（3–8 字）。\n"
+        "  * headline：卡片主标题（≤18 字，力求一行显示）。\n"
         "  * accentPhrase：headline 中需要变色强调的一个短语。\n"
-        "  * imagePrompt：右侧 884×544 带中文字的科普信息图画面描述（不超过 180 字），说明主体医学插画、信息布局与卡片上要展示的精简中文关键词，不画医生人物、顶部章节条、底部字幕、品牌标识和红十字。\n"
-        "  * line：35 到 75 字的完整口语口播，数字写成中文读法，无括号斜杠表情。\n"
-        "  * highlightWords：1 到 3 个出现在 line 中的关键词数组，用于字幕明黄高亮。\n"
+        "  * imagePrompt：严格 16:9 横屏（宽:高=16:9，对应标准蓝图 1360×765 比例）满画幅精简科普信息图画面描述（≤160 字），必须遵守「1 句主标题 + 1 组主视觉 + 最多 3–4 条极短关键词（每条 ≤10 字）」与严格分块构图（双栏等宽 / 三栏等宽 / 2×2 四格 / 纵向三条）；底色直接满画幅平铺至四边，绝不写外边框、上下留边条或悬浮大白卡套框，严禁堆砌长段解释小字，不画医生人物、顶部导航、底部字幕、免责声明、品牌标识和红十字。\n"
+        "  * beats：每拍含 label（2–5 字简短节拍名）、focus、line（口语，数字写成中文读法，无括号斜杠表情）、highlightWords（1–2 个出现在该拍 line 中的关键词）。\n"
+        "  * line：本页全部 beats 拼接后的完整口播；highlightWords：本页 1–3 个核心关键词。\n"
         "【输出】只返回 JSON："
-        '{"title":"不超过20字主标题","chapters":["章1","章2","章3","章4"],"disclaimer":"科普内容仅供参考，具体诊疗与用药请遵医嘱","slides":[...]}'
+        '{"title":"不超过20字完整标题","shortTitle":"不超过12字顶部短主题","chapters":["章1","章2","章3","章4"],"disclaimer":"科普内容仅供参考，具体诊疗与用药请遵医嘱","slides":[...]}'
     )
     data = {"主题与要求": item["topic"], "关联药品": item.get("drug", "")}
     result = ask_json(ark, model, instruction, data, 4096)
     try:
         title = string_field(result, "title", 80)
+        short_title = string_field(result, "shortTitle", 24, optional=True) or _default_short_title(title, item.get("drug", ""))
         chapters_raw = result["chapters"]
         if not isinstance(chapters_raw, list) or not 2 <= len(chapters_raw) <= 4:
             raise ValueError
@@ -363,26 +435,46 @@ def template_video_draft(ark, model, item):
             stype = raw.get("type")
             if stype not in ("cover", "compare", "steps", "warning", "summary"):
                 raise ValueError
-            line = string_field(raw, "line", 300)
+            beats = _normalize_beats(raw.get("beats"))
+            raw_line = string_field(raw, "line", 300, optional=bool(beats))
+            line = raw_line or "".join(b["line"] for b in beats)
+            if not line:
+                raise ValueError
             hl = raw.get("highlightWords") or []
             if not isinstance(hl, list):
                 hl = []
+            hl_list = [str(w).strip()[:16] for w in hl if str(w).strip()][:3]
+            if not hl_list and beats:
+                seen = []
+                for b in beats:
+                    for w in b.get("highlightWords", []):
+                        if w not in seen:
+                            seen.append(w)
+                hl_list = seen[:3]
             headline = string_field(raw, "headline", 60)
             name = string_field(raw, "name", 24, optional=True) or string_field(raw, "leftTop", 24, optional=True) or headline[:10]
             image_prompt = string_field(raw, "imagePrompt", 280, optional=True) or string_field(raw, "spotPrompt", 280, optional=True)
+            layout_mode = str(raw.get("layoutMode") or "").strip()
+            if layout_mode not in VALID_LAYOUT_MODES:
+                layout_mode = DEFAULT_LAYOUT_BY_TYPE.get(stype, "focus")
             slide = {
                 "type": stype,
+                "layoutMode": layout_mode,
                 "name": name,
                 "chapterIndex": min(len(chapters) - 1, max(0, int(raw.get("chapterIndex", min(idx, len(chapters) - 1))))),
                 "headline": headline,
                 "accentPhrase": string_field(raw, "accentPhrase", 24, optional=True),
                 "imagePrompt": image_prompt,
-                "highlightWords": [str(w).strip()[:16] for w in hl if str(w).strip()][:3],
+                "highlightWords": hl_list,
                 "line": line,
                 "seconds": max(5, math.ceil(spoken_length(line) / SPEECH_RATE + SHOT_PAUSE)),
             }
+            if beats:
+                slide["beats"] = beats
             if stype == "cover":
-                slide["lead"] = string_field(raw, "lead", 90, optional=True)
+                slide["question"] = string_field(raw, "question", 40, optional=True) or headline
+                slide["answer"] = string_field(raw, "answer", 80, optional=True) or string_field(raw, "lead", 90, optional=True)
+                slide["lead"] = string_field(raw, "lead", 90, optional=True) or slide["answer"]
                 pills = raw.get("pills") or []
                 slide["pills"] = [str(p).strip()[:20] for p in pills if str(p).strip()][:3]
                 slide["footerNote"] = string_field(raw, "footerNote", 120, optional=True)
@@ -440,8 +532,21 @@ def template_video_draft(ark, model, item):
                     }
                     for pt in pts[:3] if isinstance(pt, dict)
                 ]
+                slide["outroNote"] = string_field(raw, "outroNote", 60, optional=True)
+                slide["outroImagePrompt"] = string_field(raw, "outroImagePrompt", 280, optional=True)
                 slide["footerNote"] = string_field(raw, "footerNote", 120, optional=True) or disclaimer
             slides.append(slide)
+
+        # Guardrail: keep standard 5-slide 4-chapter decks aligned (cover+compare -> 0, steps -> 1, warning -> 2, summary -> 3)
+        if len(chapters) == 4 and [s["type"] for s in slides] == ["cover", "compare", "steps", "warning", "summary"]:
+            for slide, expected_chap in zip(slides, (0, 0, 1, 2, 3)):
+                slide["chapterIndex"] = expected_chap
     except (KeyError, TypeError, ValueError):
         raise ValueError("DeepSeek 未返回完整的模板分镜数据，可确认后重试生成。") from None
-    return {"title": title, "chapters": chapters, "disclaimer": disclaimer, "slides": slides}
+    return {
+        "title": title,
+        "shortTitle": short_title,
+        "chapters": chapters,
+        "disclaimer": disclaimer,
+        "slides": slides,
+    }

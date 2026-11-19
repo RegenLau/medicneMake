@@ -1,7 +1,9 @@
 import base64
+import shutil
 import struct
 import tempfile
 import unittest
+import wave
 import zlib
 from pathlib import Path
 from unittest import mock
@@ -22,6 +24,39 @@ def make_tiny_png(width=4, height=4, rgb=(24, 119, 232)):
         + chunk(b"IDAT", zlib.compress(row * height))
         + chunk(b"IEND", b"")
     )
+
+
+def make_cutout_rgba_png(width=128, height=72, hole_box=(8, 12, 32, 32), bg_rgb=(20, 90, 220)):
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    hx, hy, hw, hh = hole_box
+    cx, cy, r2 = hx + hw / 2.0, hy + hh / 2.0, (min(hw, hh) / 2.0) ** 2
+    rows = bytearray()
+    bg = bytes((*bg_rgb, 255))
+    clear = b"\x00\x00\x00\x00"
+    for y in range(height):
+        rows.append(0)
+        for x in range(width):
+            if (x - cx) ** 2 + (y - cy) ** 2 <= r2:
+                rows.extend(clear)
+            else:
+                rows.extend(bg)
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(bytes(rows)))
+        + chunk(b"IEND", b"")
+    )
+
+
+def make_silent_wav(path, seconds=2.0, rate=server.SPEECH_SAMPLE_RATE):
+    frames = round(seconds * rate)
+    with wave.open(str(path), "wb") as wav:
+        wav.setparams((1, 2, rate, 0, "NONE", "not compressed"))
+        wav.writeframes(b"\x00\x00" * frames)
+    return path
 
 
 class TemplateVideoTests(unittest.TestCase):
@@ -100,12 +135,12 @@ class TemplateVideoTests(unittest.TestCase):
         self.assertIn("儿童退烧封面信息图", out["slides"][0]["imagePrompt"])
         self.assertIn("布洛芬混悬液", seen["body"]["messages"][0]["content"])
 
-    def test_template_card_image_generation_demo_and_ark(self):
+    def test_template_card_image_generation_ark_and_rejects_demo(self):
         png_bytes = make_tiny_png()
         b64_png = base64.b64encode(png_bytes).decode("ascii")
-        demo_req = {
+        ark_req = {
             "id": "22222222-2222-4222-8222-222222222222",
-            "mode": "demo",
+            "mode": "ark",
             "kind": "images",
             "template": True,
             "styleReference": False,
@@ -123,16 +158,12 @@ class TemplateVideoTests(unittest.TestCase):
                 {
                     "prompt": "测试模板科普卡片图",
                     "variant": 1,
-                    "fallbackImage": "/assets/template-info-fever.jpg",
                 }
             ],
         }
-        server.setting_valid(demo_req)
-        demo_img = server.image_item(demo_req, demo_req["items"][0], 0)
-        self.assertEqual(demo_img, "/assets/template-info-fever.jpg")
-        self.assertTrue(server.media_path(demo_img).is_file())
+        with self.assertRaises(ValueError):
+            server.setting_valid({**ark_req, "mode": "demo"})
 
-        ark_req = {**demo_req, "mode": "ark"}
         captured = {}
         recorded = []
 
@@ -177,7 +208,7 @@ class TemplateVideoTests(unittest.TestCase):
 
                 payload = {
                     "id": "11111111-1111-4111-8111-111111111111",
-                    "mode": "demo",
+                    "mode": "ark",
                     "kind": "video",
                     "template": True,
                     "settings": {"voice": "无配音", "music": "calm", "ratio": "16:9"},
@@ -203,6 +234,462 @@ class TemplateVideoTests(unittest.TestCase):
                 self.assertTrue(mp4_file.is_file())
                 self.assertGreater(mp4_file.stat().st_size, 5000)
                 self.assertTrue(vtt_file.is_file())
+                self.assertEqual(out["shotSeconds"], [3, 3])
+
+    def test_dashscope_key_validation_and_multipart_upload(self):
+        with self.assertRaises(ValueError):
+            server.connect_dashscope("   ")
+        fake_policy = {
+            "upload_host": "https://dashscope-file-mgr.oss-cn-beijing.aliyuncs.com",
+            "upload_dir": "dashscope-instant/testdir",
+            "oss_access_key_id": "ak-test",
+            "policy": "policy-b64",
+            "signature": "sig-b64",
+            "x_oss_object_acl": "private",
+            "x_oss_forbid_overwrite": "true",
+        }
+        with mock.patch.object(server, "dashscope_get_policy", return_value=fake_policy), \
+             mock.patch.object(server, "persist_key") as mock_persist:
+            old_key = server.PAGE_DASHSCOPE_KEY
+            try:
+                status = server.connect_dashscope("sk-valid-key-123")
+                self.assertTrue(status["dashscopeKeyPresent"])
+                self.assertEqual(status["dashscopeKeySource"], "page")
+                mock_persist.assert_called_once_with("dashscope", "sk-valid-key-123")
+            finally:
+                server.PAGE_DASHSCOPE_KEY = old_key
+
+        captured = {}
+
+        class FakeResp:
+            status = 200
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["body"] = req.data
+            captured["ct"] = req.headers.get("Content-type") or req.headers.get("Content-Type")
+            return FakeResp()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            sample_file = Path(tmp) / "portrait.png"
+            sample_file.write_bytes(make_tiny_png())
+            with mock.patch.object(server, "dashscope_get_policy", return_value=fake_policy), \
+                 mock.patch.object(server, "urlopen", side_effect=fake_urlopen):
+                oss_url = server.dashscope_upload_file(sample_file, "liveportrait", key="sk-test")
+                self.assertTrue(oss_url.startswith("oss://dashscope-instant/testdir/"))
+                self.assertTrue(oss_url.endswith(".png"))
+                self.assertEqual(captured["url"], fake_policy["upload_host"])
+                self.assertIn(b'name="OSSAccessKeyId"', captured["body"])
+                self.assertIn(b'name="file"', captured["body"])
+                # Aliyun OSS requires the file field to appear after policy/key fields.
+                self.assertGreater(captured["body"].index(b'name="file"'), captured["body"].index(b'name="key"'))
+
+    def test_partition_avatar_chunks_keeps_whole_video_under_limit_and_splits_long_decks(self):
+        short_entries = [(None, 12.0)] * 5
+        self.assertEqual(len(server.partition_avatar_chunks(short_entries, max_seconds=server.VIDEORETALK_MAX_CHUNK_SECONDS)), 1)
+        long_entries = [(None, 40.0)] * 4  # 160s > 115s
+        chunks = server.partition_avatar_chunks(long_entries, max_seconds=server.VIDEORETALK_MAX_CHUNK_SECONDS)
+        self.assertEqual(len(chunks), 2)
+        self.assertEqual(len(chunks[0]), 2)
+        self.assertEqual(len(chunks[1]), 2)
+
+        # Balanced sub-splitting guarantees a single 25s WAV splits evenly under 18s (12.5s + 12.5s).
+        with tempfile.TemporaryDirectory() as tmp:
+            long_wav = make_silent_wav(Path(tmp) / "long.wav", seconds=25.0)
+            parts = server.split_wav_file_balanced(long_wav, 18.0, Path(tmp), "long")
+            self.assertEqual(len(parts), 2)
+            for p_wav, p_sec in parts:
+                self.assertTrue(p_wav.is_file())
+                self.assertAlmostEqual(p_sec, 12.5, places=1)
+
+    def test_template_avatar_whole_video_composite_multi_layout_and_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            media_dir = root / "media"
+            jobs_dir = root / "jobs"
+            cache_dir = root / "avatar_cache"
+            for d in (media_dir, jobs_dir, cache_dir):
+                d.mkdir()
+
+            # Build two RGBA cutout PNGs with holes at two different positions (simulating explain + outro layouts).
+            cutout_1 = "data:image/png;base64," + base64.b64encode(
+                make_cutout_rgba_png(128, 72, hole_box=(8, 12, 32, 32), bg_rgb=(20, 90, 220))
+            ).decode("ascii")
+            cutout_2 = "data:image/png;base64," + base64.b64encode(
+                make_cutout_rgba_png(128, 72, hole_box=(48, 8, 24, 24), bg_rgb=(20, 90, 220))
+            ).decode("ascii")
+            avatar_png = "data:image/png;base64," + base64.b64encode(make_tiny_png(64, 64, (220, 40, 40))).decode("ascii")
+
+            # Generate a real bright-red 256x256 8-second MP4 acting as Bailian output.
+            mock_avatar_src = root / "red_avatar.mp4"
+            server.run_ffmpeg(
+                "-f", "lavfi", "-i", "color=c=0xee2222:s=256x256:r=24:d=8",
+                "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", mock_avatar_src,
+            )
+
+            with mock.patch.object(server, "MEDIA", media_dir), \
+                 mock.patch.object(server, "JOBS", jobs_dir), \
+                 mock.patch.object(server, "AVATAR_CACHE", cache_dir), \
+                 mock.patch.object(server, "current_speech_key", return_value="speech-test"), \
+                 mock.patch.object(server, "current_dashscope_key", return_value="dash-test"):
+                u1 = server.save_uploaded_frame({"dataUrl": cutout_1})["url"]
+                u2 = server.save_uploaded_frame({"dataUrl": cutout_2})["url"]
+                u_avatar = server.save_uploaded_frame({"dataUrl": avatar_png})["url"]
+
+                payload = {
+                    "id": "33333333-3333-4333-8333-333333333333",
+                    "mode": "ark",
+                    "kind": "video",
+                    "template": True,
+                    "settings": {"voice": "流畅女声 2.0", "music": "off", "ratio": "16:9"},
+                    "avatar": {
+                        "enabled": True,
+                        "model": "videoretalk",
+                        "presenter": "digital",
+                        "image": u_avatar,
+                        "rect": {"x": 80, "y": 120, "size": 320},
+                    },
+                    "style": 0,
+                    "items": [
+                        {
+                            "line": "第一页数字人测试口播。",
+                            "seconds": 4,
+                            "cues": [{"image": u1, "weight": 1, "avatarRect": {"x": 80, "y": 120, "size": 320}}],
+                        },
+                        {
+                            "line": "第二页换版式继续连续口播。",
+                            "seconds": 4,
+                            "cues": [{"image": u2, "weight": 1, "avatarRect": {"x": 480, "y": 80, "size": 240}}],
+                        },
+                    ],
+                }
+                server.setting_valid(payload)
+
+                # Retired liveportrait model must fail with clear guidance.
+                with self.assertRaises(ValueError):
+                    server.setting_valid({**payload, "avatar": {**payload["avatar"], "model": "liveportrait"}})
+
+                # Missing dashscope key must fail validation when voiced & avatar enabled.
+                with mock.patch.object(server, "current_dashscope_key", return_value=""):
+                    with self.assertRaises(ValueError):
+                        server.setting_valid(payload)
+
+                avatar_calls = []
+
+                def fake_shot_audio(settings, line, folder, speech_key, index=0, record=None):
+                    wav_path = make_silent_wav(folder / f"speech-{index}.wav", seconds=3.0)
+                    return wav_path, 3.0
+
+                def fake_avatar_clip(model, source_path, audio_path, params, dest, key, state, save, **kwargs):
+                    avatar_calls.append({"model": model, "source": source_path, "audio": audio_path, "params": params})
+                    if model == "videoretalk":
+                        # Must have built a real 640x640 MP4 base video and set video_extension=True.
+                        self.assertEqual(source_path.suffix, ".mp4")
+                        self.assertTrue(source_path.is_file())
+                        self.assertTrue(params.get("video_extension"))
+                    else:
+                        self.assertEqual(source_path.suffix, ".png")
+                        self.assertEqual(params.get("resolution"), "480P")
+                    shutil.copyfile(mock_avatar_src, dest)
+                    if kwargs.get("on_success"):
+                        kwargs["on_success"]({"usage": {"video_duration": 7.1}})
+
+                costs_1 = []
+                with mock.patch.object(server, "shot_audio", side_effect=fake_shot_audio), \
+                     mock.patch.object(server, "dashscope_detect_face", return_value={"check_pass": True}) as mock_detect, \
+                     mock.patch.object(server, "dashscope_avatar_clip", side_effect=fake_avatar_clip):
+                    job = {"id": payload["id"], "progress": "", "remote": {}}
+                    out = server.render_video(payload, job, lambda: None, "speech-test", lambda k, r: costs_1.append((k, r)), "dash-test")
+                    self.assertEqual(len(avatar_calls), 1)
+                    self.assertEqual(mock_detect.call_count, 0)  # videoretalk does not call wan2.2-s2v-detect
+                    self.assertTrue(any(r["model"] == "videoretalk" and r["amount"] == "0.5680" for _, r in costs_1))
+
+                    mp4_file = media_dir / (payload["id"] + ".mp4")
+                    self.assertTrue(mp4_file.is_file())
+                    self.assertEqual(out["shotSeconds"], [4, 4])
+
+                    # Sample frame at t=1.0s (slide 1) and verify red avatar shows through circle hole while outside stays blue.
+                    raw_rgb = root / "frame1.rgb"
+                    server.run_ffmpeg(
+                        "-ss", "1.0", "-i", mp4_file, "-frames:v", 1,
+                        "-f", "rawvideo", "-pix_fmt", "rgb24", raw_rgb,
+                    )
+                    frame_bytes = raw_rgb.read_bytes()
+                    def px(x, y):
+                        off = (y * 1280 + x) * 3
+                        return frame_bytes[off], frame_bytes[off + 1], frame_bytes[off + 2]
+
+                    inside_hole = px(240, 280)   # center of hole_box (80..400, 120..440)
+                    outside_hole = px(1000, 360) # right infographic area
+                    self.assertGreater(inside_hole[0], 180)
+                    self.assertLess(inside_hole[2], 80)
+                    self.assertGreater(outside_hole[2], 160)
+                    self.assertLess(outside_hole[0], 80)
+
+                    # Second run with identical audio + avatar must hit AVATAR_CACHE with 0 remote calls and ¥0 cost.
+                    payload2 = {
+                        **payload,
+                        "id": "44444444-4444-4444-8444-444444444444",
+                        "settings": {**payload["settings"], "music": "calm"},
+                        "items": [
+                            {**payload["items"][0]},
+                            {**payload["items"][1], "cues": [{"image": u1, "weight": 1, "avatarRect": {"x": 80, "y": 120, "size": 320}}]},
+                        ],
+                    }
+                    costs_2 = []
+                    job2 = {"id": payload2["id"], "progress": "", "remote": {}}
+                    server.render_video(payload2, job2, lambda: None, "speech-test", lambda k, r: costs_2.append((k, r)), "dash-test")
+                    self.assertEqual(len(avatar_calls), 1)
+                    self.assertTrue(any(r["model"] == "videoretalk" and r["amount"] == "0" for _, r in costs_2))
+                    self.assertTrue((media_dir / (payload2["id"] + ".mp4")).is_file())
+
+                    # Third run with wan2.2-s2v calls wan2.2-s2v-detect + wan2.2-s2v.
+                    payload3 = {
+                        **payload,
+                        "id": "55555555-5555-4555-8555-555555555555",
+                        "avatar": {**payload["avatar"], "model": "wan2.2-s2v", "resolution": "480P", "presenter": "cartoon"},
+                    }
+                    costs_3 = []
+                    job3 = {"id": payload3["id"], "progress": "", "remote": {}}
+                    server.render_video(payload3, job3, lambda: None, "speech-test", lambda k, r: costs_3.append((k, r)), "dash-test")
+                    self.assertEqual(len(avatar_calls), 2)
+                    self.assertEqual(mock_detect.call_count, 1)
+                    self.assertTrue(any(r["model"] == "wan2.2-s2v" and r["amount"] == "3.5500" for _, r in costs_3))
+
+    def test_template_video_draft_beats_chapters_and_safety_rules(self):
+        five_slide_resp = {
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {
+                    "content": """{
+                        "title": "阿托伐他汀一定要晚上吃吗",
+                        "shortTitle": "阿托伐他汀 · 服用时间",
+                        "chapters": ["先弄清楚", "怎么吃", "注意啥", "记心里"],
+                        "slides": [
+                            {
+                                "type": "cover",
+                                "layoutMode": "hook",
+                                "name": "一定要晚上吃吗",
+                                "chapterIndex": 0,
+                                "headline": "阿托伐他汀，一定要晚上吃吗？",
+                                "question": "阿托伐他汀，一定要晚上吃吗？",
+                                "answer": "一般任意时间均可服用，每天固定时间更关键",
+                                "pills": ["任意时间均可", "每天固定时间"],
+                                "beats": [
+                                    {"label": "核心疑问", "focus": "question", "line": "阿托伐他汀，一定要晚上吃吗？", "highlightWords": ["晚上吃"]},
+                                    {"label": "直接结论", "focus": "answer", "line": "一般一天中任意时间均可服用，每天固定更关键。", "highlightWords": ["任意时间"]}
+                                ]
+                            },
+                            {
+                                "type": "compare",
+                                "name": "早晚区别",
+                                "chapterIndex": 1,
+                                "headline": "短效与长效他汀有区别",
+                                "columns": [
+                                    {"title": "短效他汀", "points": ["常建议晚间服"]},
+                                    {"title": "长效他汀", "points": ["固定时间即可"]}
+                                ],
+                                "beats": [
+                                    {"label": "短效", "focus": "0", "line": "短效他汀常建议晚间吃。"},
+                                    {"label": "长效", "focus": "1", "line": "长效他汀固定时间吃即可。"}
+                                ]
+                            },
+                            {
+                                "type": "steps",
+                                "name": "三步清单",
+                                "chapterIndex": 2,
+                                "headline": "按时服药三步清单",
+                                "steps": [
+                                    {"title": "固定时间", "desc": "绑定固定生活动作", "key": "每天同一时间"},
+                                    {"title": "设好提醒", "desc": "用分药盒或闹钟", "key": "防遗忘漏服"},
+                                    {"title": "复诊带清单", "desc": "合用新药先沟通", "key": "带齐用药清单"}
+                                ],
+                                "beats": [
+                                    {"label": "第一步", "focus": "0", "line": "第一步，固定每天同一时间。"},
+                                    {"label": "第二步", "focus": "1", "line": "第二步，设好闹钟和分药盒。"},
+                                    {"label": "第三步", "focus": "2", "line": "第三步，复诊带齐用药清单。"}
+                                ]
+                            },
+                            {
+                                "type": "warning",
+                                "name": "及时就医",
+                                "chapterIndex": 3,
+                                "headline": "出现这些情况尽快就医",
+                                "warnings": [
+                                    {"title": "肌肉酸痛无力", "desc": "持续酸痛或发软"},
+                                    {"title": "尿色变深", "desc": "尿液呈浓茶色"},
+                                    {"title": "持续恶心", "desc": "右上腹不适"},
+                                    {"title": "皮肤发黄", "desc": "眼白或皮肤发黄"}
+                                ],
+                                "footerNote": "出现严重信号请立即就医评估。",
+                                "beats": [
+                                    {"label": "肌痛尿色", "focus": "top", "line": "如果肌肉酸痛无力或尿色变深。"},
+                                    {"label": "肝功异常", "focus": "bottom", "line": "或持续恶心皮肤发黄。"},
+                                    {"label": "立即就医", "focus": "action", "line": "请立即就医评估。"}
+                                ]
+                            },
+                            {
+                                "type": "summary",
+                                "name": "三句口诀",
+                                "chapterIndex": 3,
+                                "headline": "三句口诀记住要点",
+                                "points": [
+                                    {"title": "时间看医嘱", "desc": "按说明书核对"},
+                                    {"title": "每天固定吃", "desc": "减少漏服"},
+                                    {"title": "异常早就医", "desc": "及时联系医生药师"}
+                                ],
+                                "outroNote": "固定时间服药，有异常及时就医问药师",
+                                "outroImagePrompt": "温暖安心的16:9结尾收口卡片，居中大字展示固定时间服药提醒，配健康盾牌与药盒扁平插画",
+                                "beats": [
+                                    {"label": "第一句", "focus": "0", "line": "第一句，时间按医嘱来。"},
+                                    {"label": "第二句", "focus": "1", "line": "第二句，每天固定时间吃。"},
+                                    {"label": "第三句", "focus": "2", "line": "第三句，异常及时就医。"},
+                                    {"label": "收尾", "focus": "outro", "line": "记住这三句，用药更安心。"}
+                                ]
+                            }
+                        ]
+                    }"""
+                },
+            }],
+        }
+        seen = {}
+
+        def fake_ds(path, body, **kwargs):
+            seen["prompt"] = body["messages"][0]["content"]
+            return five_slide_resp
+
+        out = draft_content.template_video_draft(
+            fake_ds, "deepseek-flash", {"topic": "降脂药他汀，为什么常建议晚上吃？", "drug": "阿托伐他汀钙片"}
+        )
+        self.assertEqual(out["shortTitle"], "阿托伐他汀 · 服用时间")
+        # Guardrail must normalize misaligned [0, 1, 2, 3, 3] into [0, 0, 1, 2, 3]
+        self.assertEqual([s["chapterIndex"] for s in out["slides"]], [0, 0, 1, 2, 3])
+        self.assertEqual(out["slides"][0]["layoutMode"], "hook")
+        self.assertEqual(out["slides"][0]["question"], "阿托伐他汀，一定要晚上吃吗？")
+        self.assertIn("任意时间", out["slides"][0]["answer"])
+        self.assertEqual(len(out["slides"][2]["beats"]), 3)
+        self.assertIn("第一步", out["slides"][2]["line"])
+        self.assertEqual(out["slides"][4]["outroNote"], "固定时间服药，有异常及时就医问药师")
+        self.assertIn("结尾收口卡片", out["slides"][4]["outroImagePrompt"])
+        self.assertIn("outroImagePrompt", seen["prompt"])
+        self.assertIn("黄金前 8 秒", seen["prompt"])
+        self.assertIn("严禁在 warnings 或 footerNote 中写", seen["prompt"])
+
+    def test_template_video_xfade_transitions_and_validation(self):
+        png_a = "data:image/png;base64," + base64.b64encode(make_tiny_png(16, 16, (20, 102, 204))).decode("ascii")
+        png_b = "data:image/png;base64," + base64.b64encode(make_tiny_png(16, 16, (230, 89, 45))).decode("ascii")
+        png_c = "data:image/png;base64," + base64.b64encode(make_tiny_png(16, 16, (30, 142, 90))).decode("ascii")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            media_dir = root / "media"
+            jobs_dir = root / "jobs"
+            media_dir.mkdir()
+            jobs_dir.mkdir()
+            with mock.patch.object(server, "MEDIA", media_dir), mock.patch.object(server, "JOBS", jobs_dir):
+                ua = server.save_uploaded_frame({"dataUrl": png_a})["url"]
+                ub = server.save_uploaded_frame({"dataUrl": png_b})["url"]
+                uc = server.save_uploaded_frame({"dataUrl": png_c})["url"]
+
+                payload = {
+                    "id": "55555555-5555-4555-8555-555555555555",
+                    "mode": "ark",
+                    "kind": "video",
+                    "template": True,
+                    "settings": {"voice": "无配音", "music": "off", "ratio": "16:9"},
+                    "style": 0,
+                    "items": [
+                        {
+                            "line": "第一步，固定时间。第二步，设好提醒。第三步，复诊沟通。",
+                            "seconds": 6,
+                            "tailPause": 0.55,
+                            "cues": [
+                                {"image": ua, "weight": 8, "transition": "cut"},
+                                {"image": ub, "weight": 8, "transition": "fade"},
+                                {"image": uc, "weight": 8, "transition": "cut"},
+                            ],
+                        },
+                        {
+                            "line": "把这三句记住，用药更安心。",
+                            "seconds": 4,
+                            "tailPause": 1.15,
+                            "cues": [
+                                {"image": ub, "weight": 10, "transition": "cut"},
+                                {"image": uc, "weight": 10, "transition": "outro"},
+                            ],
+                        },
+                    ],
+                }
+                server.setting_valid(payload)
+
+                # Invalid transition and tailPause must be rejected
+                bad_trans = {
+                    **payload,
+                    "items": [{**payload["items"][0], "cues": [{"image": ua, "weight": 1, "transition": "zoom"}]}],
+                }
+                with self.assertRaises(ValueError):
+                    server.setting_valid(bad_trans)
+                bad_pause = {
+                    **payload,
+                    "items": [{**payload["items"][0], "tailPause": 9.0}],
+                }
+                with self.assertRaises(ValueError):
+                    server.setting_valid(bad_pause)
+
+                job = {"id": payload["id"], "progress": ""}
+                out = server.render_video(payload, job, lambda: None, "")
+                mp4_file = media_dir / (payload["id"] + ".mp4")
+                self.assertTrue(mp4_file.is_file())
+                self.assertGreater(mp4_file.stat().st_size, 5000)
+                self.assertEqual(out["shotSeconds"], [6, 4])
+
+    def test_render_template_mp4_with_progress_ring(self):
+        png_bytes = make_tiny_png(16, 16, (237, 245, 253))
+        data_url = "data:image/png;base64," + base64.b64encode(png_bytes).decode("ascii")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            media_dir = root / "media"
+            jobs_dir = root / "jobs"
+            media_dir.mkdir()
+            jobs_dir.mkdir()
+            with mock.patch.object(server, "MEDIA", media_dir), mock.patch.object(server, "JOBS", jobs_dir):
+                u = server.save_uploaded_frame({"dataUrl": data_url})["url"]
+                ring_a = {"x": 60, "y": 160, "size": 176, "stroke": 6, "color": "#e67835"}
+                ring_b = {"x": 82, "y": 140, "size": 104, "stroke": 4, "color": "#e67835"}
+                payload = {
+                    "id": "55555555-5555-4555-8555-555555555555",
+                    "mode": "ark",
+                    "kind": "video",
+                    "template": True,
+                    "settings": {"voice": "无配音", "music": "off", "ratio": "16:9"},
+                    "style": 0,
+                    "items": [
+                        {
+                            "line": "第一页测试。",
+                            "seconds": 3,
+                            "cues": [
+                                {"image": u, "weight": 1, "transition": "cut", "progressRing": ring_a},
+                                {"image": u, "weight": 1, "transition": "fade", "progressRing": ring_b},
+                            ],
+                        },
+                        {
+                            "line": "第二页测试。",
+                            "seconds": 3,
+                            "cues": [
+                                {"image": u, "weight": 1, "transition": "cut", "progressRing": ring_a},
+                            ],
+                        },
+                    ],
+                }
+                server.setting_valid(payload)
+                job = {"id": payload["id"], "progress": ""}
+                out = server.render_video(payload, job, lambda: None, "")
+                mp4_file = media_dir / (payload["id"] + ".mp4")
+                self.assertTrue(mp4_file.is_file())
+                self.assertGreater(mp4_file.stat().st_size, 5000)
                 self.assertEqual(out["shotSeconds"], [3, 3])
 
 

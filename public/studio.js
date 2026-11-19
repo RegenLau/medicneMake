@@ -85,7 +85,11 @@ const paths = {
   book: '<path d="M3 4.5c4-1 6-.7 9 1.5 3-2.2 5-2.5 9-1.5v14c-4-1-6-.6-9 1.5-3-2.1-5-2.5-9-1.5zM12 6v14"/>',
   film: '<rect x="3" y="5" width="18" height="15" rx="2"/><path d="m3 9 17-4M6 4l3 4m3-5 3 4m-4 5 4 2-4 3z"/>',
   arrow: '<path d="M4 12h15m-6-6 6 6-6 6"/>',
+  arrowLeft: '<path d="M19 12H5m6-6-6 6 6 6"/>',
+  arrowRight: '<path d="M5 12h14m-6-6 6 6-6 6"/>',
   chevron: '<path d="m9 6 6 6-6 6"/>',
+  prev: '<path d="m15 6-6 6 6 6"/>',
+  next: '<path d="m9 6 6 6-6 6"/>',
   back: '<path d="m14 5-7 7 7 7"/>',
   settings:
     '<path d="M3 6h5m4 0h9M3 12h10m4 0h4M3 18h3m4 0h11"/><circle cx="10" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="18" r="2"/>',
@@ -183,9 +187,29 @@ let data = loadState(),
   retryPayload = null,
   exampleCursor = 0;
 
-const defaultVoice = "流畅女声 2.0";
-const voiceOptions = [defaultVoice, ["女声", "小何 2.0"], ["男声", "云舟 2.0"], "无配音"];
-const musicLabels = { off: "无背景音乐", auto: "自动搭配", calm: "舒缓钢琴", light: "轻快木琴" };
+const defaultVoice = "男声";
+const voiceOptions = [["男声", "男声 · 云舟 2.0"], "流畅女声 2.0", ["女声", "小何 2.0"], "无配音"];
+const voiceLabels = Object.fromEntries(voiceOptions.map((item) => Array.isArray(item) ? item : [item, item]));
+const voiceLabel = (v) => voiceLabels[v] || v || "";
+const musicLabels = { auto: "自动搭配", off: "无背景音乐", calm: "舒缓钢琴", light: "轻快木琴" };
+const avatarModeOptions = [
+  ["videoretalk", "声动人像 VideoRetalk（整片省钱 · ¥0.08/秒）"],
+  ["wan2.2-s2v", "万相数字人 Wan2.2-S2V（表情生动 · ¥0.50/秒）"],
+  ["static", "静态肖像（免费）"],
+];
+const avatarResolutionOptions = [
+  ["480P", "480P（¥0.50/秒 · 圆框推荐）"],
+  ["720P", "720P（¥0.90/秒）"],
+];
+function resolveAvatarMode(raw) {
+  if (raw === "static" || raw === "videoretalk" || raw === "wan2.2-s2v") return raw;
+  return "videoretalk";
+}
+function avatarRatePerSecond(mode, resolution) {
+  if (mode === "videoretalk") return 0.08;
+  if (mode === "wan2.2-s2v") return resolution === "720P" ? 0.9 : 0.5;
+  return 0;
+}
 
 const defaults = {
   mode: "ark",
@@ -198,8 +222,24 @@ const defaults = {
   duration: null,
   watermark: true,
   voice: defaultVoice,
-  music: "off",
+  music: "auto",
+  musicModel: "music-2.6",
+  avatarMode: "videoretalk",
+  avatarResolution: "480P",
 };
+
+function musicModelMap() {
+  if (config?.musicModels && Object.keys(config.musicModels).length) return config.musicModels;
+  return { "music-2.6": ["MiniMax Music 2.6（推荐 · 纯音乐）", "1.08"] };
+}
+
+function resolveMusicModel(s) {
+  const map = musicModelMap();
+  const chosen = s?.musicModel;
+  if (chosen && Object.prototype.hasOwnProperty.call(map, chosen)) return chosen;
+  if (config?.musicModel && Object.prototype.hasOwnProperty.call(map, config.musicModel)) return config.musicModel;
+  return Object.keys(map)[0];
+}
 
 function textModelMap() {
   if (config?.textModels && Object.keys(config.textModels).length) return config.textModels;
@@ -219,16 +259,31 @@ function textModelLabel(id) {
   return textModelMap()[id] || id || "";
 }
 
-data.settings = { ...defaults, ...data.settings };
+data.settings = { ...defaults, ...data.settings, mode: "ark" };
+if (data.settings.avatarMode === "liveportrait") {
+  data.settings.avatarMode = "videoretalk";
+}
 data.works ||= [];
 const watching = new Set();
 const submitting = new Set();
+const generatingMusicWorks = new Set();
+const musicHintDrafts = new WeakMap();
 const selectedScenes = new WeakMap();
+const storyboardTabs = new WeakMap();
 const rejectedPortraitFrames = new WeakMap();
 const maxArticleImages = 16;
 
 // Resume image requests saved by previous sessions.
+let migratedLegacyMode = false;
 for (const w of data.works) {
+  if (w.settings && w.settings.mode !== "ark") {
+    w.settings.mode = "ark";
+    migratedLegacyMode = true;
+  }
+  if (w.settings && w.settings.avatarMode === "liveportrait") {
+    w.settings.avatarMode = "videoretalk";
+    migratedLegacyMode = true;
+  }
   if (w.job?.target === "regenerate" && w.blocks?.[w.job.index]) {
     w.blocks[w.job.index].job = w.job;
     w.job = null;
@@ -239,23 +294,16 @@ for (const w of data.works) {
   }
 }
 
-if (!data.fluentVoiceDefaultApplied) {
+if (!data.yunzhouVoiceAutoMusicDefaultApplied) {
   data.settings.voice = defaultVoice;
+  data.settings.music = defaults.music;
   data.fluentVoiceDefaultApplied = true;
-  save();
-}
-
-if (!data.arkDefaultApplied) {
-  data.settings.mode = "ark";
-  data.arkDefaultApplied = true;
-  save();
-}
-
-if (!data.musicOffDefaultApplied) {
-  if (data.settings.music === "auto") data.settings.music = defaults.music;
   data.musicOffDefaultApplied = true;
+  data.yunzhouVoiceAutoMusicDefaultApplied = true;
   save();
 }
+
+if (migratedLegacyMode) save();
 
 function save() {
   localStorage.setItem(storeKey, JSON.stringify(data));
@@ -290,7 +338,7 @@ function workMedia(w) {
   return [
     w.video?.url,
     ...(w.blocks ?? []).map((block) => block.image),
-    ...(w.templateDeck?.slides ?? []).map((slide) => slide.contentImage),
+    ...(w.templateDeck?.slides ?? []).flatMap((slide) => [slide.contentImage, slide.outroImage]),
     w.templateDeck?.pharmacist?.avatarImage,
   ].filter((url) => url?.startsWith("/media/"));
 }
@@ -299,7 +347,7 @@ function workJobIds(w) {
   return [
     w.job,
     ...(w.blocks ?? []).map((block) => block.job),
-    ...(w.templateDeck?.slides ?? []).map((slide) => slide.job),
+    ...(w.templateDeck?.slides ?? []).flatMap((slide) => [slide.job, slide.outroJob]),
   ].flatMap((job) => job?.payload?.id ? [job.payload.id] : []);
 }
 
@@ -326,7 +374,9 @@ function renderWorkCosts(w, result) {
     '<p class="cost-sources small">' + esc(result.priceDate) + ' 核对单价' +
     (result.deepseekPrice ? '<a href="' + esc(result.deepseekPrice) + '" target="_blank" rel="noopener noreferrer">DeepSeek 价格</a>' : '') +
     '<a href="' + esc(result.arkPrice) + '" target="_blank" rel="noopener noreferrer">方舟价格</a>' +
-    '<a href="' + esc(result.speechPrice) + '" target="_blank" rel="noopener noreferrer">语音价格</a></p>';
+    '<a href="' + esc(result.speechPrice) + '" target="_blank" rel="noopener noreferrer">语音价格</a>' +
+    (result.dashscopePrice ? '<a href="' + esc(result.dashscopePrice) + '" target="_blank" rel="noopener noreferrer">百炼价格</a>' : '') +
+    (result.minimaxPrice ? '<a href="' + esc(result.minimaxPrice) + '" target="_blank" rel="noopener noreferrer">MiniMax 价格</a>' : '') + '</p>';
 }
 
 async function openWorkCosts(w) {
@@ -352,14 +402,396 @@ async function openWorkCosts(w) {
 }
 
 function videoMusic(w) {
-  if (!config.videoBackgroundMusic) return "off";
-  const choice = w.settings.music ?? defaults.music;
-  if (choice !== "auto") return choice;
-  const topic = `${w.title} ${w.topic}`;
-  const narration = w.blocks.map((block) => block.line).join(" ");
-  if (/急救|急症|误服|中毒|呼吸困难|昏迷|胸痛|心梗|卒中|严重不良反应/.test(`${topic} ${narration}`)) return "calm";
-  return /清单|整理|出门|认识|记录|读懂|怎么看|怎么读/.test(topic) ? "light" : "calm";
+  if (!config?.videoBackgroundMusic) return "off";
+  return w?.settings?.music ?? defaults.music;
 }
+
+function workMusicLines(w) {
+  if (!w) return [];
+  if (TemplateStudio.isTemplateVideo(w) && Array.isArray(w.templateDeck?.slides)) {
+    return w.templateDeck.slides.map((s) => String(s.line || "").trim()).filter(Boolean);
+  }
+  return (w.blocks || []).map((b) => String(b.line || "").trim()).filter(Boolean);
+}
+
+function workMusicSignature(w) {
+  if (!w) return "";
+  const title = (TemplateStudio.isTemplateVideo(w) ? w.templateDeck?.title : "") || w.title || "";
+  return JSON.stringify([title.trim(), (w.topic || "").trim(), (w.drug || "").trim(), workMusicLines(w)]);
+}
+
+function isCustomMusicStale(w) {
+  return Boolean(w?.customMusic?.url && w.customMusic.clientSig && w.customMusic.clientSig !== workMusicSignature(w));
+}
+
+function workMusicContext(w, { hint, nextVariant = false } = {}) {
+  const title = (TemplateStudio.isTemplateVideo(w) ? w.templateDeck?.title : "") || w?.title || "";
+  const draftHint = hint !== undefined ? hint : (musicHintDrafts.get(w) ?? w?.customMusic?.hint ?? "");
+  const prev = w?.customMusic || null;
+  const variant = nextVariant ? ((Number(prev?.variant) || 0) + (prev ? 1 : 0)) : (Number(prev?.variant) || 0);
+  return {
+    title: title.trim(),
+    topic: (w?.topic || "").trim(),
+    drug: (w?.drug || "").trim(),
+    lines: workMusicLines(w),
+    hint: String(draftHint || "").trim(),
+    variant,
+    ...(nextVariant && prev
+      ? { previous: { styleLabel: prev.styleLabel, mood: prev.mood, bpm: prev.bpm } }
+      : {}),
+    musicModel: resolveMusicModel(w?.settings || data.settings),
+    textModel: resolveTextModel(w?.settings || data.settings),
+    ...(w?.id ? { workId: w.id } : {}),
+  };
+}
+
+function videoMusicSettings(w) {
+  const choice = videoMusic(w);
+  const musicModel = resolveMusicModel(w?.settings || data.settings);
+  if (choice === "auto" && w?.customMusic?.url) {
+    return {
+      music: "auto",
+      musicModel,
+      musicUrl: w.customMusic.url,
+      musicMeta: w.customMusic,
+    };
+  }
+  return { music: choice, ...(choice === "auto" ? { musicModel } : {}) };
+}
+
+function musicLibrary() {
+  return Array.isArray(config?.musicLibrary) ? config.musicLibrary : [];
+}
+
+function findLibraryTrack(choice) {
+  if (typeof choice !== "string" || !choice.startsWith("library:")) return null;
+  const id = choice.slice("library:".length);
+  return musicLibrary().find((t) => t.id === id) || null;
+}
+
+function musicFieldHtml(currentVal, label = "配乐方式") {
+  const lib = musicLibrary();
+  const builtins = Object.entries(musicLabels)
+    .map(([v, text]) => `<option value="${esc(v)}"${v === currentVal ? " selected" : ""}>${esc(text)}</option>`)
+    .join("");
+  const savedGroup = lib.length
+    ? '<optgroup label="项目已存配乐（免费复用）">' +
+      lib
+        .map((t) => {
+          const val = "library:" + t.id;
+          const dur = t.duration ? ` · ${Math.round(t.duration)}秒` : "";
+          const mood = t.mood ? ` · ${t.mood}` : "";
+          return `<option value="${esc(val)}"${val === currentVal ? " selected" : ""}>${esc(t.title + mood + dur)}</option>`;
+        })
+        .join("") +
+      "</optgroup>"
+    : "";
+  return `<label class="field">${esc(label)}<select data-setting="music">${builtins}${savedGroup}</select></label>`;
+}
+
+function musicSummaryLabel(w) {
+  const choice = videoMusic(w);
+  if (choice === "off") return musicLabels.off;
+  if (choice.startsWith("library:")) {
+    const track = findLibraryTrack(choice);
+    return track ? `配乐：${track.title}` : "配乐：项目已存配乐";
+  }
+  if (choice === "auto") {
+    return w?.customMusic?.title ? `配乐：${w.customMusic.title}` : "配乐：自动搭配（MiniMax AI）";
+  }
+  return `配乐：${musicLabels[choice] || choice}`;
+}
+
+function videoMusicBadge(video) {
+  if (!video?.music || video.music === "off") return "";
+  if (video.music.startsWith("library:")) {
+    const track = findLibraryTrack(video.music);
+    const title = video.musicMeta?.title || track?.title;
+    return title ? `配乐：${title}` : "项目配乐";
+  }
+  if (video.music === "auto") {
+    return video.musicMeta?.title ? `配乐：${video.musicMeta.title}` : "MiniMax AI 配乐";
+  }
+  return musicLabels[video.music] || "";
+}
+
+function renderLibraryPickerHtml(choice) {
+  const lib = musicLibrary();
+  if (!lib.length) return "";
+  return (
+    '<label class="field bgm-reuse-field">复用项目已存配乐 <small>（共 ' + lib.length + ' 首 · 已存项目目录 · 免费复用）</small>' +
+    '<select data-reuse-bgm="1">' +
+    '<option value=""' + (!choice.startsWith("library:") ? " selected" : "") + ">— 选择已有配乐直接复用 —</option>" +
+    lib
+      .map((t) => {
+        const val = "library:" + t.id;
+        const suffix = [t.mood, t.duration ? Math.round(t.duration) + "秒" : ""].filter(Boolean).join(" · ");
+        return `<option value="${esc(val)}"${val === choice ? " selected" : ""}>${esc(t.title + (suffix ? "（" + suffix + "）" : ""))}</option>`;
+      })
+      .join("") +
+    "</select></label>"
+  );
+}
+
+function renderLibraryTrackCard(track, { compact = false, work = null } = {}) {
+  if (!track) {
+    return (
+      '<div class="bgm-card' + (compact ? " is-compact" : "") + '">' +
+      '<div class="bgm-card-head"><strong>已选项目配乐未找到</strong><span class="bgm-badge is-warn">文件已移除</span></div>' +
+      '<p class="bgm-desc">该音频文件可能已从项目目录移除，请重新选择其他配乐或切换「自动搭配」重新生成。</p>' +
+      "</div>"
+    );
+  }
+  const tags = [track.mood, track.styleLabel, track.model, track.bpm ? track.bpm + " BPM" : "", track.duration ? Math.round(track.duration) + "秒" : ""].filter(Boolean);
+  return (
+    '<div class="bgm-card' + (compact ? " is-compact" : "") + '">' +
+    '<div class="bgm-card-head">' +
+    "<strong>" + esc(track.title) + "</strong>" +
+    '<span class="bgm-badge is-ok">项目已存 · 免费复用</span>' +
+    "</div>" +
+    (tags.length ? '<div class="bgm-meta">' + tags.map((t) => '<span class="bgm-tag">' + esc(t) + "</span>").join("") + "</div>" : "") +
+    (track.description ? '<p class="bgm-desc">' + esc(track.description) + "</p>" : "") +
+    (track.filename ? '<p class="bgm-file-path">文件：public/assets/music/generated/' + esc(track.filename) + "</p>" : "") +
+    '<audio class="bgm-audio" controls preload="metadata" src="' + esc(track.url) + '"></audio>' +
+    '<div class="bgm-library-actions">' +
+    btn("重命名", "rename-bgm", "outline", track.id) +
+    btn("从项目库删除", "delete-bgm", "textbtn danger", track.id) +
+    (work ? btn("改用 AI 重新生成新配乐", "set-video-music", "textbtn", "auto") : "") +
+    "</div>" +
+    "</div>"
+  );
+}
+
+function renderMusicStudioCard(w, { compact = false, showModeChips = false } = {}) {
+  if (!config?.videoBackgroundMusic || !w) return "";
+  const choice = videoMusic(w);
+  const busy = generatingMusicWorks.has(w.id);
+  const cm = w.customMusic?.url ? w.customMusic : null;
+  const stale = isCustomMusicStale(w);
+  const hintVal = musicHintDrafts.get(w) ?? cm?.hint ?? "";
+  const hasMinimaxKey = !!config.minimaxKeyPresent;
+
+  const chipsHtml = showModeChips
+    ? '<div class="chips" style="margin-top:6px">' +
+      Object.entries(musicLabels)
+        .map(([k, label]) =>
+          '<button type="button" class="chip' + (choice === k ? " selected" : "") +
+          '" data-action="set-video-music" data-val="' + k +
+          '" aria-pressed="' + (choice === k) + '">' +
+          esc(k === "auto" ? "自动搭配（AI 生成）" : label) +
+          "</button>"
+        )
+        .join("") +
+      "</div>" +
+      renderLibraryPickerHtml(choice)
+    : "";
+
+  if (choice === "off") {
+    return chipsHtml;
+  }
+
+  if (choice.startsWith("library:")) {
+    return chipsHtml + renderLibraryTrackCard(findLibraryTrack(choice), { compact, work: w });
+  }
+
+  if (choice === "calm" || choice === "light") {
+    return (
+      chipsHtml +
+      '<div class="bgm-card is-preset' + (compact ? " is-compact" : "") + '">' +
+      '<div class="bgm-card-head"><strong>内置配乐 · ' + esc(musicLabels[choice]) + "</strong>" +
+      '<span class="bgm-badge">预设曲目</span></div>' +
+      '<audio class="bgm-audio" controls preload="none" src="/assets/music/' + esc(choice) + '.flac"></audio>' +
+      "</div>"
+    );
+  }
+
+  // choice === "auto"
+  const badgeText = busy
+    ? "MiniMax 生成中…"
+    : !hasMinimaxKey && !cm
+      ? "待配置 MiniMax Key"
+      : stale
+        ? "内容已更新"
+        : cm
+          ? "已存项目库"
+          : "AI 按内容生成";
+  const badgeTone = busy ? " is-busy" : (!hasMinimaxKey && !cm) || stale ? " is-warn" : cm ? " is-ok" : "";
+  const tags = cm
+    ? [cm.mood, cm.styleLabel, cm.model, cm.bpm ? cm.bpm + " BPM" : "", cm.duration ? Math.round(cm.duration) + "秒" : ""].filter(Boolean)
+    : [];
+
+  return (
+    chipsHtml +
+    '<div class="bgm-card' + (compact ? " is-compact" : "") + '">' +
+    '<div class="bgm-card-head">' +
+    "<strong>" + esc(cm ? cm.title : "按视频主题与内容调用 MiniMax 生成纯音乐") + "</strong>" +
+    '<span class="bgm-badge' + badgeTone + '">' + esc(badgeText) + "</span>" +
+    "</div>" +
+    (cm
+      ? '<div class="bgm-meta">' + tags.map((t) => '<span class="bgm-tag">' + esc(t) + "</span>").join("") + "</div>" +
+        (cm.description ? '<p class="bgm-desc">' + esc(cm.description) + "</p>" : "") +
+        (cm.filename ? '<p class="bgm-file-path">已保存：public/assets/music/generated/' + esc(cm.filename) + "</p>" : "") +
+        '<audio class="bgm-audio" controls preload="metadata" src="' + esc(cm.url) + '"></audio>' +
+        (cm.id
+          ? '<div class="bgm-library-actions">' +
+            btn("重命名", "rename-bgm", "outline", cm.id) +
+            btn("从项目库删除", "delete-bgm", "textbtn danger", cm.id) +
+            "</div>"
+          : "") +
+        (stale ? '<p class="bgm-stale-note">视频标题或口播内容已修改，可点击下方按钮调用 MiniMax 重新生成更贴合当前内容的配乐。</p>' : "")
+      : '<p class="bgm-desc">根据当前视频主题、关联药品与口播台词，调用 MiniMax 音乐模型接口生成纯器乐背景音乐（约 ¥1.08/首）；生成后自动命名并保存到项目目录，后续所有视频均可免费复用。</p>') +
+    (!hasMinimaxKey
+      ? '<p class="bgm-stale-note">尚未配置 MiniMax API Key，' +
+        btn("去配置 MiniMax Key", "connect-minimax", "textbtn") +
+        "</p>"
+      : "") +
+    '<div class="bgm-controls">' +
+    '<input type="text" maxlength="100" class="bgm-hint-input" data-music-hint="1" value="' + esc(hintVal) +
+    '" placeholder="可选：补充氛围偏好（如：更轻快 / 温暖钢琴 / 适合儿童）"' + (busy ? " disabled" : "") + ">" +
+    btn(
+      busy
+        ? "MiniMax 生成中…"
+        : cm
+          ? "根据内容重新生成"
+          : "立即生成背景音乐",
+      "generate-bgm",
+      cm ? "outline" : "secondary",
+      w.id,
+      busy ? "disabled" : "",
+    ) +
+    "</div>" +
+    "</div>"
+  );
+}
+
+async function refreshMusicLibrary() {
+  try {
+    const res = await jsonRequest("/api/music-library");
+    if (Array.isArray(res?.tracks)) {
+      config.musicLibrary = res.tracks;
+    }
+  } catch {
+    // ignore transient refresh failures
+  }
+}
+
+async function renameLibraryMusic(trackId) {
+  const track = musicLibrary().find((t) => t.id === trackId);
+  if (!track) return;
+  const nextTitle = window.prompt("请输入新的背景音乐名称（将同步更新项目内文件名）：", track.title);
+  if (nextTitle === null) return;
+  const trimmed = nextTitle.trim();
+  if (!trimmed || trimmed === track.title) return;
+  try {
+    const res = await jsonRequest("/api/music-library/rename", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: trackId, title: trimmed }),
+    });
+    if (Array.isArray(res.library)) config.musicLibrary = res.library;
+    for (const work of data.works) {
+      if (work.customMusic?.id === trackId && res.track) {
+        work.customMusic = { ...work.customMusic, ...res.track };
+      }
+      if (work.video?.musicMeta?.id === trackId && res.track) {
+        work.video.musicMeta = { ...work.video.musicMeta, ...res.track };
+      }
+    }
+    save();
+    if (dialog.open && modalType === "settings") {
+      const scope = modalScope === "global" ? null : data.works.find((x) => x.id === modalScope) || null;
+      prefs(scope);
+    }
+    render(true);
+    notify(`已重命名为：${res.track?.title || trimmed}`, "ok");
+  } catch (error) {
+    notify(error.message || "重命名失败", "err");
+  }
+}
+
+async function deleteLibraryMusic(trackId) {
+  const track = musicLibrary().find((t) => t.id === trackId);
+  if (!track) return;
+  if (!window.confirm(`确定从项目目录删除背景音乐「${track.title}」吗？删除后无法恢复。`)) return;
+  try {
+    const res = await jsonRequest("/api/music-library/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: trackId }),
+    });
+    if (Array.isArray(res.library)) config.musicLibrary = res.library;
+    const libKey = "library:" + trackId;
+    if (data.settings.music === libKey) data.settings.music = "auto";
+    for (const work of data.works) {
+      if (work.settings?.music === libKey) {
+        work.settings.music = "auto";
+        if (work.video) work.videoDirty = true;
+      }
+      if (work.customMusic?.id === trackId) {
+        work.customMusic = null;
+      }
+    }
+    save();
+    if (dialog.open && modalType === "settings") {
+      const scope = modalScope === "global" ? null : data.works.find((x) => x.id === modalScope) || null;
+      prefs(scope);
+    }
+    render(true);
+    notify(`已删除背景音乐：${track.title}`, "ok");
+  } catch (error) {
+    notify(error.message || "删除失败", "err");
+  }
+}
+
+async function generateWorkMusic(w) {
+  if (!w || generatingMusicWorks.has(w.id)) return;
+  if (!config?.minimaxKeyPresent) {
+    notify("请先在「模型配置 → 背景音乐」填写 MiniMax API Key", "warn");
+    openApiKeys("minimax");
+    return;
+  }
+  generatingMusicWorks.add(w.id);
+  const inSettingsDialog = dialog.open && modalType === "settings" && modalScope === w.id;
+  if (inSettingsDialog) prefs(w);
+  render(true);
+  try {
+    const context = workMusicContext(w, { nextVariant: Boolean(w.customMusic) });
+    const result = await jsonRequest("/api/generate-music", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(context),
+    });
+    if (Array.isArray(result.library)) {
+      config.musicLibrary = result.library;
+    }
+    const { library: _unusedLibrary, ...trackMeta } = result;
+    w.customMusic = {
+      ...trackMeta,
+      clientSig: workMusicSignature(w),
+    };
+    musicHintDrafts.set(w, trackMeta.hint || "");
+    if ((w.settings.music ?? defaults.music) !== "auto") {
+      w.settings.music = "auto";
+    }
+    if (w.video) w.videoDirty = true;
+    changed(w);
+    notify(`已生成并保存到项目配乐库：${trackMeta.title}`, "ok");
+  } catch (error) {
+    notify(error.message || "背景音乐生成失败，请稍后重试", "err");
+  } finally {
+    generatingMusicWorks.delete(w.id);
+    if (dialog.open && modalType === "settings" && modalScope === w.id) prefs(w);
+    render(true);
+  }
+}
+
+window.StudioMusic = {
+  videoMusic,
+  videoMusicSettings,
+  workMusicContext,
+  musicSummaryLabel,
+  renderMusicStudioCard,
+};
 
 function fmtClock(sec) {
   const m = Math.floor(sec / 60),
@@ -398,17 +830,14 @@ function speechStats(text, seconds) {
 }
 
 function updateTopbar() {
-  const gs = data.settings;
-  const keysReady = config && config.deepseekKeyPresent && (gs.mode === "demo" || config.keyPresent);
-  const dotCls = keysReady ? (gs.mode === "demo" ? "demo" : "") : "warn";
+  const keysReady = config && config.deepseekKeyPresent && config.keyPresent;
+  const dotCls = keysReady ? "" : "warn";
   const modeEl = $("#mode-indicator");
   if (modeEl) {
     modeEl.innerHTML =
       '<span class="dot ' +
       dotCls +
-      '" aria-hidden="true"></span><span class="mode-label">模型配置 · ' +
-      (gs.mode === "ark" ? "火山方舟" : "本地演示") +
-      "</span>" +
+      '" aria-hidden="true"></span><span class="mode-label">模型配置</span>' +
       ico("settings");
   }
   const worksEl = $("#nav-works");
@@ -462,12 +891,30 @@ const keyProviders = {
     link: ["https://console.volcengine.com/speech/new/setting/apikeys", "获取 Key"],
     status: () => [config.speechKeySaved, config.speechKeyPresent, "", config.speechKeyWarning],
   },
+  dashscope: {
+    title: "阿里云百炼",
+    label: "阿里云百炼 API Key",
+    endpoint: "/api/dashscope-key",
+    submit: "验证并连接",
+    link: ["https://bailian.console.aliyun.com/?tab=model#/api-key", "获取 Key"],
+    status: () => [config.dashscopeKeySaved, config.dashscopeKeyPresent, config.dashscopeKeySource, config.dashscopeKeyWarning],
+  },
+  minimax: {
+    title: "MiniMax 音乐",
+    label: "MiniMax API Key",
+    endpoint: "/api/minimax-key",
+    submit: "验证并连接",
+    link: ["https://platform.minimaxi.com/user-center/basic-information/interface-key", "获取 Key"],
+    status: () => [config.minimaxKeySaved, config.minimaxKeyPresent, config.minimaxKeySource, config.minimaxKeyWarning],
+  },
 };
 
 function keyStatusText(kind) {
   const [saved, present] = keyProviders[kind].status();
   return saved ? "已保存到本机" : present ? "已配置" : "未配置";
 }
+
+let editingKeyKind = null;
 
 function keyForm(kind) {
   const p = keyProviders[kind];
@@ -476,14 +923,37 @@ function keyForm(kind) {
     source === "environment" ? "当前使用环境变量中的 Key。" : "",
     !config.keyStorage || config.keyStorage === "session" ? "Key 仅在本次运行中使用。" : "",
   ].join("");
+
+  if (present && editingKeyKind !== kind) {
+    return (
+      '<div class="credential-form" data-key-kind="' + kind + '">' +
+      '<div class="card-head"><h3>' + p.title + ' Key</h3><span class="key-status ok" data-key-status>' +
+      keyStatusText(kind) + "</span></div>" +
+      '<div class="key-saved-row">' +
+      '<span class="small">已安全保存，不再显示；填入新密钥才会替换</span>' +
+      btn("更换 Key", "replace-key", "outline", kind) +
+      "</div>" +
+      (warning ? '<p class="banner warn" data-storage-warning>' + esc(warning) + "</p>" : "") +
+      (notes
+        ? '<p class="footmeta">' + notes +
+          '<a href="' + p.link[0] + '" target="_blank" rel="noopener noreferrer">' + p.link[1] + "</a></p>"
+        : "") +
+      "</div>"
+    );
+  }
+
+  const submitLabel = present ? (kind === "speech" ? "确认替换" : "验证并替换") : p.submit;
   return (
-    '<form id="' + kind + '-key-form" class="credential-form" data-key-kind="' + kind + '">' +
+    '<form id="' + kind + '-key-form" class="credential-form" data-key-kind="' + kind + '" autocomplete="off">' +
     '<div class="card-head"><h3>' + p.title + ' Key</h3><span class="key-status' + (present ? " ok" : "") +
     '" data-key-status>' + keyStatusText(kind) + "</span></div>" +
     '<div class="key-row">' +
-    '<input type="password" id="' + kind + '-key" required maxlength="512" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="' +
-    p.label + '" placeholder="' + (present ? "粘贴新 Key 可替换" : "粘贴 " + p.label) + '">' +
-    '<button type="submit" class="primary">' + p.submit + "</button></div>" +
+    '<input type="text" class="secret-input" id="' + kind + '-key" name="xixi-api-' + kind +
+    '" required maxlength="1024" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" aria-label="' +
+    p.label + '" placeholder="' + (present ? "粘贴新的 " + p.label : "粘贴 " + p.label) + '">' +
+    '<button type="submit" class="primary">' + submitLabel + "</button>" +
+    (present ? btn("取消", "cancel-replace-key", "secondary") : "") +
+    "</div>" +
     (warning ? '<p class="banner warn" data-storage-warning>' + esc(warning) + "</p>" : "") +
     '<p class="footmeta">' + notes +
     '<a href="' + p.link[0] + '" target="_blank" rel="noopener noreferrer">' + p.link[1] + "</a></p>" +
@@ -494,16 +964,26 @@ function keyForm(kind) {
 
 // Which tab of the model settings is open. Shared by the dialog and the setup page.
 let settingsTab = "text";
-const settingsTabLabels = { text: "文本", image: "图片", video: "视频" };
+const settingsTabLabels = { text: "文本", image: "图片", video: "视频", voice: "配音", music: "背景音乐", avatar: "数字人服务" };
 
 function settingsTabsFor(which) {
   if (which === "article") return ["text", "image"];
-  if (which === "template-video") return ["text", "image", "video"];
-  return ["text", "image", "video"];
+  if (which === "video") return ["text", "image", "video", "voice", "music"];
+  if (which === "template-video") return ["text", "image", "video", "voice", "music", "avatar"];
+  return ["text", "image", "video", "voice", "music", "avatar"];
 }
 
 function openApiKeys(focus = "deepseek") {
-  settingsTab = focus === "deepseek" ? "text" : focus === "speech" ? "video" : "image";
+  settingsTab =
+    focus === "deepseek"
+      ? "text"
+      : focus === "speech"
+        ? "voice"
+        : focus === "minimax"
+          ? "music"
+          : focus === "dashscope"
+            ? "avatar"
+            : "image";
   const w = route()[0] === "work" ? current() : null;
   const available = settingsTabsFor(w ? (TemplateStudio.isTemplateVideo(w) ? "template-video" : w.type) : "all");
   if (!available.includes(settingsTab)) prefs(null);
@@ -520,7 +1000,8 @@ dialog.addEventListener("submit", async (event) => {
   const feedback = form.querySelector("#" + kind + "-key-error");
   const submit = form.querySelector('button[type="submit"]');
   const buttonLabel = submit.textContent;
-  if (submit.disabled) return;
+  const nextKey = input.value.trim();
+  if (submit.disabled || !nextKey) return;
   submit.disabled = true;
   submit.textContent = kind === "speech" ? "正在保存…" : "正在验证…";
   input.readOnly = true;
@@ -529,10 +1010,11 @@ dialog.addEventListener("submit", async (event) => {
     const status = await jsonRequest(keyProviders[kind].endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ key: input.value.trim() }),
+      body: JSON.stringify({ key: nextKey }),
     });
     Object.assign(config, status);
     input.value = "";
+    editingKeyKind = null;
     const saved = keyProviders[kind].status()[0];
     if (dialog.open && modalType === "settings") {
       const scope = modalScope === "global" ? null : data.works.find((x) => x.id === modalScope) || null;
@@ -559,27 +1041,6 @@ dialog.addEventListener("submit", async (event) => {
   }
 });
 
-function modeSegment(mode, actionName = "set-mode") {
-  return (
-    '<div class="seg" role="group" aria-label="生成方式">' +
-    btn(
-      "火山方舟 · 按量计费",
-      actionName,
-      "seg-btn" + (mode === "ark" ? " active" : ""),
-      "ark",
-      'aria-pressed="' + (mode === "ark") + '"',
-    ) +
-    btn(
-      "本地演示",
-      actionName,
-      "seg-btn" + (mode === "demo" ? " active" : ""),
-      "demo",
-      'aria-pressed="' + (mode === "demo") + '"',
-    ) +
-    "</div>"
-  );
-}
-
 function keyWarning(kind, text, extra = "") {
   return (
     '<div class="banner warn">' + text +
@@ -590,22 +1051,19 @@ function keyWarning(kind, text, extra = "") {
   );
 }
 
-function arkKeyWarning(switchAction = "set-mode") {
-  return config.keyPresent ? "" : keyWarning("ark", "连接火山方舟后可生成图片与视频素材。",
-    btn("切换为本地演示", switchAction, "secondary", "demo"));
+function arkKeyWarning() {
+  return config.keyPresent ? "" : keyWarning("ark", "连接火山方舟后可生成图片与视频素材。");
 }
 
 // inDialog: the dialog shows key forms inline; the setup page shows warnings that open the dialog.
-function settingsFields(s, which = "all", segAction = "set-mode", { inDialog = false, styleField = "" } = {}) {
+function settingsFields(s, which = "all", { inDialog = false, styleField = "", work = null } = {}) {
   const texts = Object.entries(textModelMap()),
     images = Object.entries(config.imageModels).map(([id, v]) => [id, v[0]]),
-    videos = Object.entries(config.videoModels).map(([id, v]) => [id, v[0]]);
-  const isArk = s.mode === "ark";
+    videos = Object.entries(config.videoModels).map(([id, v]) => [id, v[0]]),
+    musics = Object.entries(musicModelMap()).map(([id, v]) => [id, v[0]]);
   const isTplVideo = which === "template-video";
   const ratioField = field("画幅", "ratio", ["16:9", "3:4", "1:1", "9:16"], s.ratio);
-  const musicField = config.videoBackgroundMusic
-    ? field("背景音乐", "music", Object.entries(musicLabels), s.music ?? defaults.music)
-    : "";
+  const musicMode = s.music ?? defaults.music;
   const tabs = settingsTabsFor(which);
   if (!tabs.includes(settingsTab)) settingsTab = tabs[0];
 
@@ -616,67 +1074,105 @@ function settingsFields(s, which = "all", segAction = "set-mode", { inDialog = f
   else if (!config.deepseekKeyPresent) text += keyWarning("deepseek", "连接 DeepSeek 后可生成自定义文章与分镜脚本。");
 
   // 图片
-  let image = "";
-  if (isArk) {
-    image += '<div class="fields">' +
-      field("生图模型", "imageModel", images, s.imageModel, true) +
-      field("图片清晰度", "imageSize", config.imageModels[s.imageModel][1], s.imageSize) +
-      (isTplVideo ? "" : ratioField + styleField) + "</div>" +
-      '<label class="switchline"><input type="checkbox" data-setting="watermark" ' +
-      (s.watermark ? "checked" : "") + "><span>生成素材添加方舟水印</span></label>";
-    if (isTplVideo) {
-      image += '<div class="mode-box" style="margin-top:12px">用于生成或重新生成模板右侧 884×544 带中文字科普信息图（固定 16:9 横图，沿用医疗白蓝或暖色手绘风格）。</div>';
-    }
-    if (inDialog) image += keyForm("ark");
-    else if (!config.keyPresent) {
-      image += keyWarning("ark", "连接火山方舟后可生成图片与视频素材。",
-        btn("切换为本地演示", segAction, "secondary", "demo"));
-    }
-  } else {
-    image += (isTplVideo ? "" : '<div class="fields">' + ratioField + styleField + "</div>") +
-      '<div class="mode-box" style="margin-top:12px">' +
-      (isTplVideo
-        ? "本地演示使用内置科普信息图样图，也可上传本地图片或直接用文字排版卡成片。"
-        : "本地演示使用所选风格的内置示例图。") +
-      "</div>";
+  let image = '<div class="fields">' +
+    field("生图模型", "imageModel", images, s.imageModel, true) +
+    field("图片清晰度", "imageSize", config.imageModels[s.imageModel][1], s.imageSize) +
+    (isTplVideo ? "" : ratioField + styleField) + "</div>" +
+    '<label class="switchline"><input type="checkbox" data-setting="watermark" ' +
+    (s.watermark ? "checked" : "") + "><span>生成素材添加方舟水印</span></label>";
+  if (isTplVideo) {
+    image += '<div class="mode-box" style="margin-top:12px">用于生成或重新生成模板右侧严格 16:9（标准 1360×765 比例）满画幅带中文字科普信息图，沿用医疗白蓝或暖色手绘风格。</div>';
+  }
+  if (inDialog) image += keyForm("ark");
+  else if (!config.keyPresent) {
+    image += keyWarning("ark", "连接火山方舟后可生成图片与视频素材。");
   }
 
   // 视频
-  let video = '<div class="fields">';
+  let video = "";
+  const selectedLibTrack = findLibraryTrack(musicMode);
+  const currentMusicText = selectedLibTrack
+    ? selectedLibTrack.title + "（项目已存）"
+    : musicMode === "auto" && work?.customMusic?.title
+      ? work.customMusic.title
+      : (musicLabels[musicMode] || musicMode);
   if (isTplVideo) {
-    video += field("配音", "voice", voiceOptions, s.voice) + musicField + "</div>" +
-      '<div class="mode-box" style="margin-top:12px">' +
-      (isArk
-        ? "模板讲解固定输出 16:9（1280×720）。DeepSeek 生成脚本，右侧卡片支持 Seedream 生成或本地上传，画面与字幕由本地合成，<b>不消耗视频模型费用</b>。"
-        : "内置示例可零成本体验 16:9 模板成片，每张卡片图也可随时上传或更换样图；选择「无配音」时无需 API Key。") +
-      "</div>";
-  } else if (isArk) {
     video +=
+      '<div class="mode-box">模板讲解固定输出 16:9（1280×720）。DeepSeek 生成脚本，右侧卡片支持 Seedream 生成或本地上传，画面与字幕由本地合成，<b>不消耗视频模型费用</b>。</div>' +
+      '<p class="key-shared">当前配音：' + esc(voiceLabel(s.voice)) + " · " + keyStatusText("speech") + " " +
+      btn("去配音页设置", "settings-tab", "textbtn", "voice") + "</p>" +
+      '<p class="key-shared">当前背景音乐：' + esc(currentMusicText) +
+      (musicMode === "auto" ? " · " + keyStatusText("minimax") : "") + " " +
+      btn("去背景音乐页设置", "settings-tab", "textbtn", "music") + "</p>";
+  } else {
+    video += '<div class="fields">' +
       field("视频生成模型", "videoModel", videos, s.videoModel, true) +
       field("视频分辨率", "resolution", config.videoModels[s.videoModel][1], s.resolution) +
-      ratioField + field("配音", "voice", voiceOptions, s.voice) + musicField + "</div>";
+      ratioField + "</div>";
     if (inDialog) {
       video += '<p class="key-shared">' + "火山方舟 Key：" + keyStatusText("ark") +
         (config.keyPresent ? "" : " " + btn("去填写", "settings-tab", "textbtn", "image")) + "</p>";
     } else if (!config.keyPresent) {
-      video += keyWarning("ark", "连接火山方舟后可生成视频分镜。",
-        btn("切换为本地演示", segAction, "secondary", "demo"));
+      video += keyWarning("ark", "连接火山方舟后可生成视频分镜。");
     }
-  } else {
-    video += ratioField + field("配音", "voice", voiceOptions, s.voice) + musicField + "</div>" +
-      '<div class="mode-box" style="margin-top:12px">合成 480p 演示视频，启用配音时按字符计费。</div>';
   }
-  if (inDialog) video += keyForm("speech");
-  else if (!config.speechKeyPresent) video += keyWarning("speech", "配置豆包语音后可为视频生成配音。");
 
-  const panels = { text, image, video };
+  // 配音
+  let voice = '<div class="fields">' +
+    field("配音音色", "voice", voiceOptions, s.voice, true) +
+    "</div>" +
+    '<div class="mode-box" style="margin-top:12px">采用<b>豆包语音合成 2.0</b>（约 ¥0.0003/字，相同台词与音色自动复用本地缓存）。如只需画面与背景音乐，可选择「无配音」。</div>';
+  if (inDialog) voice += keyForm("speech");
+  else if (s.voice !== "无配音" && !config.speechKeyPresent) {
+    voice += keyWarning("speech", "配置豆包语音后可为视频生成配音。");
+  }
+
+  // 背景音乐
+  const libCount = musicLibrary().length;
+  let music = '<div class="fields">' +
+    musicFieldHtml(musicMode, "配乐方式") +
+    field("音乐生成模型", "musicModel", musics, resolveMusicModel(s)) +
+    "</div>" +
+    '<div class="mode-box" style="margin-top:12px">选择<b>自动搭配</b>时，调用 <b>MiniMax 音乐模型接口</b>按内容生成纯器乐（约 $0.15/首，折合 <b>¥1.08/首</b>），并自动命名保存到 <code>public/assets/music/generated/</code>。' +
+    (libCount ? `当前项目配乐库已有 <b>${libCount}</b> 首，可直接在上方「配乐方式」下拉框免费复用。` : "生成后可在上方「配乐方式」下拉框随时免费复用。") +
+    "</div>";
+  if (inDialog && work && work.type === "video") {
+    music += renderMusicStudioCard(work, { compact: true });
+  } else if (inDialog && musicMode.startsWith("library:")) {
+    music += renderLibraryTrackCard(selectedLibTrack, { compact: true });
+  }
+  if (inDialog) music += keyForm("minimax");
+  else if (musicMode === "auto" && !config.minimaxKeyPresent) {
+    music += keyWarning("minimax", "配置 MiniMax API Key 后，选择「自动搭配」即可按视频主题与内容生成专属背景音乐。");
+  }
+
+  // 数字人服务
+  const avatarMode = resolveAvatarMode(s.avatarMode ?? defaults.avatarMode);
+  const avatarResolution = s.avatarResolution || defaults.avatarResolution;
+  let avatar = '<div class="fields">' +
+    field("数字人模型", "avatarMode", avatarModeOptions, avatarMode, avatarMode !== "wan2.2-s2v") +
+    (avatarMode === "wan2.2-s2v" ? field("生成清晰度", "avatarResolution", avatarResolutionOptions, avatarResolution) : "") +
+    "</div>" +
+    '<div class="mode-box" style="margin-top:12px">' +
+    (avatarMode === "wan2.2-s2v"
+      ? '<b>万相数字人（Wan2.2-S2V）</b>：支持<b>真人与卡通形象</b>，具备自然眨眼、头部微动与丰富表情；单段上限 20 秒，后台自动按页边界分片衔接并本地缓存复用（480P 约 ¥0.50/秒）。'
+      : '<b>声动人像（VideoRetalk）</b>：支持最长 <b>120 秒整片一次对口型</b>（约 ¥0.08/秒，60 秒约 ¥4.8），写实人像性价比最高；相同头像与台词自动复用本地缓存。如需更丰富表情或卡通形象，可切「万相数字人」。') +
+    "</div>";
+  if (inDialog) avatar += keyForm("dashscope");
+  else if (avatarMode !== "static" && !config.dashscopeKeyPresent) {
+    avatar += keyWarning("dashscope", "配置阿里云百炼 Key 后可启用信息图模板的 AI 对口型。");
+  }
+
+  const panels = { text, image, video, voice, music, avatar };
   const missing = {
     text: !config.deepseekKeyPresent,
-    image: isArk && !config.keyPresent,
-    video: (!isTplVideo && isArk && !config.keyPresent) || !config.speechKeyPresent,
+    image: !config.keyPresent,
+    video: !isTplVideo && !config.keyPresent,
+    voice: s.voice !== "无配音" && !config.speechKeyPresent,
+    music: musicMode === "auto" && !config.minimaxKeyPresent,
+    avatar: avatarMode !== "static" && !config.dashscopeKeyPresent,
   };
   return (
-    modeSegment(s.mode, segAction) +
     '<div class="settings-tabs-root">' +
     '<div class="settings-tabs" role="tablist" aria-label="模型类型">' +
     tabs.map((t) => btn(
@@ -717,7 +1213,7 @@ function prefs(w) {
     styles.map((label, i) => [String(i), label]), String(w.style), true) : "";
   openModal(
     w ? "模型配置 · 本作品" : "模型配置 · 新作品默认",
-    settingsFields(s, w ? (tpl ? "template-video" : w.type) : "all", "modal-mode", { inDialog: true, styleField }) +
+    settingsFields(s, w ? (tpl ? "template-video" : w.type) : "all", { inDialog: true, styleField, work: w }) +
       '<div style="margin-top:20px">' +
       btn("完成", "close", "primary widebtn") +
       "</div>",
@@ -1237,9 +1733,7 @@ function setup(w) {
     (video
       ? "生成后可在编辑页逐页修改文字、口播与配图。"
       : "生成后可逐段修改正文，并为段落重做配图。") +
-    " 当前使用" +
-    (w.settings.mode === "ark" ? "火山方舟" : "本地演示") +
-    "，" +
+    " 可随时调整" +
     btn("模型配置", "work-settings", "textbtn inline-link") +
     "</p>" +
     "</div>";
@@ -1323,13 +1817,20 @@ function sceneImageState(block) {
 }
 
 function storyboardSwitcher(w, selected) {
-  return '<nav class="scene-switcher" aria-label="切换分镜">' +
-    w.blocks.map((block, i) => btn(
-      '<span class="scene-name"><b>' + (i + 1) + '</b><span data-scene-name>' +
-      esc(block.name.trim() || "未命名分镜") + '</span></span><span class="scene-state" data-scene-state>' +
-      sceneImageState(block) + '</span>',
-      "select-scene", "scene-choice", i, 'aria-pressed="' + (i === selected) + '"',
-    )).join("") + '</nav>';
+  return '<nav class="scene-switcher vstudio-filmstrip" aria-label="切换分镜">' +
+    w.blocks.map((block, i) => {
+      const st = sceneImageState(block);
+      const thumb = block.image
+        ? '<img class="scene-thumb" src="' + esc(block.image) + '" alt="" loading="lazy">'
+        : "";
+      return btn(
+        '<span class="scene-top"><span class="scene-name"><b>' + (i + 1) + '</b><span data-scene-name>' +
+        esc(block.name.trim() || "未命名分镜") + '</span></span><span class="scene-sec">' + block.seconds + 's</span></span>' +
+        '<span class="scene-foot">' + thumb + '<span class="scene-state" data-scene-state data-state="' + esc(st) + '">' +
+        st + '</span></span>',
+        "select-scene", "scene-choice", i, 'aria-pressed="' + (i === selected) + '"',
+      );
+    }).join("") + '</nav>';
 }
 
 function selectScene(w, index) {
@@ -1350,9 +1851,7 @@ function revealSelectedScene() {
 }
 
 function pictureControls(w, b, i, quiet = false) {
-  const origin = b.image?.startsWith("/assets/")
-    ? "本地示例图"
-    : config.imageModels[b.imageModel]?.[0] || "火山方舟生成";
+  const origin = config.imageModels[b.imageModel]?.[0] || "火山方舟生成";
   return (
     '<div class="picture-slot" data-picture="' +
     i +
@@ -1417,7 +1916,7 @@ function inlineJobError(job, index = "") {
 
 function syncImageActions(w) {
   const pending = w.blocks.some((b) => b.job) ||
-    Boolean(w.templateDeck?.slides?.some((s) => s.job));
+    Boolean(w.templateDeck?.slides?.some((s) => s.job || s.outroJob));
   const missing = w.type === "video" && !TemplateStudio.isTemplateVideo(w) && w.blocks.some((b) => !b.image);
   for (const el of app.querySelectorAll(
     '[data-action="compose"], [data-action="submit"]',
@@ -1444,7 +1943,7 @@ function syncImageActions(w) {
   const regenerate = app.querySelector('[data-action="regenerate-all"]');
   if (regenerate) {
     regenerate.disabled = w.blocks.some((b) => b.job && !b.job.error) ||
-      Boolean(w.templateDeck?.slides?.some((s) => s.job && !s.job.error));
+      Boolean(w.templateDeck?.slides?.some((s) => (s.job && !s.job.error) || (s.outroJob && !s.outroJob.error)));
   }
   const stale = app.querySelector("#video-stale");
   if (stale) stale.hidden = !w.videoDirty;
@@ -1465,15 +1964,24 @@ function syncImageActions(w) {
   if (imageProgress) {
     const ready = w.blocks.filter((b) => b.image).length;
     const failed = w.blocks.filter((b) => b.job?.error).length;
-    const progress = `分镜配图 ${ready} / ${w.blocks.length}` +
+    const working = w.blocks.some((b) => b.job && !b.job.error);
+    const progress = `分镜配图 ${ready}/${w.blocks.length}` +
+      (working ? " · 生成中" : "") +
       (failed ? ` · ${failed} 张失败` : "");
     if (imageProgress.textContent !== progress) imageProgress.textContent = progress;
+    imageProgress.classList.toggle("is-err", failed > 0);
+    imageProgress.classList.toggle("is-busy", !failed && working);
+    imageProgress.classList.toggle("is-ok", !failed && !working && ready === w.blocks.length);
     const fill = app.querySelector('[data-action="fill-video-images"]');
-    fill.hidden = !missing;
-    fill.disabled = !w.blocks.some((b) => !b.image && !b.job);
+    if (fill) {
+      fill.hidden = !missing;
+      fill.disabled = !w.blocks.some((b) => !b.image && !b.job);
+    }
     for (const el of app.querySelectorAll(".scene-choice")) {
       const state = el.querySelector("[data-scene-state]");
-      const label = sceneImageState(w.blocks[Number(el.dataset.val)]);
+      const block = w.blocks[Number(el.dataset.val)];
+      if (!state || !block) continue;
+      const label = sceneImageState(block);
       if (state.textContent !== label) state.textContent = label;
       state.dataset.state = label;
     }
@@ -1487,6 +1995,19 @@ function updateJobView(w, owner, finished = false) {
     const slot = app.querySelector('[data-picture="' + index + '"]');
     if (slot) {
       slot.outerHTML = pictureControls(w, owner, index, !!slot.dataset.quiet);
+    }
+    if (w.type === "video" && owner.image) {
+      const choice = app.querySelector('.scene-choice[data-val="' + index + '"] .scene-foot');
+      if (choice) {
+        let thumb = choice.querySelector(".scene-thumb");
+        if (!thumb) {
+          thumb = document.createElement("img");
+          thumb.className = "scene-thumb";
+          thumb.alt = "";
+          choice.prepend(thumb);
+        }
+        thumb.src = owner.image;
+      }
     }
     syncImageActions(w);
     return;
@@ -1516,7 +2037,7 @@ function updateJobView(w, owner, finished = false) {
 }
 
 function renderPictureDialog(w) {
-  const { index, mode, prompt, imageModel, imageSize, reference } = regenModal;
+  const { index, prompt, imageModel, imageSize, reference } = regenModal;
   const block = w.blocks[index];
   const models = Object.entries(config.imageModels).map(([id, spec]) => [
     id,
@@ -1524,47 +2045,35 @@ function renderPictureDialog(w) {
   ]);
   const label =
     w.type === "video" ? "分镜 " + (index + 1) : block.name || "段落 " + (index + 1);
-  const isArk = mode === "ark";
 
-  let body =
-    modeSegment(mode, "regen-mode") +
-    (isArk ? arkKeyWarning("regen-mode") : "") +
+  const body =
+    arkKeyWarning() +
     '<label class="field">' + (w.type === "video" ? "本幕首帧画面（选填）" : "画面描述（选填）") +
     '<textarea id="imageprompt" rows="3" maxlength="1800" placeholder="例如：近景，一只手把药盒转到侧面，手指停在印日期的位置">' +
     esc(prompt) +
-    "</textarea></label>";
-
-  if (isArk) {
-    body +=
-      '<details class="shot-options"><summary>查看完整生成提示词</summary>' +
-      '<textarea id="generated-image-prompt" rows="5" readonly aria-label="提交给方舟的提示词">' +
-      esc(picturePrompt(w, index, prompt, reference)) + '</textarea></details>' +
-      '<div class="fields" style="margin-top:11px">' +
-      '<label class="field">生图模型<select id="picture-model">' +
-      opts(models, imageModel) +
-      '</select></label><label class="field">清晰度<select id="picture-size">' +
-      opts(config.imageModels[imageModel][1], imageSize) +
-      "</select></label></div>" +
-      '<p class="footmeta">沿用所选风格「' + esc(styles[w.style]) + '」。仅生成这一张，成功后原位替换，按方舟实际用量计费。</p>' +
-      (w.type === "video" && w.stage === "draft"
-        ? '<p class="footmeta">换图后返回分镜编辑重新合成，即可更新视频画面。</p>'
-        : "") +
-      '<div style="margin-top:14px">' +
-      btn(
-        "确认用方舟生成 1 张",
-        "regen",
-        "primary widebtn",
-        index,
-        config.keyPresent ? "" : "disabled",
-      ) +
-      "</div>";
-  } else {
-    body +=
-      '<div class="mode-box" style="margin-top:12px">使用「' + esc(styles[w.style]) + '」的内置样图并保存提示词。</div>' +
-      '<div style="margin-top:14px">' +
-      btn("使用所选风格样图", "regen-demo", "primary widebtn", index) +
-      "</div>";
-  }
+    "</textarea></label>" +
+    '<details class="shot-options"><summary>查看完整生成提示词</summary>' +
+    '<textarea id="generated-image-prompt" rows="5" readonly aria-label="提交给方舟的提示词">' +
+    esc(picturePrompt(w, index, prompt, reference)) + '</textarea></details>' +
+    '<div class="fields" style="margin-top:11px">' +
+    '<label class="field">生图模型<select id="picture-model">' +
+    opts(models, imageModel) +
+    '</select></label><label class="field">清晰度<select id="picture-size">' +
+    opts(config.imageModels[imageModel][1], imageSize) +
+    "</select></label></div>" +
+    '<p class="footmeta">沿用所选风格「' + esc(styles[w.style]) + '」。仅生成这一张，成功后原位替换，按方舟实际用量计费。</p>' +
+    (w.type === "video" && w.stage === "draft"
+      ? '<p class="footmeta">换图后返回分镜编辑重新合成，即可更新视频画面。</p>'
+      : "") +
+    '<div style="margin-top:14px">' +
+    btn(
+      "确认用方舟生成 1 张",
+      "regen",
+      "primary widebtn",
+      index,
+      config.keyPresent ? "" : "disabled",
+    ) +
+    "</div>";
 
   openModal(
     label + " · " + (block.image ? "重新生成配图" : "添加配图"),
@@ -1579,7 +2088,6 @@ function openPictureDialog(w, index) {
   const prompt = needsReplacement ? objectOnlyFrame + "用道具近景表现本幕口播中的核对要点。" : sceneDescription(w, block.prompt);
   regenModal = {
     index,
-    mode: w.settings.mode,
     prompt,
     reference: prompt.startsWith(objectOnlyFrame) ? "" : pictureReference(w, [block]),
     imageModel: w.settings.imageModel,
@@ -1735,7 +2243,6 @@ function templateHooks() {
     btn,
     opts,
     openModal,
-    modeSegment,
     arkKeyWarning,
     jsonRequest,
     changed,
@@ -1754,11 +2261,7 @@ function editor(w) {
       w,
       "编辑模板分镜",
       1,
-      '<div class="layout"><div>' +
-        TemplateStudio.templateEditorBodyHtml(w, data, esc, btn, ico) +
-        '</div><aside class="aside">' +
-        TemplateStudio.templateEditorAsideHtml(w, data, esc, btn, savedLabel) +
-        "</aside></div>",
+      TemplateStudio.templateEditorHtml(w, data, esc, btn, ico, savedLabel),
       btn(ico("trash") + " 删除作品", "ask-delete", "textbtn danger", w.id),
     );
     requestAnimationFrame(() => TemplateStudio.fitTemplatePreviews());
@@ -1766,81 +2269,203 @@ function editor(w) {
   }
   const s = w.settings;
   const music = s.music ?? defaults.music;
-  const ranges = vid ? shotRanges(w.blocks) : [];
-  const totalSec = vid ? videoTotalSeconds(w) : 0;
-  const selected = Math.max(0, w.blocks.indexOf(selectedScenes.get(w)));
+  if (vid) {
+    const ranges = shotRanges(w.blocks);
+    const totalSec = videoTotalSeconds(w);
+    const selected = Math.max(0, w.blocks.indexOf(selectedScenes.get(w)));
+    const block = w.blocks[selected];
+    const total = w.blocks.length;
+    const activeTab = storyboardTabs.get(w) || "shot";
+    const stats = block ? speechStats(block.line, block.seconds) : { label: "", over: false };
+    const metaItems = [
+      config.videoModels[s.videoModel][0],
+      s.ratio,
+      styles[w.style],
+      s.resolution,
+      voiceLabel(s.voice),
+      ...(config.videoBackgroundMusic ? [musicSummaryLabel(w)] : []),
+      ...(w.drug ? ["药品：" + w.drug] : []),
+    ];
 
-  const body = vid
-    ? '<div class="sheet"><label class="field">作品标题<input maxlength="300" data-bind="title" value="' +
-      esc(w.title) + '" placeholder="输入清晰易懂的科普标题"></label>' +
-      '<label class="field" style="margin-top:10px">全片场景与道具<textarea rows="2" maxlength="240" class="autogrow" data-bind="setting" placeholder="例如：家中客厅的浅色木桌，桌上有白色药箱、一盒浅蓝色药盒和米色记录本">' +
-      esc(w.setting || "") + '</textarea></label><p class="footmeta">生成分镜图时沿用这里的场景，让各幕道具保持一致。</p></div>' +
-      '<div class="sheet"><div class="card-head"><h2>分镜脚本</h2><span class="small">共 ' +
-      w.blocks.length + " 幕 · " + totalSec + " 秒</span></div>" +
+    const topBar =
+      '<div class="sheet vstudio-bar">' +
+      '<div class="vstudio-summary">' +
+      '<div class="vstudio-metrics">' +
+      '<span class="status-pill">AI 分镜动画</span>' +
+      '<span class="vstudio-metric">共 ' + total + " 幕 · " + totalSec + " 秒</span>" +
+      '<span class="vstudio-stat" id="storyboard-image-progress" role="status"></span>' +
+      "</div>" +
+      '<div class="vstudio-meta-line">' +
+      "<span>" + esc(metaItems.join(" · ")) + "</span>" +
+      '<span class="vstudio-meta-dot" aria-hidden="true">·</span>' +
+      '<span class="save-state" id="save-state">' + savedLabel(w) + "</span>" +
+      "</div></div>" +
+      '<div class="vstudio-actions">' +
+      btn(ico("settings") + " 模型与参数", "work-settings", "outline") +
+      btn("生成缺失配图", "fill-video-images", "secondary") +
+      btn("统一重做配图", "restyle-images", "outline", "", "hidden") +
+      (w.video && !w.videoDirty ? btn("查看成片", "view-draft", "secondary") : "") +
+      btn("用方舟生成视频", "compose", "primary") +
+      "</div></div>" +
+      arkKeyWarning();
+
+    const stage =
+      '<div class="vstudio-stage"><div class="sheet vstudio-stage-card">' +
+      '<div class="vstudio-stage-head">' +
+      '<div class="vstudio-pager">' +
+      btn(
+        ico("prev"),
+        "select-scene",
+        "icon-btn",
+        selected - 1,
+        (selected === 0 ? "disabled " : "") + 'aria-label="上一幕" title="上一幕"',
+      ) +
+      '<span class="shot-badge">分镜 ' + (selected + 1) + " / " + total + "</span>" +
+      btn(
+        ico("next"),
+        "select-scene",
+        "icon-btn",
+        selected + 1,
+        (selected >= total - 1 ? "disabled " : "") + 'aria-label="下一幕" title="下一幕"',
+      ) +
+      '<span class="vstudio-stage-title" data-stage-title>' +
+      esc((block?.name || "").trim() || "未命名分镜") +
+      "</span>" +
+      (block
+        ? '<span class="time-range" id="timerange-' + selected + '">' + ranges[selected] + " · " + block.seconds + "秒</span>"
+        : "") +
+      "</div>" +
+      '<div class="shot-tools">' +
+      btn(
+        ico("arrowLeft"),
+        "move-block",
+        "icon-btn",
+        selected + ":-1",
+        (selected === 0 ? "disabled " : "") + 'aria-label="本幕前移" title="本幕前移"',
+      ) +
+      btn(
+        ico("arrowRight"),
+        "move-block",
+        "icon-btn",
+        selected + ":1",
+        (selected >= total - 1 ? "disabled " : "") + 'aria-label="本幕后移" title="本幕后移"',
+      ) +
+      btn(
+        ico("trash"),
+        "remove-block",
+        "icon-btn danger",
+        selected,
+        (total <= 2 ? "disabled " : "") + 'aria-label="移除本幕" title="移除本幕"',
+      ) +
+      "</div></div>" +
+      (block ? '<div class="vstudio-storyboard-canvas">' + pictureControls(w, block, selected) + "</div>" : "") +
+      '<div class="vstudio-rail">' +
+      '<div class="vstudio-rail-head">' +
+      '<span class="vstudio-rail-label">分镜顺序（' + total + ' 幕 · 支持 ← → 切换）</span>' +
+      '<div class="row" style="gap:10px">' +
+      btn("按口播校准时长", "time-shots", "textbtn") +
+      btn(ico("plus") + " 添加一幕", "append", "textbtn", "", total >= maxVideoShots ? "disabled" : "") +
+      "</div></div>" +
       storyboardSwitcher(w, selected) +
-      (w.blocks[selected] ? blockEditor(w, w.blocks[selected], selected, ranges[selected]) : "") +
-      '<div class="flexwrap" style="margin-top:12px">' +
-      btn(ico("plus") + " 添加一幕分镜", "append", "secondary", "", w.blocks.length >= maxVideoShots ? "disabled" : "") +
-      btn("按口播调整时长", "time-shots", "secondary") +
-      "</div></div>"
-    : articlePaper(w, true);
+      "</div></div></div>";
+
+    const shotPanel = block
+      ? '<div class="vstudio-panel">' +
+        '<section class="vstudio-section">' +
+        '<label class="field">本幕标题<input maxlength="60" data-block="' + selected + '" data-key="name" value="' + esc(block.name) + '" placeholder="例如：核对药盒有效期"></label>' +
+        '<div style="margin-top:12px"><div class="field-head"><label class="label" for="line-' + selected + '">口播台词</label>' +
+        '<span class="pace' + (stats.over ? " warn" : "") + '" id="pace-' + selected + '">' + esc(stats.label) + "</span></div>" +
+        '<textarea id="line-' + selected + '" rows="4" maxlength="450" class="autogrow" data-block="' + selected + '" data-key="line" placeholder="填写这一幕药师讲解的口播句子">' +
+        esc(block.line) +
+        "</textarea></div></section>" +
+        '<section class="vstudio-section">' +
+        '<div class="tpl-two-col">' +
+        '<label class="field">单镜时长<select data-seconds="' + selected + '">' +
+        opts(
+          Array.from(
+            { length: config.videoModels[w.settings.videoModel][2] - 3 },
+            (_, n) => [String(n + 4), n + 4 + " 秒"],
+          ),
+          String(block.seconds),
+        ) +
+        "</select></label>" +
+        '<div class="vstudio-time-helper"><span class="label">自动估时</span>' +
+        btn("按口播校准全片", "time-shots", "outline widebtn") +
+        "</div></div>" +
+        '<label class="field" style="margin-top:12px">画面动作与镜头衔接<textarea rows="3" maxlength="400" data-block="' + selected + '" data-key="motion">' +
+        esc(block.motion || defaultMotion) +
+        "</textarea></label>" +
+        "</section></div>"
+      : "";
+
+    const globalPanel =
+      '<div class="vstudio-panel">' +
+      '<section class="vstudio-section">' +
+      '<label class="field">作品标题<input maxlength="300" data-bind="title" value="' + esc(w.title) + '" placeholder="输入清晰易懂的科普标题"></label>' +
+      '<label class="field" style="margin-top:12px">全片场景与道具<textarea rows="3" maxlength="240" class="autogrow" data-bind="setting" placeholder="例如：家中客厅的浅色木桌，桌上有白色药箱、一盒浅蓝色药盒和米色记录本">' +
+      esc(w.setting || "") +
+      '</textarea></label><p class="footmeta">生成分镜图时沿用这里的场景与道具描述，让各幕视觉保持连贯。</p>' +
+      "</section>" +
+      '<section class="vstudio-section">' +
+      '<span class="label">背景音乐</span>' +
+      renderMusicStudioCard(w, { showModeChips: true }) +
+      "</section>" +
+      '<section class="vstudio-section">' +
+      '<span class="label">当前画风与生成规格</span>' +
+      '<div class="summary-kv" style="margin-top:6px">' +
+      metaItems.map((m) => '<span class="pill">' + esc(m) + "</span>").join("") +
+      "</div>" +
+      '<div style="margin-top:12px">' + btn("调整画风、模型与配音", "work-settings", "outline widebtn") + "</div>" +
+      "</section></div>";
+
+    const inspector =
+      '<aside class="vstudio-inspector"><div class="sheet vstudio-inspector-card">' +
+      '<div class="vstudio-tabs" role="tablist" aria-label="分镜编辑面板切换">' +
+      '<button type="button" class="vstudio-tab" role="tab" data-action="sb-inspector-tab" data-val="shot" aria-selected="' + (activeTab === "shot") + '">本幕脚本 <span class="vstudio-tab-sub">分镜 ' + (selected + 1) + "</span></button>" +
+      '<button type="button" class="vstudio-tab" role="tab" data-action="sb-inspector-tab" data-val="global" aria-selected="' + (activeTab === "global") + '">全片设定 <span class="vstudio-tab-sub">' + esc(styles[w.style]) + "</span></button>" +
+      "</div>" +
+      (activeTab === "global" ? globalPanel : shotPanel) +
+      "</div></aside>";
+
+    shell(
+      w,
+      "编辑分镜脚本",
+      1,
+      '<div class="vstudio">' + topBar + '<div class="vstudio-grid">' + stage + inspector + "</div></div>",
+      btn(ico("trash") + " 删除作品", "ask-delete", "textbtn danger", w.id),
+    );
+    return;
+  }
+
+  const body = articlePaper(w, true);
 
   const summaryPills = [
-    s.mode === "ark"
-      ? vid
-        ? config.videoModels[s.videoModel][0]
-        : config.imageModels[s.imageModel][0]
-      : "内置示例素材",
+    config.imageModels[s.imageModel][0],
     "画幅 " + s.ratio,
     styles[w.style],
-    ...(vid
-      ? [s.mode === "ark" ? s.resolution : "480p", s.voice, totalSec + " 秒"]
-      : s.mode === "ark"
-        ? [s.imageSize]
-        : []),
-    ...(vid && config.videoBackgroundMusic ? [music === "off" ? musicLabels.off : `配乐 · ${musicLabels[music]}`] : []),
+    s.imageSize,
     ...(w.drug ? ["药品：" + w.drug] : []),
   ];
 
   const aside =
-    '<div class="sheet"><div class="card-head"><h2>' +
-    (vid ? "合成准备" : "预览与发布") +
-    '</h2><span class="status-pill">' +
-    (s.mode === "ark" ? "火山方舟" : "本地演示") +
-    '</span></div><div class="summary-kv">' +
+    '<div class="sheet"><div class="card-head"><h2>预览与发布</h2><span class="status-pill">火山方舟</span></div><div class="summary-kv">' +
     summaryPills.map((p) => '<span class="pill">' + esc(p) + "</span>").join("") +
     "</div>" +
-    (s.mode === "ark" ? arkKeyWarning("set-mode") : "") +
+    arkKeyWarning() +
     '<div style="margin-top:12px">' +
     btn("调整模型参数", "work-settings", "outline widebtn") +
     "</div>" +
-    (vid
-      ? '<div class="storyboard-progress stack-actions">' +
-        '<p class="small" id="storyboard-image-progress" role="status"></p>' +
-        btn("生成缺失配图", "fill-video-images", "primary widebtn") +
-        "</div>"
-      : btn("生成建议配图", "fill-article-images", "secondary widebtn", "", 'hidden style="margin-top:12px"')) +
+    btn("生成建议配图", "fill-article-images", "secondary widebtn", "", 'hidden style="margin-top:12px"') +
     btn("统一重做配图", "restyle-images", "outline widebtn", "", 'hidden style="margin-top:8px"') +
     '<div class="dividerline"></div><div class="stack-actions">' +
-    btn(
-      vid
-        ? s.mode === "ark"
-          ? "用方舟生成视频"
-          : "合成本地演示视频"
-        : "保存并预览",
-      vid ? "compose" : "preview",
-      "primary widebtn",
-    ) +
-    (vid && w.video && !w.videoDirty
-      ? btn("查看已合成视频", "view-draft", "secondary widebtn")
-      : "") +
+    btn("保存并预览", "preview", "primary widebtn") +
     '</div><p class="footmeta save-state" id="save-state">' +
     savedLabel(w) +
     "</p></div>";
 
   shell(
     w,
-    vid ? "编辑分镜脚本" : "编辑图文草稿",
+    "编辑图文草稿",
     1,
     '<div class="layout"><div>' +
       body +
@@ -1934,9 +2559,9 @@ function detail(w) {
       ? [
           w.settings.ratio,
           videoTotalSeconds(w) + " 秒",
-          w.settings.voice,
-          ...(musicLabels[w.video.music] ? [musicLabels[w.video.music]] : []),
-          isTpl ? "1280×720 模板成片" : (w.renderMode === "demo" ? "本地演示成片" : "方舟动态成片"),
+          voiceLabel(w.settings.voice),
+          ...(videoMusicBadge(w.video) ? [videoMusicBadge(w.video)] : []),
+          isTpl ? "1280×720 模板成片" : "方舟动态成片",
         ]
       : []),
   ];
@@ -2062,7 +2687,7 @@ function detail(w) {
 }
 
 function portraitRejected(job) {
-  return job?.target === "compose" && job.payload.mode === "ark" &&
+  return job?.target === "compose" &&
     /InputImageSensitiveContentDetected\.PrivacyInformation|input image[^\n]*may contain real person/i.test(job.error || "");
 }
 
@@ -2092,7 +2717,7 @@ function jobView(w) {
   const rejectedIndex = rejected ? rejectedFrameIndex(w) : -1;
   const portraitMessage = rejected &&
     (rejectedIndex >= 0 ? `方舟判定第 ${rejectedIndex + 1} 幕的首帧可能含真人。` : "方舟判定本次使用的首帧可能含真人。") +
-    "换成无人物画面后再合成。想保留现有图片，也可以返回编辑页切换到本地演示，合成静帧视频。";
+    "换成无人物画面后再合成。";
   const recovery = rejected
     ? (rejectedIndex >= 0 ? btn(`重做第 ${rejectedIndex + 1} 幕无人物首帧`, "replace-portrait-frame", "primary") : "")
     : btn(w.job.partial ? "重试配图规划" : "继续此任务", "retry", "primary");
@@ -2180,6 +2805,10 @@ async function poll(w, owner = w) {
           let ready = [];
           if (job.target === "compose") {
             w.video = result.output;
+            if (result.output?.music === "auto" && result.output?.musicMeta?.url) {
+              w.customMusic = { ...result.output.musicMeta, clientSig: workMusicSignature(w) };
+              refreshMusicLibrary();
+            }
             if (result.output.shotSeconds?.length === w.blocks.length) {
               result.output.shotSeconds.forEach((seconds, index) => { w.blocks[index].seconds = seconds; });
             }
@@ -2195,16 +2824,10 @@ async function poll(w, owner = w) {
               const block = single ? owner : w.blocks[i];
               if (!block) return;
               block.image = img;
-              block.imageModel =
-                job.payload.mode === "ark"
-                  ? job.payload.settings.imageModel
-                  : "";
-              block.imageSize =
-                job.payload.mode === "ark"
-                  ? job.payload.settings.imageSize
-                  : "";
+              block.imageModel = job.payload.settings.imageModel;
+              block.imageSize = job.payload.settings.imageSize;
               block.imageStyle = job.payload.styleReference ? job.payload.style : undefined;
-              block.storyboardFrame = job.payload.storyboard === true && job.payload.mode === "ark";
+              block.storyboardFrame = job.payload.storyboard === true;
               if (job.target === "regenerate") {
                 block.prompt = job.prompt;
                 block.variant = (block.variant || 0) + 1;
@@ -2284,9 +2907,9 @@ async function sendJob(w, owner = w) {
 function createJob(w, target, items, settings = w.settings, id = crypto.randomUUID()) {
   const payload = {
     id,
-    mode: settings.mode,
+    mode: "ark",
     kind: target === "compose" ? "video" : target === "write-draft" ? "draft" : "images",
-    settings: { ...settings },
+    settings: { ...settings, mode: "ark" },
     style: w.style,
     items,
   };
@@ -2305,9 +2928,8 @@ async function startJob(w, target, items, extra = {}, settings = w.settings) {
 
 function authorize(w, count, kind, fn, voicedCount = count) {
   const writing = kind === "draft";
-  const isArk = !writing && w.settings.mode === "ark";
+  const isArk = !writing;
   const usesSpeech = kind === "video" && w.settings.voice !== "无配音" && voicedCount > 0;
-  if (!writing && !isArk && !usesSpeech) return fn();
   if (writing && !config.textModel) {
     notify("请重启本地工作台，再刷新页面以启用 DeepSeek 文字生成。", "warn");
     return;
@@ -2329,11 +2951,11 @@ function authorize(w, count, kind, fn, voicedCount = count) {
   const articlePictures = writing && w.type === "article"
     ? (w.job ? w.job.articleImages?.settings : w.settings)
     : null;
-  const pictureSummary = articlePictures?.mode === "ark"
+  const pictureSummary = articlePictures
     ? (config.keyPresent
       ? `<p>正文完成后自动调用火山方舟生成建议配图，每段最多 1 张，全篇最多 ${maxArticleImages} 张，按实际生成张数计费。</p>`
-      : `<p>正文完成后将尝试调用火山方舟生成建议配图（当前尚未连接火山方舟，届时可补充连接或改用本地演示样图）。</p>`)
-    : articlePictures ? "<p>正文完成后自动使用所选风格的本地样图。</p>" : "";
+      : `<p>正文完成后将尝试调用火山方舟生成建议配图（当前尚未连接火山方舟，届时可补充连接后再生成）。</p>`)
+    : "";
   const chosenTextModel = resolveTextModel(w.settings);
   const textSummary = writing ? "<p>将使用 DeepSeek " +
     (w.type === "video" ? (TemplateStudio.isTemplateVideo(w)
@@ -2390,15 +3012,36 @@ function topicMissing() {
   el.focus();
 }
 
-function authorizeSpeechOnly(w, count, fn) {
+function authorizeSpeechOnly(w, count, fn, options = {}) {
   retryPayload = fn;
-  openModal(
-    "确认合成模板视频并生成配音",
-    "<p>模板画面由本地直接渲染（1280×720，<b>0 视频模型费用</b>），将为 <b>" +
+  const usesAvatar = Boolean(options.usesAvatar);
+  const avatarModel = resolveAvatarMode(options.avatarModel || w.settings.avatarMode || defaults.avatarMode);
+  const avatarRes = options.avatarResolution || w.settings.avatarResolution || defaults.avatarResolution;
+  const estSec = videoTotalSeconds(w);
+  const rate = avatarRatePerSecond(avatarModel, avatarRes);
+  const estAvatarFee = feeAmount.format(estSec * rate);
+  const presenterLabel = options.presenterLabel || "人物形象";
+  const modelLabel = avatarModel === "wan2.2-s2v"
+    ? `万相数字人 Wan2.2-S2V（${avatarRes}）`
+    : "声动人像 VideoRetalk";
+  const genModeDesc = avatarModel === "wan2.2-s2v"
+    ? "按 ≤18 秒自动分片连续生成对口型视频"
+    : "整片一次生成连续对口型视频";
+  const body = usesAvatar
+    ? "<p>本次合成将调用以下两项按量服务：</p>" +
+      "<ul style=\"margin:8px 0 12px 18px;line-height:1.7\">" +
+      "<li><b>豆包语音（" + esc(voiceLabel(w.settings.voice)) + "）</b>：为 <b>" + count + "</b> 页口播生成配音，按口播字符数计费；</li>" +
+      "<li><b>阿里云百炼 · " + esc(modelLabel) + "</b>：为左侧「" + esc(presenterLabel) + "」" + genModeDesc + "（约 " + estSec + " 秒，参考费用约 <b>" + esc(estAvatarFee) + "</b>；相同头像与台词自动复用本地缓存不重复计费）。</li>" +
+      "</ul>" +
+      '<p class="footmeta">右侧信息图与字幕由本地 1280×720 高清合成，不消耗分镜视频模型费用。</p>'
+    : "<p>模板画面由本地直接渲染（1280×720，<b>0 视频模型费用</b>），将为 <b>" +
       count +
       "</b> 页口播调用火山语音（" +
-      esc(w.settings.voice) +
-      "），仅按口播字符数计费。</p>" +
+      esc(voiceLabel(w.settings.voice)) +
+      "），仅按口播字符数计费。</p>";
+  openModal(
+    usesAvatar ? "确认合成动态数字人模板视频" : "确认合成模板视频并生成配音",
+    body +
       '<div class="actions dialog-actions">' +
       btn("取消", "close", "secondary") +
       btn("确认合成 MP4", "confirm-paid", "primary") +
@@ -2414,19 +3057,6 @@ function generate(w) {
   }
   if (w.job || w.blocks.some((b) => b.job && !b.job.error)) return;
   if (TemplateStudio.isTemplateVideo(w)) {
-    const matchedIdx = TemplateVideo.EXAMPLES.findIndex((ex) => ex.topic === w.topic.trim());
-    if (matchedIdx >= 0 && (w.settings.mode === "demo" || !config.deepseekKeyPresent)) {
-      const sample = TemplateVideo.cloneExample(matchedIdx);
-      TemplateStudio.installTemplateDeck(w, {
-        ...sample,
-        theme: w.templateTheme || sample.theme,
-        presenter: w.templatePresenter || sample.presenter,
-      }, data);
-      changed(w);
-      render();
-      app.focus({ preventScroll: true });
-      return;
-    }
     return authorize(w, 1, "draft", () => {
       const settings = { ...w.settings, mode: "ark", ratio: "16:9", textModel: resolveTextModel(w.settings) };
       const job = createJob(w, "write-draft", [], settings);
@@ -2440,41 +3070,30 @@ function generate(w) {
       return sendJob(w);
     });
   }
-  const localExample = w.settings.mode === "demo" && (
-    w.type === "video"
-      ? Object.prototype.hasOwnProperty.call(videoTopics, w.topic.trim())
-      : examples.includes(w.topic.trim())
-  );
-  if (!localExample) {
-    return authorize(w, w.type === "article" ? 2 : 1, "draft", () => {
-      const settings = { ...w.settings, mode: "ark", textModel: resolveTextModel(w.settings) };
-      if (w.type === "video") settings.duration = videoReferenceSeconds(w);
-      const job = createJob(w, "write-draft", [], settings);
-      job.payload.draft = { type: w.type, topic: w.topic.trim(), layout: w.layout, drug: w.drug };
-      if (w.type === "video") job.payload.draft.pharmacist = w.avatar === pharmacistAvatar;
-      else {
-        // Keep the confirmed image settings and reuse the same request IDs when resuming this draft.
-        job.articleImages = {
-          settings: { ...w.settings },
-          jobIds: Array.from({ length: maxArticleImages }, () => crypto.randomUUID()),
-        };
-      }
-      w.job = job;
-      return sendJob(w);
-    });
-  }
-  if (w.type === "article") {
-    const plan = planArticle(w);
-    const images = plan.blocks.filter((block) => block.suggestedImage);
-    installDraft(w, plan);
-    changed(w);
-    queueBlockImages(w, images);
-  } else {
-    installDraft(w, planVideo(w, config.videoModels[w.settings.videoModel][2]));
-    changed(w);
-  }
-  render();
-  app.focus({ preventScroll: true });
+  return authorize(w, w.type === "article" ? 2 : 1, "draft", () => {
+    const settings = { ...w.settings, mode: "ark", textModel: resolveTextModel(w.settings) };
+    if (w.type === "video") settings.duration = videoReferenceSeconds(w);
+    const job = createJob(w, "write-draft", [], settings);
+    job.payload.draft = { type: w.type, topic: w.topic.trim(), layout: w.layout, drug: w.drug };
+    if (w.type === "video") job.payload.draft.pharmacist = w.avatar === pharmacistAvatar;
+    else {
+      // Keep the confirmed image settings and reuse the same request IDs when resuming this draft.
+      job.articleImages = {
+        settings: { ...w.settings, mode: "ark" },
+        jobIds: Array.from({ length: maxArticleImages }, () => crypto.randomUUID()),
+      };
+    }
+    w.job = job;
+    return sendJob(w);
+  });
+}
+
+function articleBlocks(sections) {
+  return sections.map(([name, line, visual]) => ({
+    name, line, image: "", seconds: 0, variant: 0,
+    ...(visual ? { suggestedImage: true } : {}),
+    prompt: visual || "",
+  }));
 }
 
 function installDraft(w, plan) {
@@ -2571,7 +3190,7 @@ function restyleBlockImages(w) {
 
 function queueBlockImages(w, blocks, { replacing = false, settings = w.settings, jobIds } = {}) {
   const reference = pictureReference(w, blocks);
-  const needsLeader = w.type === "video" && settings.mode === "ark" && config.imageStyleReference && !reference;
+  const needsLeader = w.type === "video" && config.imageStyleReference && !reference;
   let leader = needsLeader ? w.blocks.find(({ job }) => job?.referenceLeader && !job.error &&
     job.payload.storyboard && job.payload.style === w.style)?.job : null;
   const queued = [];
@@ -2789,6 +3408,13 @@ function applySettingMutation(s, key, val) {
 document.addEventListener("input", (e) => {
   const w = current(),
     el = e.target;
+  if (el.dataset.musicHint) {
+    const target = (dialog.open && modalScope && modalScope !== "global")
+      ? data.works.find((x) => x.id === modalScope)
+      : w;
+    if (target) musicHintDrafts.set(target, el.value);
+    return;
+  }
   if (el.id === "drugquery") {
     const list = $("#druglist", dialogBody);
     if (list) list.innerHTML = renderDrugList(el.value);
@@ -2828,6 +3454,13 @@ document.addEventListener("input", (e) => {
       TemplateStudio.refreshLivePreview(w, data);
       return;
     }
+    if (el.dataset.tplGlobal === "shortTitle") {
+      deck.shortTitle = el.value;
+      if (w.video) w.videoDirty = true;
+      changed(w);
+      TemplateStudio.refreshLivePreview(w, data);
+      return;
+    }
     if (el.dataset.tplGlobal === "disclaimer") {
       deck.disclaimer = el.value;
       if (w.video) w.videoDirty = true;
@@ -2852,16 +3485,47 @@ document.addEventListener("input", (e) => {
       if (el.dataset.tplField) {
         slide[el.dataset.tplField] = el.value;
         if (el.dataset.tplField === "name") {
+          const label = el.value.trim() || slide.headline || `第 ${si + 1} 页`;
           const tabName = app.querySelector('.scene-choice[data-val="' + si + '"] [data-scene-name]');
-          if (tabName) tabName.textContent = el.value.trim() || slide.headline || `第 ${si + 1} 页`;
+          if (tabName) tabName.textContent = label;
+          const stageTitle = app.querySelector("[data-stage-title]");
+          if (stageTitle) stageTitle.textContent = label;
         }
         if (el.dataset.tplField === "line") {
+          // If the user edits the full slide narration directly, clear stale per-beat lines only if text diverged
+          if (Array.isArray(slide.beats) && slide.beats.length) {
+            const joined = slide.beats.map((b) => b.line || "").join("");
+            if (joined !== el.value) {
+              slide.beats = [];
+            }
+          }
           slide.seconds = Math.max(4, recommendedShotSeconds(spokenChars(el.value)));
           const paceEl = $("#tpl-pace-" + si);
           if (paceEl) {
             const st = speechStats(el.value, slide.seconds);
             paceEl.textContent = st.label;
           }
+          const secBadge = app.querySelector('[data-slide-sec="' + si + '"]');
+          if (secBadge) secBadge.textContent = slide.seconds + "s";
+          const stageTime = app.querySelector("[data-stage-time]");
+          if (stageTime) stageTime.textContent = "约 " + slide.seconds + " 秒";
+        }
+      } else if (el.dataset.tplBeat !== undefined) {
+        const bi = Number(el.dataset.tplBeat);
+        slide.beats ||= [];
+        slide.beats[bi] ||= { label: "", focus: "all", line: "", highlightWords: [] };
+        slide.beats[bi][el.dataset.tplBsub] = el.value;
+        if (el.dataset.tplBsub === "line") {
+          slide.line = slide.beats.map((b) => b.line || "").join("");
+          const mainLine = $("#tpl-line-" + si);
+          if (mainLine) mainLine.value = slide.line;
+          slide.seconds = Math.max(4, recommendedShotSeconds(spokenChars(slide.line)));
+          const paceEl = $("#tpl-pace-" + si);
+          if (paceEl) paceEl.textContent = speechStats(slide.line, slide.seconds).label;
+          const secBadge = app.querySelector('[data-slide-sec="' + si + '"]');
+          if (secBadge) secBadge.textContent = slide.seconds + "s";
+          const stageTime = app.querySelector("[data-stage-time]");
+          if (stageTime) stageTime.textContent = "约 " + slide.seconds + " 秒";
         }
       } else if (el.dataset.tplArr) {
         slide[el.dataset.tplArr] ||= [];
@@ -2895,6 +3559,8 @@ document.addEventListener("input", (e) => {
         slide.points[pi][el.dataset.tplSub] = el.value;
       }
       TemplateStudio.syncBlocksFromDeck(w);
+      const totalMeta = app.querySelector("[data-tpl-total-meta]");
+      if (totalMeta) totalMeta.textContent = `共 ${deck.slides.length} 页 · 约 ${videoTotalSeconds(w)} 秒`;
       if (w.video) w.videoDirty = true;
       changed(w);
       TemplateStudio.refreshLivePreview(w, data);
@@ -2926,8 +3592,11 @@ document.addEventListener("input", (e) => {
     if (!block) return;
     block[el.dataset.key] = el.value;
     if (el.dataset.key === "name" && w.type === "video") {
+      const label = el.value.trim() || "未命名分镜";
       const sceneName = app.querySelector('.scene-choice[data-val="' + idx + '"] [data-scene-name]');
-      if (sceneName) sceneName.textContent = el.value.trim() || "未命名分镜";
+      if (sceneName) sceneName.textContent = label;
+      const stageTitle = app.querySelector("[data-stage-title]");
+      if (stageTitle) stageTitle.textContent = label;
       if (w.video) w.videoDirty = true;
     }
     if (el.dataset.key === "line") {
@@ -2984,6 +3653,18 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("change", (e) => {
   const el = e.target,
     w = current();
+  if (el.dataset.reuseBgm && w) {
+    const val = el.value;
+    if (val && val.startsWith("library:") && findLibraryTrack(val)) {
+      if ((w.settings.music ?? defaults.music) !== val) {
+        w.settings.music = val;
+        if (w.video) w.videoDirty = true;
+        changed(w);
+      }
+      render(true);
+    }
+    return;
+  }
   if (el.dataset.tplUpload) {
     const file = el.files?.[0];
     el.value = "";
@@ -3006,6 +3687,27 @@ document.addEventListener("change", (e) => {
     const slide = w.templateDeck.slides[Number(el.dataset.tplSlide)];
     if (slide) {
       slide.chapterIndex = Number(el.value);
+      if (w.video) w.videoDirty = true;
+      changed(w);
+      TemplateStudio.refreshLivePreview(w, data);
+    }
+    return;
+  }
+  if (el.dataset.tplLayoutMode && w?.templateDeck) {
+    const slide = w.templateDeck.slides[Number(el.dataset.tplSlide)];
+    if (slide) {
+      slide.layoutMode = el.value;
+      if (w.video) w.videoDirty = true;
+      changed(w);
+      render(true);
+    }
+    return;
+  }
+  if (el.dataset.tplBeatFocus !== undefined && w?.templateDeck) {
+    const slide = w.templateDeck.slides[Number(el.dataset.tplSlide)];
+    const bi = Number(el.dataset.tplBeatFocus);
+    if (slide?.beats?.[bi]) {
+      slide.beats[bi].focus = el.value;
       if (w.video) w.videoDirty = true;
       changed(w);
       TemplateStudio.refreshLivePreview(w, data);
@@ -3060,7 +3762,9 @@ document.addEventListener("change", (e) => {
     inside && modalScope === "global"
       ? data.settings
       : w?.settings || data.settings;
-  if (k === "music" && s === w?.settings && w.video && (s.music ?? defaults.music) !== el.value) w.videoDirty = true;
+  if (["music", "voice", "avatarMode", "avatarResolution"].includes(k) && s === w?.settings && w.video && (s[k] ?? defaults[k]) !== el.value) {
+    w.videoDirty = true;
+  }
   const val = el.type === "checkbox" ? el.checked : el.value;
   applySettingMutation(s, k, val);
   if (s === data.settings && w && w.stage === "setup" && !w.blocks.length) {
@@ -3176,8 +3880,12 @@ document.addEventListener("click", async (e) => {
         break;
       case "tpl-slide":
         if (w) {
+          const fromRail = el.classList.contains("scene-choice");
           TemplateStudio.setSlideIndex(w, Number(v));
           render(true);
+          if (fromRail) {
+            app.querySelector('.scene-choice[aria-pressed="true"]')?.focus({ preventScroll: true });
+          }
         }
         break;
       case "tpl-slide-add":
@@ -3198,54 +3906,33 @@ document.addEventListener("click", async (e) => {
         break;
       case "tpl-reimage":
         if (w && TemplateStudio.isTemplateVideo(w)) {
-          TemplateStudio.openImageDialog(w, Number(v), templateHooks());
+          TemplateStudio.openImageDialog(w, Number(v), templateHooks(), "main");
         }
         break;
-      case "tpl-regen-mode":
+      case "tpl-reimage-outro":
         if (w && TemplateStudio.isTemplateVideo(w)) {
-          TemplateStudio.updateImageModalField(w, "mode", v, templateHooks());
+          TemplateStudio.openImageDialog(w, Number(v), templateHooks(), "outro");
         }
         break;
       case "tpl-regen-ark":
-      case "tpl-regen-demo":
         if (w && TemplateStudio.isTemplateVideo(w)) {
-          const slideIdx = Number(v);
+          const [idxStr, rawSlot] = String(v).split(":");
+          const slideIdx = Number(idxStr);
+          const slotKind = rawSlot === "outro" ? "outro" : "main";
           const promptVal = ($("#tpl-image-prompt", dialogBody)?.value || "").trim();
-          const isArk = action === "tpl-regen-ark";
           const settings = {
             ...w.settings,
-            mode: isArk ? "ark" : "demo",
+            mode: "ark",
             ratio: "16:9",
             imageModel: $("#tpl-picture-model", dialogBody)?.value || w.settings.imageModel,
             imageSize: $("#tpl-picture-size", dialogBody)?.value || w.settings.imageSize,
           };
-          if (isArk && !config.keyPresent) {
+          if (!config.keyPresent) {
             openApiKeys("ark");
             return;
           }
           dialog.close();
-          await TemplateStudio.startSlideImageJob(w, slideIdx, promptVal, settings, templateHooks());
-        }
-        break;
-      case "tpl-pick-demo-img":
-        if (w && TemplateStudio.isTemplateVideo(w) && w.templateDeck) {
-          const sep = v.indexOf("|");
-          const slideIdx = Number(v.slice(0, sep));
-          const src = v.slice(sep + 1);
-          const slide = w.templateDeck.slides[slideIdx];
-          if (slide && src) {
-            slide.contentImage = src;
-            slide.imageSource = "preset";
-            slide.imageModel = "";
-            slide.imageSize = "";
-            slide.job = null;
-            TemplateStudio.syncBlocksFromDeck(w);
-            if (w.video) w.videoDirty = true;
-            dialog.close();
-            changed(w);
-            render(true);
-            notify(`已选用内置信息图替换第 ${slideIdx + 1} 页`, "ok");
-          }
+          await TemplateStudio.startSlideImageJob(w, slideIdx, promptVal, settings, templateHooks(), slotKind);
         }
         break;
       case "tpl-clear-image":
@@ -3253,6 +3940,7 @@ document.addEventListener("click", async (e) => {
           const slideIdx = Number(v);
           const slide = w.templateDeck.slides[slideIdx];
           if (slide && !slide.job) {
+            const isHookCover = slide.type === "cover" && slide.layoutMode === "hook";
             slide.contentImage = "";
             slide.imageSource = "";
             slide.imageModel = "";
@@ -3261,37 +3949,73 @@ document.addEventListener("click", async (e) => {
             if (w.video) w.videoDirty = true;
             changed(w);
             render(true);
-            notify("已切回文字排版卡", "ok");
+            notify(isHookCover ? "已切回开场模版卡" : "已切回文字排版卡", "ok");
+          }
+        }
+        break;
+      case "tpl-clear-outro-image":
+        if (w && TemplateStudio.isTemplateVideo(w) && w.templateDeck) {
+          const slideIdx = Number(v);
+          const slide = w.templateDeck.slides[slideIdx];
+          if (slide && !slide.outroJob) {
+            slide.outroImage = "";
+            slide.outroImageSource = "";
+            slide.outroImageModel = "";
+            slide.outroImageSize = "";
+            if (w.video) w.videoDirty = true;
+            changed(w);
+            render(true);
+            notify("已切回结尾模版卡", "ok");
           }
         }
         break;
       case "tpl-fill-images":
         if (w && TemplateStudio.isTemplateVideo(w) && w.templateDeck) {
-          const missing = w.templateDeck.slides
-            .map((sl, si) => (!sl.contentImage && !sl.job ? si : -1))
-            .filter((si) => si >= 0);
+          const missing = TemplateStudio.collectBatchImageTargets(w.templateDeck, "missing");
           TemplateStudio.queueBatchSlideImages(w, missing, templateHooks());
         }
         break;
       case "tpl-restyle-images":
         if (w && TemplateStudio.isTemplateVideo(w) && w.templateDeck) {
-          const allIndices = w.templateDeck.slides.map((_, si) => si);
-          TemplateStudio.queueBatchSlideImages(w, allIndices, templateHooks());
+          const targets = TemplateStudio.collectBatchImageTargets(w.templateDeck, "all");
+          TemplateStudio.queueBatchSlideImages(w, targets, templateHooks());
         }
         break;
       case "tpl-retry-image":
         if (w && TemplateStudio.isTemplateVideo(w)) {
-          TemplateStudio.retrySlideImage(w, Number(v), templateHooks());
+          TemplateStudio.retrySlideImage(w, Number(v), templateHooks(), "main");
         }
         break;
       case "tpl-abort-image":
         if (w && TemplateStudio.isTemplateVideo(w)) {
-          TemplateStudio.abortSlideImage(w, Number(v), templateHooks());
+          TemplateStudio.abortSlideImage(w, Number(v), templateHooks(), "main");
+        }
+        break;
+      case "tpl-retry-outro-image":
+        if (w && TemplateStudio.isTemplateVideo(w)) {
+          TemplateStudio.retrySlideImage(w, Number(v), templateHooks(), "outro");
+        }
+        break;
+      case "tpl-abort-outro-image":
+        if (w && TemplateStudio.isTemplateVideo(w)) {
+          TemplateStudio.abortSlideImage(w, Number(v), templateHooks(), "outro");
         }
         break;
       case "tpl-cue":
         if (w) {
           TemplateStudio.setCueIndex(w, Number(v));
+          TemplateStudio.refreshLivePreview(w, data);
+        }
+        break;
+      case "tpl-inspector-tab":
+        if (w && TemplateStudio.isTemplateVideo(w)) {
+          TemplateStudio.setInspectorTab(w, v);
+          render(true);
+        }
+        break;
+      case "sb-inspector-tab":
+        if (w && w.type === "video") {
+          storyboardTabs.set(w, v === "global" ? "global" : "shot");
           render(true);
         }
         break;
@@ -3307,16 +4031,31 @@ document.addEventListener("click", async (e) => {
         render(true);
         break;
       }
+      case "tpl-avatar-mode":
+        if (w && TemplateStudio.isTemplateVideo(w)) {
+          const nextMode = resolveAvatarMode(v);
+          if (resolveAvatarMode(w.settings.avatarMode ?? defaults.avatarMode) !== nextMode) {
+            w.settings.avatarMode = nextMode;
+            if (w.video) w.videoDirty = true;
+            changed(w);
+          }
+          render(true);
+        }
+        break;
       case "tpl-compose":
         if (w && TemplateStudio.isTemplateVideo(w)) {
           await TemplateStudio.composeTemplateVideo(w, data, {
             notify,
             render,
             videoMusic,
+            videoMusicSettings,
+            workMusicContext,
             sendJob,
             openApiKeys,
             authorizeSpeechOnly,
             speechKeyPresent: config.speechKeyPresent,
+            dashscopeKeyPresent: !!config.dashscopeKeyPresent,
+            minimaxKeyPresent: !!config.minimaxKeyPresent,
             workCostsEnabled: !!config.workCosts,
           });
         }
@@ -3331,8 +4070,28 @@ document.addEventListener("click", async (e) => {
         prefs(null);
         break;
       case "settings-tab":
-        showSettingsTab(v);
+        if (editingKeyKind && dialog.open && modalType === "settings") {
+          editingKeyKind = null;
+          settingsTab = v;
+          const scope = modalScope === "global" ? null : data.works.find((x) => x.id === modalScope) || null;
+          prefs(scope);
+        } else {
+          showSettingsTab(v);
+        }
         break;
+      case "replace-key": {
+        editingKeyKind = v;
+        const scope = modalScope === "global" ? null : data.works.find((x) => x.id === modalScope) || null;
+        prefs(scope);
+        $("#" + v + "-key", dialogBody)?.focus();
+        break;
+      }
+      case "cancel-replace-key": {
+        editingKeyKind = null;
+        const scope = modalScope === "global" ? null : data.works.find((x) => x.id === modalScope) || null;
+        prefs(scope);
+        break;
+      }
       case "connect-deepseek":
         if (config) openApiKeys("deepseek");
         break;
@@ -3343,6 +4102,39 @@ document.addEventListener("click", async (e) => {
       case "configure-speech":
         if (config) openApiKeys("speech");
         break;
+      case "connect-dashscope":
+        if (config) openApiKeys("dashscope");
+        break;
+      case "connect-minimax":
+        if (config) openApiKeys("minimax");
+        break;
+      case "generate-bgm": {
+        const target = v ? data.works.find((item) => item.id === v) : w;
+        if (target) await generateWorkMusic(target);
+        break;
+      }
+      case "rename-bgm":
+        if (v) await renameLibraryMusic(v);
+        break;
+      case "delete-bgm":
+        if (v) await deleteLibraryMusic(v);
+        break;
+      case "set-video-music": {
+        const target = (dialog.open && modalScope && modalScope !== "global")
+          ? data.works.find((x) => x.id === modalScope)
+          : w;
+        const validChoice = Object.prototype.hasOwnProperty.call(musicLabels, v) || Boolean(findLibraryTrack(v));
+        if (target && validChoice) {
+          if ((target.settings.music ?? defaults.music) !== v) {
+            target.settings.music = v;
+            if (target.video) target.videoDirty = true;
+            changed(target);
+          }
+          if (dialog.open && modalType === "settings" && modalScope === target.id) prefs(target);
+          render(true);
+        }
+        break;
+      }
       case "work-settings":
         if (w) prefs(w);
         else prefs(null);
@@ -3352,34 +4144,6 @@ document.addEventListener("click", async (e) => {
         if (work) await openWorkCosts(work);
         break;
       }
-      case "set-mode":
-        if (w) {
-          applySettingMutation(w.settings, "mode", v);
-          changed(w);
-          render(true);
-        }
-        break;
-      case "modal-mode": {
-        const s =
-          modalScope === "global" ? data.settings : w?.settings || data.settings;
-        applySettingMutation(s, "mode", v);
-        if (s === data.settings && w && w.stage === "setup" && !w.blocks.length) {
-          applySettingMutation(w.settings, "mode", v);
-          changed(w);
-        }
-        if (w && s === w.settings) {
-          changed(w);
-          render(true);
-        }
-        prefs(modalScope === "global" ? null : w);
-        break;
-      }
-      case "regen-mode":
-        if (regenModal && w) {
-          regenModal.mode = v;
-          renderPictureDialog(w);
-        }
-        break;
       case "goto-step":
         if (!w || w.job) break;
         if (v === "setup") {
@@ -3523,14 +4287,12 @@ document.addEventListener("click", async (e) => {
           notify("还有分镜缺少配图，请先为该幕配图", "warn");
           return;
         }
-        if (w.settings.mode === "ark") {
-          const rejected = rejectedPortraitFrames.get(w);
-          const index = rejected ? w.blocks.findIndex((block) => rejected.has(block.image)) : -1;
-          if (index >= 0) {
-            notify(`第 ${index + 1} 幕的首帧已被方舟拒绝，请换图后再合成。`, "warn");
-            selectScene(w, index);
-            return;
-          }
+        const rejected = rejectedPortraitFrames.get(w);
+        const index = rejected ? w.blocks.findIndex((block) => rejected.has(block.image)) : -1;
+        if (index >= 0) {
+          notify(`第 ${index + 1} 幕的首帧已被方舟拒绝，请换图后再合成。`, "warn");
+          selectScene(w, index);
+          return;
         }
         if (
           w.blocks.some(
@@ -3543,6 +4305,11 @@ document.addEventListener("click", async (e) => {
           );
           return;
         }
+        if (videoMusic(w) === "auto" && !w.customMusic?.url && !config.minimaxKeyPresent) {
+          notify("当前背景音乐为「自动搭配」，请先填写 MiniMax API Key 或切换其他配乐。", "warn");
+          openApiKeys("minimax");
+          return;
+        }
         authorize(w, w.blocks.length, "video", () =>
           startJob(
             w,
@@ -3552,8 +4319,8 @@ document.addEventListener("click", async (e) => {
               return { prompt: storyboardPrompt(w, index, prompt, matchNext), image, line, seconds, matchNext,
                 autoDuration: !manualSeconds };
             }),
-            {},
-            { ...w.settings, music: videoMusic(w) },
+            videoMusic(w) === "auto" ? { musicContext: workMusicContext(w) } : {},
+            { ...w.settings, ...videoMusicSettings(w) },
           ),
         );
         break;
@@ -3649,21 +4416,19 @@ document.addEventListener("click", async (e) => {
       case "reimage":
         openPictureDialog(w, Number(v));
         break;
-      case "regen":
-      case "regen-demo": {
+      case "regen": {
         const i = Number(v),
           prompt = sceneDescription(w, $("#imageprompt", dialogBody)?.value || "");
         const reference = regenModal?.reference || "";
-        const isArk = action === "regen";
         const settings = {
           ...w.settings,
-          mode: isArk ? "ark" : "demo",
+          mode: "ark",
           imageModel:
             $("#picture-model", dialogBody)?.value || w.settings.imageModel,
           imageSize:
             $("#picture-size", dialogBody)?.value || w.settings.imageSize,
         };
-        if (isArk && !config.keyPresent) {
+        if (!config.keyPresent) {
           openApiKeys("ark");
           return;
         }
@@ -3814,6 +4579,7 @@ document.addEventListener("click", async (e) => {
 dialog.addEventListener("close", () => {
   if (dialog.open) return;
   if (modalType === "settings") dialogBody.replaceChildren();
+  editingKeyKind = null;
   retryPayload = null;
   regenModal = null;
   TemplateStudio.clearImageModal();
@@ -3843,7 +4609,8 @@ document.addEventListener("drop", (e) => {
   const file = e.dataTransfer?.files?.[0];
   if (file && w && TemplateStudio.isTemplateVideo(w)) {
     const slideIdx = Number(zone.dataset.tplDropzone);
-    TemplateStudio.handleFileUpload(file, "slide-image", w, data, changed, render, notify, slideIdx)
+    const uploadKind = zone.dataset.tplDropSlot === "outro" ? "slide-outro-image" : "slide-image";
+    TemplateStudio.handleFileUpload(file, uploadKind, w, data, changed, render, notify, slideIdx)
       .catch((err) => notify(err.message || "上传图片失败", "warn"));
   }
 });
