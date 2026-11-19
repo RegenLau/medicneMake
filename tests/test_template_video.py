@@ -1,4 +1,5 @@
 import base64
+import json
 import shutil
 import struct
 import tempfile
@@ -134,6 +135,245 @@ class TemplateVideoTests(unittest.TestCase):
         self.assertEqual(out["slides"][0]["name"], "发烧先稳住")
         self.assertIn("儿童退烧封面信息图", out["slides"][0]["imagePrompt"])
         self.assertIn("布洛芬混悬液", seen["body"]["messages"][0]["content"])
+        self.assertIn("40–60 秒", seen["body"]["messages"][0]["content"])
+        self.assertIn("不要把每个主题都硬套", seen["body"]["messages"][0]["content"])
+
+    def test_template_video_draft_respects_reference_duration(self):
+        captured = []
+
+        def fake_ds(path, body, **kwargs):
+            captured.append(body["messages"][0]["content"])
+            return {
+                "model": body["model"],
+                "choices": [{
+                    "finish_reason": "stop",
+                    "message": {
+                        "content": """{
+                            "title": "滴眼液怎么滴",
+                            "chapters": ["先准备", "怎么滴", "记心里"],
+                            "slides": [
+                                {"type": "cover", "headline": "滴眼液怎么滴", "line": "滴眼液别直接往黑眼球上滴。"},
+                                {"type": "explain", "headline": "正确滴入下结膜囊", "lead": "拉下眼皮形成小口袋更稳妥", "points": [{"title": "别滴黑眼球", "desc": "直接刺激角膜易眨眼流出", "tag": "常见误区"}, {"title": "滴入下眼睑", "desc": "轻轻拉开下眼皮滴一滴即可", "tag": "更稳妥"}], "line": "轻轻拉下眼皮滴进下结膜囊，别直接滴黑眼球。"},
+                                {"type": "summary", "headline": "记住两点", "points": [{"title": "洗手", "desc": "先洗净双手"}, {"title": "闭眼", "desc": "轻按内眼角"}], "line": "先洗手再轻拉下眼皮滴药，闭眼按压内眼角。"}
+                            ]
+                        }"""
+                    },
+                }],
+            }
+
+        req = {
+            "mode": "ark",
+            "kind": "draft",
+            "draft": {"type": "video", "videoMode": "template", "topic": "滴眼液怎么滴", "drug": ""},
+            "settings": {"ratio": "16:9", "duration": 90, "textModel": "deepseek-flash"},
+        }
+        job = {"request": req}
+        with mock.patch.object(server, "deepseek", side_effect=fake_ds):
+            server.write_draft(req, job, lambda: None)
+        self.assertEqual(len(captured), 1)
+        self.assertIn("参考总时长为 90 秒", captured[0])
+        self.assertIn("必须严格控制在 94 秒以内", captured[0])
+        self.assertIn("265 到 330 字", captured[0])
+        self.assertEqual(job["output"]["chapters"], ["先准备", "怎么滴", "记心里"])
+        self.assertEqual(job["output"]["slides"][1]["type"], "explain")
+        self.assertEqual(len(job["output"]["slides"][1]["points"]), 2)
+
+    def test_template_video_draft_auto_tightens_overlong_60s_script_under_65s(self):
+        prompts = []
+        long_deck = {
+            "title": "腿抽筋先别急着补钙",
+            "shortTitle": "腿抽筋 · 别急着补钙",
+            "chapters": ["先弄清楚", "怎么处理", "注意啥", "记心里"],
+            "slides": [
+                {
+                    "type": "cover",
+                    "headline": "腿抽筋，先别急着补钙",
+                    "beats": [
+                        {"label": "提问", "focus": "question", "line": "半夜腿抽筋，是不是就是缺钙了？"},
+                        {"label": "给答案", "focus": "answer", "line": "不一定，先分清是偶尔抽筋，还是反复发作再决定。"},
+                    ],
+                },
+                {
+                    "type": "explain",
+                    "headline": "常见诱因不止缺钙",
+                    "points": [{"title": "劳累与受凉", "desc": "白天走多路或夜里吹风受凉更常见"}],
+                    "beats": [
+                        {"label": "常见原因", "focus": "0", "line": "很多人一抽筋就买钙片，觉得补钙能断根。其实偶尔腿抽筋更多和白天过度劳累、晚上小腿受凉或者出汗补水不够有关，盲目吃钙片往往解决不了问题。"},
+                    ],
+                },
+                {
+                    "type": "steps",
+                    "headline": "抽筋当下这样缓",
+                    "steps": [
+                        {"title": "勾脚尖", "desc": "慢慢伸直腿把脚尖往身体方向轻勾"},
+                        {"title": "热敷按摩", "desc": "轻揉小腿并注意保暖"},
+                    ],
+                    "beats": [
+                        {"label": "第一步", "focus": "0", "line": "抽筋时先慢慢把腿伸直，脚尖往身体方向轻轻勾，不要猛地硬掰。"},
+                        {"label": "第二步", "focus": "1", "line": "随后轻轻按摩小腿肌肉并注意保暖，平时记下发作时间和频率，方便医生判断。"},
+                    ],
+                },
+                {
+                    "type": "warning",
+                    "headline": "这些情况尽快就医",
+                    "warnings": [
+                        {"title": "频繁反复发作", "desc": "一周多次或每晚都抽"},
+                        {"title": "伴肿胀麻木", "desc": "小腿肿胀发凉或麻木无力"},
+                    ],
+                    "footerNote": "出现以上情况请立即就医评估。",
+                    "beats": [
+                        {"label": "警示", "focus": "0", "line": "如果一周抽筋很多次，或者小腿明显肿胀发凉、腿脚麻木没劲，又或者服药期间新出现抽筋，都要尽快就医评估查明原因。"},
+                    ],
+                },
+                {
+                    "type": "summary",
+                    "headline": "记住两个重点",
+                    "points": [
+                        {"title": "先辨原因", "desc": "偶尔多为受凉疲劳，反复发作去查因"},
+                        {"title": "当下先拉伸", "desc": "勾脚尖配合轻揉保暖"},
+                    ],
+                    "outroNote": "抽筋先分辨，别急着补钙",
+                    "beats": [
+                        {"label": "要点", "focus": "0", "line": "记住两点：偶尔抽筋多和疲劳受凉有关，当下先勾脚尖拉伸保暖；如果反复发作或伴肿麻，及时就医别自己长期大量补钙。"},
+                        {"label": "收口", "focus": "outro", "line": "把这两点记住，腿抽筋处理起来更安心。"},
+                    ],
+                },
+            ],
+        }
+        tight_deck = {
+            "title": "腿抽筋先别急着补钙",
+            "shortTitle": "腿抽筋 · 别急着补钙",
+            "chapters": ["先弄清", "怎么缓", "何时就医"],
+            "slides": [
+                {
+                    "type": "cover",
+                    "headline": "腿抽筋，先别急着补钙",
+                    "beats": [
+                        {"label": "提问", "focus": "question", "line": "半夜腿抽筋就是缺钙吗？"},
+                        {"label": "结论", "focus": "answer", "line": "不一定，偶尔多是疲劳受凉。"},
+                    ],
+                },
+                {
+                    "type": "explain",
+                    "headline": "先分清诱因再处理",
+                    "points": [
+                        {"title": "偶尔发作", "desc": "多与劳累、受凉或补水不足有关"},
+                        {"title": "反复发作", "desc": "别盲目吃钙片，先找医生查因"},
+                    ],
+                    "beats": [
+                        {"label": "偶尔", "focus": "0", "line": "偶尔抽筋多和走路劳累、夜里受凉有关，不必急着吃钙片。"},
+                        {"label": "反复", "focus": "1", "line": "频繁发作建议就医查原因。"},
+                    ],
+                },
+                {
+                    "type": "steps",
+                    "headline": "抽筋当下两步缓解",
+                    "steps": [
+                        {"title": "勾脚尖", "desc": "伸直腿，脚尖朝身体轻勾"},
+                        {"title": "轻揉保暖", "desc": "轻按小腿肚，盖好保暖"},
+                    ],
+                    "beats": [
+                        {"label": "缓解", "focus": "0", "line": "发作时伸直腿轻勾脚尖，再轻揉小腿保暖，多数很快能缓过来。"},
+                    ],
+                },
+                {
+                    "type": "summary",
+                    "headline": "有这些信号要就医",
+                    "points": [
+                        {"title": "频繁或伴肿麻", "desc": "小腿肿胀发凉、麻木无力尽快就医"},
+                    ],
+                    "outroNote": "抽筋先分辨，别盲目补钙",
+                    "beats": [
+                        {"label": "就医", "focus": "0", "line": "若一周多次发作，或伴腿肿发凉、麻木，或服药后新发，请尽快就医。"},
+                        {"label": "收口", "focus": "outro", "line": "先分辨再处理，更安心。"},
+                    ],
+                },
+            ],
+        }
+        responses = [long_deck, tight_deck]
+
+        def fake_ds(path, body, **kwargs):
+            prompts.append(body["messages"][0]["content"])
+            payload = responses[min(len(prompts) - 1, len(responses) - 1)]
+            return {
+                "choices": [{
+                    "finish_reason": "stop",
+                    "message": {"content": json.dumps(payload, ensure_ascii=False)},
+                }],
+            }
+
+        out = draft_content.template_video_draft(
+            fake_ds, "deepseek-flash", {"topic": "腿抽筋，先别急着补钙", "drug": ""}, reference_seconds=60,
+        )
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("已超出硬性上限（必须 ≤ 64 秒）", prompts[1])
+        total_seconds = sum(s["seconds"] for s in out["slides"])
+        self.assertLess(total_seconds, 65)
+        self.assertEqual(len(out["slides"]), 4)
+        self.assertEqual([s["type"] for s in out["slides"]], ["cover", "explain", "steps", "summary"])
+        self.assertEqual(out["chapters"], ["先弄清", "怎么缓", "何时就医"])
+        # line is synced directly from beats
+        self.assertEqual(out["slides"][0]["line"], "半夜腿抽筋就是缺钙吗？不一定，偶尔多是疲劳受凉。")
+
+    def test_template_video_draft_supports_flexible_counts_and_short_30s_deck(self):
+        short_deck = {
+            "title": "缓释片为什么不能掰开吃",
+            "chapters": ["先看结论", "记住做法"],
+            "slides": [
+                {
+                    "type": "cover",
+                    "headline": "缓释片能掰开吃吗？",
+                    "question": "药片太大，能掰开吃吗？",
+                    "answer": "缓释片通常不能随意掰开或嚼碎。",
+                    "pills": [],
+                    "beats": [
+                        {"label": "提问", "focus": "question", "line": "药片太大，能掰开吃吗？"},
+                        {"label": "结论", "focus": "answer", "line": "缓释片通常不能随便掰。"},
+                    ],
+                },
+                {
+                    "type": "explain",
+                    "headline": "掰开会破坏缓慢释放结构",
+                    "lead": "药物一次全释放，既增风险又降疗效",
+                    "points": [
+                        {"title": "血药浓度骤升", "desc": "短时间释放过多易引起不良反应"},
+                    ],
+                    "beats": [
+                        {"label": "原理", "focus": "0", "line": "掰开会破坏缓释结构，药效一次释放出来，既容易不舒服又撑不到下一次吃药。"},
+                    ],
+                },
+                {
+                    "type": "summary",
+                    "headline": "吞服困难怎么办",
+                    "points": [
+                        {"title": "先查说明书或问药师", "desc": "看是否有刻痕或可换剂型"},
+                    ],
+                    "outroNote": "拿不准先看说明书或问药师",
+                    "beats": [
+                        {"label": "提醒", "focus": "0", "line": "吞不下先看说明书或问药师能不能换剂型。"},
+                        {"label": "收口", "focus": "outro", "line": "别自己硬掰。"},
+                    ],
+                },
+            ],
+        }
+
+        def fake_ds(path, body, **kwargs):
+            return {
+                "choices": [{
+                    "finish_reason": "stop",
+                    "message": {"content": json.dumps(short_deck, ensure_ascii=False)},
+                }],
+            }
+
+        out = draft_content.template_video_draft(
+            fake_ds, "deepseek-flash", {"topic": "缓释片为什么不能掰开吃", "drug": ""}, reference_seconds=30,
+        )
+        self.assertEqual(len(out["slides"]), 3)
+        self.assertEqual(len(out["chapters"]), 2)
+        self.assertEqual(out["slides"][1]["type"], "explain")
+        self.assertEqual(len(out["slides"][1]["points"]), 1)
+        self.assertEqual(len(out["slides"][2]["points"]), 1)
+        self.assertLess(sum(s["seconds"] for s in out["slides"]), 35)
 
     def test_template_card_image_generation_ark_and_rejects_demo(self):
         png_bytes = make_tiny_png()

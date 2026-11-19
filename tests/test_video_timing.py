@@ -59,3 +59,24 @@ class VideoTimingTests(unittest.TestCase):
         self.assertEqual(len(shots), 12)
         self.assertEqual("".join(shot["line"].replace(" ", "") for shot in shots),
                          "".join(beat["line"] for beat in beats))
+
+    def test_video_draft_auto_tightens_when_over_ceiling(self):
+        long_beats = [
+            {"name": f"第{i}段", "line": "这是一段内容比较详细的用药科普口播讲解句子，专门用来测试超时自动精简功能是否可靠触发。", "scene": "药房柜台", "motion": "缓慢推近"}
+            for i in range(8)
+        ]
+        short_beats = [
+            {"name": f"第{i}段", "line": "简明扼要讲清核心用药要点。", "scene": "药房柜台", "motion": "固定"}
+            for i in range(4)
+        ]
+        prompts = []
+
+        def ark(path, body, **_):
+            prompts.append(body["messages"][0]["content"])
+            payload = {"title": VIDEO["topic"], "beats": long_beats if len(prompts) == 1 else short_beats}
+            return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(payload, ensure_ascii=False)}}]}
+
+        draft = video_draft(ark, "test", VIDEO, 60, 15)
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("必须 ≤ 64 秒", prompts[1])
+        self.assertLess(sum(shot["seconds"] for shot in draft["shots"]), 65)

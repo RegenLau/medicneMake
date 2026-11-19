@@ -1470,15 +1470,15 @@ function setup(w) {
     left +=
       '<div class="sheet"><div class="card-head"><h2>视频设置</h2></div>' +
       TemplateStudio.modeSwitcherHtml(w) +
+      choice(
+        "参考时长",
+        videoReferenceDurations.map((seconds) => seconds === null ? "自动" : `${seconds} 秒`),
+        reference === null ? "自动" : `${reference} 秒`,
+        "duration",
+      ) +
       (isTpl
         ? TemplateStudio.templateSetupHtml(w, data, esc, btn)
         : styleChoice(w.style, "画面风格") +
-          choice(
-            "参考时长",
-            videoReferenceDurations.map((seconds) => seconds === null ? "自动" : `${seconds} 秒`),
-            reference === null ? "自动" : `${reference} 秒`,
-            "duration",
-          ) +
           choice(
             "出镜形象",
             ["无人物", "药师出镜"],
@@ -1503,13 +1503,13 @@ function setup(w) {
         "primary widebtn",
       ) +
       btn(
-        video ? (isTpl ? "重新生成 5 页模板脚本" : "重新生成分镜脚本") : "重新生成图文草稿",
+        video ? (isTpl ? "重新生成模板分镜脚本" : "重新生成分镜脚本") : "重新生成图文草稿",
         "regenerate-all",
         "secondary widebtn",
       ) +
       "</div>"
     : btn(
-        video ? (isTpl ? "生成 5 页模板脚本" : "生成分镜脚本") : "生成图文草稿",
+        video ? (isTpl ? "生成模板分镜脚本" : "生成分镜脚本") : "生成图文草稿",
         "generate",
         "primary widebtn",
       );
@@ -1521,10 +1521,11 @@ function setup(w) {
     ? isTpl
       ? [
           ["视频形式", "信息图模板讲解"],
+          ["参考时长", refSeconds === null ? "自动" : `${refSeconds} 秒`],
           ["视觉风格", themeName],
           ["主讲形象", presName],
           ["输出画面", "16:9 · 1280×720"],
-          ["脚本结构", "5 页卡片 + 口播字幕"],
+          ["脚本结构", "按时长与主题灵活排页 + 口播字幕"],
         ]
       : [
           ["视频形式", "AI 分镜动画"],
@@ -2784,10 +2785,12 @@ function authorize(w, count, kind, fn, voicedCount = count) {
   const chosenTextModel = resolveTextModel(w.settings);
   const textSummary = writing ? "<p>将使用 DeepSeek " +
     (w.type === "video" ? (TemplateStudio.isTemplateVideo(w)
-      ? "生成 5 页模板结构与口播脚本。"
+      ? (reference === null
+        ? "按主题内容灵活规划模板分镜与口播脚本。"
+        : `参考 ${reference} 秒（控制在 ${reference + 4} 秒以内）按主题内容规划模板分镜与口播脚本。`)
       : (reference === null
         ? "按主题生成完整口播，再根据口播安排分镜时长。"
-        : `参考 ${reference} 秒生成完整口播，再根据口播安排分镜时长。`)) :
+        : `参考 ${reference} 秒（控制在 ${reference + 4} 秒以内）生成完整口播，再根据口播安排分镜时长。`)) :
       w.job?.partial ? "根据已生成的正文规划配图。" : "生成完整文章，再按正文决定哪些段落需要配图。") +
     "预计提交 " + count + " 次文本请求，按 token 计费。</p>" + pictureSummary +
     '<div class="summary-kv" style="margin-top:12px"><span class="pill">' + esc(textModelLabel(chosenTextModel)) + "</span></div>" : "";
@@ -2883,7 +2886,13 @@ function generate(w) {
   if (w.job || w.blocks.some((b) => b.job && !b.job.error)) return;
   if (TemplateStudio.isTemplateVideo(w)) {
     return authorize(w, 1, "draft", () => {
-      const settings = { ...w.settings, mode: "ark", ratio: "16:9", textModel: resolveTextModel(w.settings) };
+      const settings = {
+        ...w.settings,
+        mode: "ark",
+        ratio: "16:9",
+        duration: videoReferenceSeconds(w),
+        textModel: resolveTextModel(w.settings),
+      };
       const job = createJob(w, "write-draft", [], settings);
       job.payload.draft = {
         type: "video",
@@ -3499,6 +3508,44 @@ document.addEventListener("change", (e) => {
   }
   if (el.id === "tpl-picture-size") {
     TemplateStudio.updateImageModalField(w, "size", el.value, templateHooks());
+    return;
+  }
+  if (el.dataset.tplSlideType && w?.templateDeck) {
+    const slide = w.templateDeck.slides[Number(el.dataset.tplSlide)];
+    if (slide && TemplateVideo.SLIDE_TYPES[el.value]) {
+      const nextType = el.value;
+      slide.type = nextType;
+      if (nextType === "cover") {
+        slide.question ||= slide.headline || "";
+        slide.answer ||= slide.lead || "";
+        slide.pills ||= [];
+      } else if (nextType === "explain" || nextType === "summary") {
+        if (!Array.isArray(slide.points) || !slide.points.length) {
+          slide.points = [{ title: slide.headline || "核心要点", desc: slide.lead || "" }];
+        }
+      } else if (nextType === "compare") {
+        if (!Array.isArray(slide.columns) || slide.columns.length < 2) {
+          slide.columns = [
+            { title: "情况一", badge: "", points: [""], footLabel: "", footValue: "" },
+            { title: "情况二", badge: "", points: [""], footLabel: "", footValue: "" },
+          ];
+        }
+      } else if (nextType === "steps") {
+        if (!Array.isArray(slide.steps) || slide.steps.length < 2) {
+          slide.steps = [
+            { title: "第一步", desc: "", key: "" },
+            { title: "第二步", desc: "", key: "" },
+          ];
+        }
+      } else if (nextType === "warning") {
+        if (!Array.isArray(slide.warnings) || !slide.warnings.length) {
+          slide.warnings = [{ title: "就医信号", desc: "" }];
+        }
+      }
+      if (w.video) w.videoDirty = true;
+      changed(w);
+      render(true);
+    }
     return;
   }
   if (el.dataset.tplChapterIdx && w?.templateDeck) {

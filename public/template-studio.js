@@ -147,6 +147,7 @@
           slide.chapterIndex = n.chapterIndex;
           slide.headline = n.headline;
           slide.accentPhrase = n.accentPhrase;
+          slide.lead = n.lead;
           slide.contentImage = n.contentImage;
           slide.imagePrompt = n.imagePrompt;
           slide.highlightWords = n.highlightWords;
@@ -307,26 +308,48 @@
   }
 
   function renderFallbackFieldsHtml(slide, idx, escFn) {
-    const type = slide.type || "steps";
+    const type = slide.type || "explain";
     let specific = "";
 
     if (type === "cover") {
-      const pills = Array.isArray(slide.pills) ? slide.pills : ["", "", ""];
+      const pills = Array.isArray(slide.pills) ? slide.pills : [];
+      const pillCount = Math.min(3, Math.max(2, pills.length));
       specific =
         '<label class="field">开场核心问题（第 1 拍大字展示）<input maxlength="50" data-tpl-slide="' + idx + '" data-tpl-field="question" value="' + escFn(slide.question || slide.headline || "") + '"></label>' +
         '<label class="field">直接结论（第 2 拍直给答案）<input maxlength="90" data-tpl-slide="' + idx + '" data-tpl-field="answer" value="' + escFn(slide.answer || slide.lead || "") + '"></label>' +
         '<div class="tpl-profile-grid">' +
-        [0, 1, 2].map((pi) =>
+        Array.from({ length: pillCount }, (_, pi) =>
           '<label class="field">要点标签 ' + (pi + 1) + '<input maxlength="20" data-tpl-slide="' + idx + '" data-tpl-arr="pills" data-tpl-i="' + pi + '" value="' + escFn(pills[pi] || "") + '"></label>'
         ).join("") +
         "</div>" +
         '<label class="field">底部提示条<input maxlength="120" data-tpl-slide="' + idx + '" data-tpl-field="footerNote" value="' + escFn(slide.footerNote || "") + '"></label>';
+    } else if (type === "explain") {
+      const pts = Array.isArray(slide.points) ? slide.points : [];
+      const ptCount = Math.min(4, Math.max(1, pts.length));
+      specific =
+        '<label class="field">本页导语 <small>（选填，一句核心结论）</small><input maxlength="90" data-tpl-slide="' + idx + '" data-tpl-field="lead" value="' + escFn(slide.lead || "") + '"></label>' +
+        '<div class="' + (ptCount === 1 ? "" : "tpl-two-col") + '">' +
+        Array.from({ length: ptCount }, (_, pi) => {
+          const item = pts[pi] || { title: "", desc: "", tag: "" };
+          return (
+            '<div class="tpl-subcard"><span class="tpl-subcard-title">讲解要点 ' + (pi + 1) + "</span>" +
+            '<div class="tpl-two-col">' +
+            '<label class="field">标题<input maxlength="32" data-tpl-slide="' + idx + '" data-tpl-point="' + pi + '" data-tpl-sub="title" value="' + escFn(item.title || "") + '"></label>' +
+            '<label class="field">小标签 <small>（选填）</small><input maxlength="16" data-tpl-slide="' + idx + '" data-tpl-point="' + pi + '" data-tpl-sub="tag" value="' + escFn(item.tag || "") + '"></label>' +
+            "</div>" +
+            '<label class="field">说明<textarea rows="2" data-tpl-slide="' + idx + '" data-tpl-point="' + pi + '" data-tpl-sub="desc">' + escFn(item.desc || "") + "</textarea></label>" +
+            "</div>"
+          );
+        }).join("") +
+        "</div>" +
+        '<label class="field">底部提示条 <small>（选填）</small><input maxlength="140" data-tpl-slide="' + idx + '" data-tpl-field="footerNote" value="' + escFn(slide.footerNote || "") + '"></label>';
     } else if (type === "compare") {
       const cols = Array.isArray(slide.columns) ? slide.columns : [];
+      const colCount = Math.min(3, Math.max(2, cols.length));
       specific =
         '<div class="tpl-two-col">' +
-        [0, 1].map((ci) => {
-          const col = cols[ci] || { title: "", badge: "", points: ["", "", ""], footLabel: "", footValue: "" };
+        Array.from({ length: colCount }, (_, ci) => {
+          const col = cols[ci] || { title: "", badge: "", points: [], footLabel: "", footValue: "" };
           const pts = (Array.isArray(col.points) ? col.points : []).join("\n");
           return (
             '<div class="tpl-subcard"><span class="tpl-subcard-title">对比栏 ' + (ci + 1) + "</span>" +
@@ -346,9 +369,10 @@
     } else if (type === "steps") {
       const steps = Array.isArray(slide.steps) ? slide.steps : [];
       const checks = Array.isArray(slide.checks) ? slide.checks : [];
+      const stepCount = Math.min(4, Math.max(2, steps.length));
       specific =
-        '<div class="tpl-profile-grid">' +
-        [0, 1, 2].map((si) => {
+        '<div class="' + (stepCount === 2 ? "tpl-two-col" : "tpl-profile-grid") + '">' +
+        Array.from({ length: stepCount }, (_, si) => {
           const st = steps[si] || { title: "", desc: "", key: "" };
           return (
             '<div class="tpl-subcard"><span class="tpl-subcard-title">第 ' + (si + 1) + " 步</span>" +
@@ -359,12 +383,13 @@
           );
         }).join("") +
         "</div>" +
-        '<label class="field">底部 4 项自查标签（顿号分隔）<input maxlength="80" data-tpl-slide="' + idx + '" data-tpl-joined="checks" value="' + escFn(checks.join("、")) + '"></label>';
+        '<label class="field">底部自查标签 <small>（选填，顿号分隔）</small><input maxlength="80" data-tpl-slide="' + idx + '" data-tpl-joined="checks" value="' + escFn(checks.join("、")) + '"></label>';
     } else if (type === "warning") {
       const warns = Array.isArray(slide.warnings) ? slide.warnings : [];
+      const warnCount = Math.min(4, Math.max(1, warns.length));
       specific =
-        '<div class="tpl-two-col">' +
-        [0, 1, 2, 3].map((wi) => {
+        '<div class="' + (warnCount === 1 ? "" : "tpl-two-col") + '">' +
+        Array.from({ length: warnCount }, (_, wi) => {
           const item = warns[wi] || { title: "", desc: "" };
           return (
             '<div class="tpl-subcard"><span class="tpl-subcard-title">警示信号 ' + (wi + 1) + "</span>" +
@@ -377,9 +402,10 @@
         '<label class="field">底部提示条<input maxlength="140" data-tpl-slide="' + idx + '" data-tpl-field="footerNote" value="' + escFn(slide.footerNote || "") + '"></label>';
     } else {
       const pts = Array.isArray(slide.points) ? slide.points : [];
+      const ptCount = Math.min(4, Math.max(1, pts.length));
       specific =
-        '<div class="tpl-profile-grid">' +
-        [0, 1, 2].map((pi) => {
+        '<div class="' + (ptCount <= 2 ? "tpl-two-col" : "tpl-profile-grid") + '">' +
+        Array.from({ length: ptCount }, (_, pi) => {
           const item = pts[pi] || { title: "", desc: "" };
           return (
             '<div class="tpl-subcard"><span class="tpl-subcard-title">总结要点 ' + (pi + 1) + "</span>" +
@@ -457,7 +483,7 @@
       beats.map((b, bi) =>
         '<div class="tpl-subcard">' +
         '<label class="field">第 ' + (bi + 1) + ' 段口播' + (b.label ? "（" + escFn(b.label) + "）" : "") +
-        '<input maxlength="120" data-tpl-slide="' + idx + '" data-tpl-beat="' + bi + '" data-tpl-bsub="line" value="' + escFn(b.line || "") + '"></label>' +
+        '<input maxlength="180" data-tpl-slide="' + idx + '" data-tpl-beat="' + bi + '" data-tpl-bsub="line" value="' + escFn(b.line || "") + '"></label>' +
         "</div>"
       ).join("") +
       "</div></details>"
@@ -709,7 +735,7 @@
       '<section class="vstudio-section">' +
       '<div class="field-head"><label class="label" for="tpl-line-' + idx + '">本页口播台词</label>' +
       '<span class="pace" id="tpl-pace-' + idx + '">' + escFn(pace.label) + "</span></div>" +
-      '<textarea id="tpl-line-' + idx + '" rows="3" maxlength="360" data-tpl-slide="' + idx + '" data-tpl-field="line" placeholder="填写本页药师口播，将自动配音并切分明黄高亮字幕">' +
+      '<textarea id="tpl-line-' + idx + '" rows="3" maxlength="500" data-tpl-slide="' + idx + '" data-tpl-field="line" placeholder="填写本页药师口播，将自动配音并切分明黄高亮字幕">' +
       escFn(slide.line || "") +
       "</textarea>" +
       '<label class="field" style="margin-top:10px">字幕明黄高亮关键词 <small>（顿号或空格分隔）</small>' +
@@ -751,7 +777,12 @@
       "</div></section>" +
       outroCardSectionHtml +
       '<section class="vstudio-section">' +
-      '<div class="tpl-two-col">' +
+      '<div class="tpl-profile-grid">' +
+      '<label class="field">本页卡片类型<select data-tpl-slide="' + idx + '" data-tpl-slide-type="1">' +
+      Object.entries(TemplateVideo.SLIDE_TYPES || {}).map(([tid, tname]) =>
+        '<option value="' + escFn(tid) + '"' + (slide.type === tid ? " selected" : "") + ">" + escFn(tname) + "</option>"
+      ).join("") +
+      "</select></label>" +
       '<label class="field">本页版式模式<select data-tpl-slide="' + idx + '" data-tpl-layout-mode="1">' +
       (TemplateVideo.LAYOUT_MODES || []).map((m) =>
         '<option value="' + escFn(m.id) + '"' + (slide.layoutMode === m.id ? " selected" : "") + ">" + escFn(m.name) + "</option>"
@@ -815,10 +846,10 @@
       '<section class="vstudio-section">' +
       '<label class="field">左上胶囊短主题 <small>（建议 ≤12 字，不与首屏大问题重复）</small><input maxlength="20" data-tpl-global="shortTitle" value="' + escFn(deck.shortTitle || "") + '" placeholder="例如：阿托伐他汀 · 服用时间"></label>' +
       '<label class="field" style="margin-top:10px">作品完整标题<input maxlength="40" data-tpl-global="title" value="' + escFn(deck.title) + '"></label>' +
-      '<span class="label" style="margin-top:10px">顶部 4 个章节导航</span>' +
+      '<span class="label" style="margin-top:10px">顶部章节导航（' + deck.chapters.length + ' 个）</span>' +
       '<div class="tpl-chapter-grid">' +
-      [0, 1, 2, 3].map((ci) =>
-        '<label class="field">章节 ' + (ci + 1) + '<input maxlength="8" data-tpl-chap="' + ci + '" value="' + escFn(deck.chapters[ci] || "") + '"></label>'
+      deck.chapters.map((ch, ci) =>
+        '<label class="field">章节 ' + (ci + 1) + '<input maxlength="8" data-tpl-chap="' + ci + '" value="' + escFn(ch || "") + '"></label>'
       ).join("") +
       "</div></section>" +
       '<section class="vstudio-section">' +
@@ -1268,19 +1299,19 @@
     const lastChap = deck.slides[deck.slides.length - 1]?.chapterIndex ?? 0;
     const newNum = deck.slides.length + 1;
     deck.slides.push({
-      type: "steps",
+      type: "explain",
       name: `补充要点 ${newNum}`,
       chapterIndex: lastChap,
       headline: `补充科普要点 ${newNum}`,
       accentPhrase: "",
+      lead: "",
       contentImage: "",
       imagePrompt: "",
-      steps: [
-        { title: "核对要点一", desc: "填写具体可执行的用药核对方法。", key: "原则：以说明书与医嘱为准" },
-        { title: "核对要点二", desc: "补充常见注意事项或易错细节。", key: "" },
-        { title: "何时问药师", desc: "遇到拿不准的情况及时咨询药师或医生。", key: "" },
+      points: [
+        { title: "核心要点一", desc: "填写具体可执行的用药科普说明。", tag: "" },
+        { title: "核心要点二", desc: "补充常见注意事项或易错细节。", tag: "" },
       ],
-      checks: ["核对完整药名", "按说明书执行", "留意异常反应", "有疑问问药师"],
+      footerNote: "原则：以说明书与医嘱为准",
       highlightWords: [],
       line: "",
       seconds: 8,

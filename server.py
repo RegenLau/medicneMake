@@ -2360,10 +2360,15 @@ def write_draft(p, job, save, record=None):
     if item["type"] == "video":
         settings = p["settings"]
         if item.get("videoMode") == "template":
-            job["progress"] = "生成 5 页模板结构与口播脚本"
+            ref_duration = settings.get("duration")
+            job["progress"] = (
+                f"按 {ref_duration} 秒规划模板分镜与口播脚本"
+                if ref_duration
+                else "按主题规划模板分镜与口播脚本"
+            )
             save()
             job["output"] = draft_content.template_video_draft(
-                tracked_deepseek("模板讲解脚本"), model, item,
+                tracked_deepseek("模板讲解脚本"), model, item, ref_duration,
             )
             return
         job["progress"] = "撰写完整口播并划分分镜"

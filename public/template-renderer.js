@@ -17,9 +17,10 @@
 
   const SLIDE_TYPES = {
     cover: "破题导入",
+    explain: "要点讲解",
     compare: "对比辨析",
     steps: "实操步骤",
-    warning: "就医警示",
+    warning: "风险警示",
     summary: "要点收口",
   };
 
@@ -30,6 +31,7 @@
 
   const DEFAULT_LAYOUT_BY_TYPE = {
     cover: "hook",
+    explain: "explain",
     compare: "explain",
     steps: "explain",
     warning: "explain",
@@ -41,15 +43,24 @@
       question: { x: 4, y: 6, w: 92, h: 36 },
       answer: { x: 4, y: 42, w: 92, h: 52 },
     },
+    explain: {
+      "0": { x: 4, y: 24, w: 92, h: 28 },
+      "1": { x: 4, y: 54, w: 92, h: 28 },
+      "2": { x: 4, y: 66, w: 92, h: 24 },
+      "3": { x: 51, y: 54, w: 45, h: 28 },
+      action: { x: 4, y: 84, w: 92, h: 12 },
+    },
     compare: {
       "0": { x: 3.5, y: 25, w: 45, h: 58 },
       "1": { x: 51.5, y: 25, w: 45, h: 58 },
+      "2": { x: 67, y: 25, w: 30, h: 58 },
       action: { x: 3.5, y: 84.5, w: 93, h: 12 },
     },
     steps: {
       "0": { x: 3, y: 24.5, w: 30.5, h: 59 },
       "1": { x: 34.8, y: 24.5, w: 30.5, h: 59 },
       "2": { x: 66.5, y: 24.5, w: 30.5, h: 59 },
+      "3": { x: 74.5, y: 24.5, w: 22.5, h: 59 },
       action: { x: 3.5, y: 85, w: 93, h: 11.5 },
     },
     warning: {
@@ -65,6 +76,7 @@
       "0": { x: 4, y: 24, w: 92, h: 21 },
       "1": { x: 4, y: 47, w: 92, h: 21 },
       "2": { x: 4, y: 70, w: 92, h: 21 },
+      "3": { x: 4, y: 74, w: 92, h: 18 },
       action: { x: 4, y: 85, w: 92, h: 11.5 },
     },
   };
@@ -75,17 +87,28 @@
       { id: "answer", label: "直接结论" },
       { id: "all", label: "整页展示" },
     ],
+    explain: [
+      { id: "0", label: "要点 1" },
+      { id: "1", label: "要点 2" },
+      { id: "2", label: "要点 3" },
+      { id: "3", label: "要点 4" },
+      { id: "action", label: "底部提示" },
+      { id: "all", label: "整页讲解" },
+      { id: "outro", label: "结尾定格" },
+    ],
     compare: [
-      { id: "0", label: "左侧栏" },
-      { id: "1", label: "右侧栏" },
+      { id: "0", label: "对比 1" },
+      { id: "1", label: "对比 2" },
+      { id: "2", label: "对比 3" },
       { id: "action", label: "底部原则" },
-      { id: "all", label: "双栏总览" },
+      { id: "all", label: "对比总览" },
     ],
     steps: [
       { id: "0", label: "第 1 步" },
       { id: "1", label: "第 2 步" },
       { id: "2", label: "第 3 步" },
-      { id: "all", label: "三步回顾" },
+      { id: "3", label: "第 4 步" },
+      { id: "all", label: "步骤回顾" },
     ],
     warning: [
       { id: "top", label: "上排信号" },
@@ -98,10 +121,11 @@
       { id: "all", label: "全部警示" },
     ],
     summary: [
-      { id: "0", label: "第 1 句" },
-      { id: "1", label: "第 2 句" },
-      { id: "2", label: "第 3 句" },
-      { id: "all", label: "三句总览" },
+      { id: "0", label: "第 1 点" },
+      { id: "1", label: "第 2 点" },
+      { id: "2", label: "第 3 点" },
+      { id: "3", label: "第 4 点" },
+      { id: "all", label: "要点总览" },
       { id: "outro", label: "结尾定格" },
     ],
   };
@@ -1627,7 +1651,7 @@
     const out = [];
     for (const raw of rawBeats.slice(0, 6)) {
       if (!raw || typeof raw !== "object") continue;
-      const line = String(raw.line || "").trim().slice(0, 140);
+      const line = String(raw.line || "").trim().slice(0, 180);
       if (!line) continue;
       const rawFocus = raw.focus !== undefined && raw.focus !== null ? String(raw.focus).trim() : "all";
       const focus = valid.has(rawFocus) ? rawFocus : "all";
@@ -1666,7 +1690,7 @@
 
   function normalizeSlide(raw, idx, chapLen) {
     const s = raw && typeof raw === "object" ? raw : {};
-    const type = SLIDE_TYPES[s.type] ? s.type : "steps";
+    const type = SLIDE_TYPES[s.type] ? s.type : "explain";
     const headline = String(s.headline || s.name || "核心科普要点").trim().slice(0, 60);
     const name = String(s.name || s.leftTop || headline).trim().slice(0, 24) || `第 ${idx + 1} 页`;
     const chapterIndex = Math.max(0, Math.min(Math.max(0, chapLen - 1), Number(s.chapterIndex) || 0));
@@ -1689,6 +1713,7 @@
       chapterIndex,
       headline,
       accentPhrase: String(s.accentPhrase || "").trim().slice(0, 24),
+      lead: String(s.lead || "").trim().slice(0, 90),
       contentImage: String(s.contentImage || "").trim(),
       imagePrompt: String(s.imagePrompt || s.spotPrompt || "").trim().slice(0, 400),
       highlightWords,
@@ -1709,10 +1734,12 @@
     const base = raw && typeof raw === "object" ? raw : cloneExample(0);
     const title = String(base.title || fallbackTitle || "用药科普讲解").trim().slice(0, 40);
     const shortTitle = String(base.shortTitle || deriveShortTitle(title)).trim().slice(0, 20);
-    const chapters = Array.isArray(base.chapters) && base.chapters.length
-      ? base.chapters.slice(0, 4).map((c) => String(c || "").trim().slice(0, 8) || "要点")
-      : ["先弄清楚", "怎么吃", "注意啥", "记心里"];
-    while (chapters.length < 4) chapters.push(`章节${chapters.length + 1}`);
+    const rawChapters = Array.isArray(base.chapters)
+      ? base.chapters.slice(0, 5).map((c) => String(c || "").trim().slice(0, 8)).filter(Boolean)
+      : [];
+    const chapters = rawChapters.length >= 2
+      ? rawChapters
+      : (rawChapters.length === 1 ? [rawChapters[0], "要点总结"] : ["核心讲解", "要点总结"]);
     const rawSlides = Array.isArray(base.slides) && base.slides.length
       ? base.slides
       : cloneExample(0).slides;
@@ -1850,53 +1877,86 @@
   }
 
   function summarizeSlideVisualLabels(slide) {
-    const type = slide.type || "steps";
+    const type = slide.type || "explain";
     if (type === "cover") {
       const pills = (slide.pills || []).filter(Boolean).slice(0, 3).join(" / ");
       return [
         slide.question && `核心问题「${slide.question.slice(0, 20)}」`,
         slide.answer && `结论「${slide.answer.slice(0, 28)}」`,
-        pills && `3个短词标签：${pills}`,
+        pills && `短词标签：${pills}`,
       ].filter(Boolean).join("；");
     }
+    if (type === "explain") {
+      const pts = (slide.points || []).slice(0, 4)
+        .map((pt, i) => `要点${i + 1}「${(pt.title || "").slice(0, 14)}」${pt.tag ? `（${String(pt.tag).slice(0, 8)}）` : ""}`)
+        .filter(Boolean)
+        .join("；");
+      return [slide.lead && `导语「${slide.lead.slice(0, 28)}」`, pts].filter(Boolean).join("；");
+    }
     if (type === "compare") {
-      return (slide.columns || []).slice(0, 2)
-        .map((c, i) => `${i === 0 ? "左栏" : "右栏"}「${(c.title || "").slice(0, 10)}」：${(c.points || []).slice(0, 3).map((p) => String(p).slice(0, 14)).join("、")}`)
+      return (slide.columns || []).slice(0, 3)
+        .map((c, i) => `第${i + 1}栏「${(c.title || "").slice(0, 10)}」：${(c.points || []).slice(0, 3).map((p) => String(p).slice(0, 14)).join("、")}`)
         .filter(Boolean)
         .join("；");
     }
     if (type === "steps") {
-      return (slide.steps || []).slice(0, 3)
+      return (slide.steps || []).slice(0, 4)
         .map((st, i) => `第${i + 1}步「${(st.title || "").slice(0, 10)}」（${String(st.key || st.desc || "").slice(0, 12)}）`)
         .filter(Boolean)
         .join("；");
     }
     if (type === "warning") {
       return (slide.warnings || []).slice(0, 4)
-        .map((w, i) => `格${i + 1}「${(w.title || "").slice(0, 12)}」`)
+        .map((w, i) => `警示${i + 1}「${(w.title || "").slice(0, 12)}」`)
         .filter(Boolean)
         .join("；");
     }
-    return (slide.points || []).slice(0, 3)
+    return (slide.points || []).slice(0, 4)
       .map((pt, i) => `第${i + 1}条「${(pt.title || "").slice(0, 14)}」`)
       .filter(Boolean)
       .join("；");
   }
 
-  function gridRuleForType(type) {
+  function gridRuleForType(slideOrType) {
+    const slide = slideOrType && typeof slideOrType === "object" ? slideOrType : { type: slideOrType };
+    const type = slide.type || "explain";
     if (type === "compare") {
-      return "固定网格分区（方便后期分步聚焦）：顶部 0–20% 居中 1 行大标题；主体 21%–81% 为严格左右等宽的两张并列圆角对比卡片（左栏占 3%–49%、右栏占 51%–97%，禁止在最左侧单独画大药瓶挤压左栏）；底部 82%–96% 为居中单行提示条。";
+      const count = Math.min(3, Math.max(2, Array.isArray(slide.columns) ? slide.columns.length : 2));
+      return count === 3
+        ? "清晰分区构图：顶部 0–20% 居中 1 行大标题；主体 21%–81% 为横向等宽的 3 张圆角对比卡片，三卡等高齐平；底部 82%–96% 可放居中单行提示条或干净留白。"
+        : "清晰分区构图：顶部 0–20% 居中 1 行大标题；主体 21%–81% 为左右等宽的两张并列圆角对比卡片（禁止在最左侧单独画大药瓶挤压左栏）；底部 82%–96% 可放居中单行提示条或干净留白。";
     }
     if (type === "steps") {
-      return "固定网格分区（方便后期分步聚焦）：顶部 0–21% 居中 1 行大标题；主体 22%–84% 为严格等宽并列的 3 张圆角步骤卡片（第1步左三分之一、第2步中三分之一、第3步右三分之一，三卡等高齐平）；底部 85%–96% 为极简一行提示或干净留白。";
+      const count = Math.min(4, Math.max(2, Array.isArray(slide.steps) ? slide.steps.length : 3));
+      return `清晰分区构图：顶部 0–21% 居中 1 行大标题；主体 22%–84% 为等宽并列的 ${count} 张圆角步骤卡片（按实际步数排布、等高齐平）；底部 85%–96% 为极简一行提示或干净留白。`;
     }
     if (type === "warning") {
-      return "固定网格分区（方便后期分步聚焦）：顶部 0–19% 居中 1 行大标题；主体 20%–78% 为严格 2×2 对称四格圆角警示卡片（左上、右上、左下、右下齐平）；底部 79%–96% 为居中醒目珊瑚橙行动指令条（仅写就医或咨询行动，严禁写「不要自行停药」）。";
+      const count = Math.min(4, Math.max(1, Array.isArray(slide.warnings) ? slide.warnings.length : 2));
+      const bodyDesc = count === 1
+        ? "居中 1 张醒目圆角警示主卡片配清晰医学警示插画"
+        : count === 2
+          ? "左右等宽并列的 2 张圆角警示卡片"
+          : count === 3
+            ? "横向或纵向齐平排布的 3 张圆角警示卡片"
+            : "2×2 对称四格圆角警示卡片";
+      return `清晰分区构图：顶部 0–19% 居中 1 行大标题；主体 20%–78% 为${bodyDesc}；底部 79%–96% 为居中醒目珊瑚橙行动指令条（仅写就医或咨询行动，严禁写「不要自行停药」）。`;
+    }
+    if (type === "explain") {
+      const count = Math.min(4, Math.max(1, Array.isArray(slide.points) ? slide.points.length : 2));
+      const bodyDesc = count === 1
+        ? "居中 1 组核心医学机制主视觉插画配简明结论要点卡"
+        : count === 2
+          ? "左右或上下均衡排布的 2 块要点讲解卡片配简洁医学插画"
+          : count === 3
+            ? "3 条清晰分层的要点卡片配简洁医学图标"
+            : "2×2 对称排布的 4 块要点卡片配简洁医学图标";
+      return `清晰分区构图：顶部 0–20% 居中 1 行大标题；主体 21%–84% 为${bodyDesc}；底部 85%–96% 可放极简一行提醒或干净留白。`;
     }
     if (type === "summary") {
-      return "固定网格分区（方便后期分步聚焦）：顶部 0–20% 居中 1 行大标题；主体 21%–91% 为居中纵向排布的 3 条等宽圆角口诀横条（序号 1、2、3 居左，居中铺满主区域，不在左右堆砌多余药瓶或重复装饰卡）。";
+      const count = Math.min(4, Math.max(1, Array.isArray(slide.points) ? slide.points.length : 2));
+      return `清晰分区构图：顶部 0–20% 居中 1 行大标题；主体 21%–91% 为居中纵向排布的 ${count} 条等宽圆角要点横条（按实际条数排布，留白舒适，不堆砌多余装饰卡）。`;
     }
-    return "固定网格分区：上半部 6%–42% 居中排布大字问题与结论卡片；下半部 44%–93% 放 1 组简洁医学主视觉插画与 2–3 个大字短词标签。";
+    return "清晰分区构图：上半部 6%–42% 居中排布大字问题与结论卡片；下半部 44%–93% 放 1 组简洁医学主视觉插画与精简短词标签。";
   }
 
   function buildCardImagePrompt(rawDeck, slideIndex, customPrompt, drug) {
@@ -1915,7 +1975,7 @@
     return [
       "用途：严格 16:9 横屏医院药师用药科普整张信息图（宽:高 = 16:9，直接平铺填入视频右侧 16:9 恒定内容区，对应模板标准 1360×765 / 2560×1440），手机小屏播放必须清晰大字易读。",
       "画幅与铺满要求：严格锁定 16:9 宽屏比例，底色与画面构图 100% 满画幅平铺至最外四边，整张图本身就是完整内容页；严禁在画布外圈画外边框、上下/左右装饰留边条、浅蓝底框、投影画框或悬浮圆角大白卡套框（绝不做画中画/卡中卡）；仅让文字与核心图标距画布四边保持约 4%（1360×765 约 56px）的透明内安全区，避免贴边。",
-      gridRuleForType(slide.type),
+      gridRuleForType(slide),
       "文字精简铁律：坚持「1 句主标题（大字号、最多两行）+ 1 组简洁扁平医学图标/插画 + 最多 3–4 条极短词条（每条不超过 10 个中文字）」，字号大、行距宽、留白足，严禁在卡片内写大段解释性小字或抄写口播正文。",
       themeRule,
       desc
@@ -2036,16 +2096,55 @@
       `;
     }
 
+    if (type === "explain") {
+      const points = (Array.isArray(slide.points) ? slide.points : []).slice(0, 4);
+      const count = points.length;
+      const gridCls = count === 1
+        ? "pt-fb-explain-grid is-one"
+        : count === 2
+          ? "pt-fb-explain-grid is-two"
+          : count === 4
+            ? "pt-fb-explain-grid is-four"
+            : "pt-fb-explain-grid is-three";
+      const explainIcons = [
+        '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>',
+        '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m9 12 2 2 4-4"/></svg>',
+        '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"/><path d="M5 12h14"/></svg>',
+        '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
+      ];
+      return `
+        <div class="${cardCls}">
+          <div class="pt-fb-headline">${hlHeadline("pt-hl-blue")}</div>
+          ${slide.lead ? `<div class="pt-fb-explain-lead">${xmlEsc(slide.lead)}</div>` : ""}
+          <div class="${gridCls}">
+            ${points.map((pt, idx) => `
+              <div class="pt-fb-explain-card ${focusItemClass(hasFocus, fKey === String(idx))}">
+                <div class="pt-fb-explain-icon">${explainIcons[idx % 4]}</div>
+                <div class="pt-fb-explain-body">
+                  <div class="pt-fb-explain-head">
+                    <h3>${xmlEsc(pt.title || "")}</h3>
+                    ${pt.tag ? `<span class="pt-fb-explain-tag">${xmlEsc(pt.tag)}</span>` : ""}
+                  </div>
+                  ${pt.desc ? `<p>${xmlEsc(pt.desc)}</p>` : ""}
+                </div>
+              </div>
+            `).join("")}
+          </div>
+          ${slide.footerNote ? `<div class="pt-fb-tip-bar ${focusItemClass(hasFocus, fKey === "action")}">${xmlEsc(slide.footerNote)}</div>` : ""}
+        </div>
+      `;
+    }
+
     if (type === "compare") {
-      const cols = Array.isArray(slide.columns) ? slide.columns.slice(0, 2) : [];
-      const colClasses = ["blue-box", "amber-box"];
-      const strokeColors = ["#1466cc", "#d98218"];
+      const cols = Array.isArray(slide.columns) ? slide.columns.slice(0, 3) : [];
+      const colClasses = ["blue-box", "amber-box", "green-box"];
+      const strokeColors = ["#1466cc", "#d98218", "#1e8e5a"];
       return `
         <div class="${cardCls}">
           <div class="pt-fb-headline">${hlHeadline("pt-hl-coral")}</div>
-          <div class="pt-fb-compare-grid">
+          <div class="pt-fb-compare-grid${cols.length >= 3 ? " is-three" : ""}" style="grid-template-columns:repeat(${Math.max(1, cols.length)},minmax(0,1fr))">
             ${cols.map((col, idx) => `
-              <div class="pt-fb-compare-col ${colClasses[idx % 2]} ${focusItemClass(hasFocus, fKey === String(idx))}">
+              <div class="pt-fb-compare-col ${colClasses[idx % 3]} ${focusItemClass(hasFocus, fKey === String(idx))}">
                 <div>
                   <div class="pt-fb-compare-head">
                     <span class="pt-fb-chip">${xmlEsc(col.title || "")}</span>
@@ -2054,7 +2153,7 @@
                   <ul class="pt-fb-points">
                     ${(Array.isArray(col.points) ? col.points : []).slice(0, 4).map((pt, pi) => `
                       <li>
-                        <svg class="pt-fb-pt-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="${pi === 2 ? "#e6592d" : strokeColors[idx % 2]}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="${pi === 2 ? "M12 8v4m0 4h.01" : "m9 12 2 2 4-4"}"/></svg>
+                        <svg class="pt-fb-pt-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="${pi === 2 ? "#e6592d" : strokeColors[idx % 3]}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="${pi === 2 ? "M12 8v4m0 4h.01" : "m9 12 2 2 4-4"}"/></svg>
                         <span>${xmlEsc(pt)}</span>
                       </li>
                     `).join("")}
@@ -2075,22 +2174,23 @@
     }
 
     if (type === "steps") {
-      const steps = (Array.isArray(slide.steps) ? slide.steps : []).slice(0, 3);
+      const steps = (Array.isArray(slide.steps) ? slide.steps : []).slice(0, 4);
       const checks = (Array.isArray(slide.checks) ? slide.checks : []).slice(0, 4);
       const stepIcons = [
         '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1466cc" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l2.5 2.5"/></svg>',
         '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1466cc" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.31"/><path d="M14 9.3V2"/><path d="M8.5 2h7"/><path d="M14 9.3a6.5 6.5 0 1 1-4 0"/></svg>',
         '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1466cc" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m9 12 2 2 4-4"/></svg>',
+        '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1466cc" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
       ];
       return `
         <div class="${cardCls}">
           <div class="pt-fb-headline">${hlHeadline("pt-hl-blue")}</div>
-          <div class="pt-fb-steps-row">
+          <div class="pt-fb-steps-row${steps.length >= 4 ? " is-four" : ""}" style="grid-template-columns:repeat(${Math.max(1, steps.length)},minmax(0,1fr))">
             ${steps.map((st, idx) => `
               <div class="pt-fb-step-tile ${focusItemClass(hasFocus, fKey === String(idx))}">
                 <div class="pt-fb-step-top">
                   <span class="pt-fb-step-badge">第 ${idx + 1} 步</span>
-                  ${stepIcons[idx % 3]}
+                  ${stepIcons[idx % 4]}
                 </div>
                 <h3>${xmlEsc(st.title || "")}</h3>
                 <p>${xmlEsc(st.desc || "")}</p>
@@ -2099,7 +2199,7 @@
             `).join("")}
           </div>
           ${checks.length ? `
-            <div class="pt-fb-check-strip ${focusItemClass(hasFocus, fKey === "action")}">
+            <div class="pt-fb-check-strip ${focusItemClass(hasFocus, fKey === "action")}" style="grid-template-columns:repeat(${Math.max(1, checks.length)},minmax(0,1fr))">
               ${checks.map((ck) => `
                 <div class="pt-fb-check-cell">
                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m9 12 2 2 4-4"/></svg>
@@ -2107,7 +2207,7 @@
                 </div>
               `).join("")}
             </div>
-          ` : ""}
+          ` : (slide.footerNote ? `<div class="pt-fb-tip-bar ${focusItemClass(hasFocus, fKey === "action")}">${xmlEsc(slide.footerNote)}</div>` : "")}
         </div>
       `;
     }
@@ -2124,10 +2224,15 @@
         fKey === String(idx) ||
         (fKey === "top" && (idx === 0 || idx === 1)) ||
         (fKey === "bottom" && (idx === 2 || idx === 3));
+      const warnGridCls = warns.length === 1
+        ? "pt-fb-warn-grid is-one"
+        : warns.length === 3
+          ? "pt-fb-warn-grid is-three"
+          : "pt-fb-warn-grid";
       return `
         <div class="${cardCls}">
           <div class="pt-fb-headline">${hlHeadline("pt-hl-coral")}</div>
-          <div class="pt-fb-warn-grid">
+          <div class="${warnGridCls}">
             ${warns.map((item, idx) => `
               <div class="pt-fb-warn-tile ${focusItemClass(hasFocus, warnMatches(idx))}">
                 <div class="pt-fb-warn-icon">${warnIcons[idx % 4]}</div>
@@ -2144,17 +2249,17 @@
     }
 
     // Default / summary
-    const points = (Array.isArray(slide.points) ? slide.points : []).slice(0, 3);
+    const points = (Array.isArray(slide.points) ? slide.points : []).slice(0, 4);
     return `
       <div class="${cardCls}">
         <div class="pt-fb-headline">${hlHeadline("pt-hl-blue")}</div>
-        <div class="pt-fb-summary-list">
+        <div class="pt-fb-summary-list${points.length >= 4 ? " is-four" : ""}">
           ${points.map((pt, idx) => `
             <div class="pt-fb-summary-row ${focusItemClass(hasFocus, fKey === String(idx))}">
               <span class="pt-fb-summary-num">${idx + 1}</span>
               <div class="pt-fb-summary-text">
                 <strong>${xmlEsc(pt.title || "")}</strong>
-                <span>${xmlEsc(pt.desc || "")}</span>
+                ${pt.desc ? `<span>${xmlEsc(pt.desc)}</span>` : ""}
               </div>
             </div>
           `).join("")}

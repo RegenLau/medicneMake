@@ -1000,6 +1000,11 @@
   border-color: #f8d9b2;
 }
 
+.pt-fb-compare-col.green-box {
+  background: linear-gradient(180deg, #ecf9f2 0%, #f7fdf9 100%);
+  border-color: #c2e8d4;
+}
+
 .theme-warm .pt-fb-compare-col.blue-box {
   background: #eef6e8;
   border-color: rgba(44, 62, 80, 0.45);
@@ -1008,6 +1013,28 @@
 .theme-warm .pt-fb-compare-col.amber-box {
   background: #fef4df;
   border-color: rgba(44, 62, 80, 0.45);
+}
+
+.theme-warm .pt-fb-compare-col.green-box {
+  background: #f2f4fa;
+  border-color: rgba(44, 62, 80, 0.45);
+}
+
+.pt-fb-compare-grid.is-three {
+  gap: 12px;
+}
+
+.pt-fb-compare-grid.is-three .pt-fb-compare-col {
+  padding: 13px 14px;
+}
+
+.pt-fb-compare-grid.is-three .pt-fb-chip {
+  font-size: 16.5px;
+  padding: 5px 12px;
+}
+
+.pt-fb-compare-grid.is-three .pt-fb-points li {
+  font-size: 15px;
 }
 
 .pt-fb-compare-head {
@@ -1030,8 +1057,10 @@
 
 .blue-box .pt-fb-chip { background: #1466cc; }
 .amber-box .pt-fb-chip { background: #e37b1d; }
+.green-box .pt-fb-chip { background: #1e8e5a; }
 .theme-warm .blue-box .pt-fb-chip { background: #5c9145; }
 .theme-warm .amber-box .pt-fb-chip { background: #cf5228; }
+.theme-warm .green-box .pt-fb-chip { background: #3b6f9c; }
 
 .pt-fb-badge {
   font-size: 14px;
@@ -1088,6 +1117,144 @@
 
 .pt-fb-compare-foot b { color: var(--v-ink); }
 
+/* Fallback: Explain (Flexible Content-Driven Card) */
+.pt-fb-explain-lead {
+  text-align: center;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--v-primary-deep);
+  margin-top: 6px;
+  line-height: 1.4;
+}
+
+.pt-fb-explain-grid {
+  display: grid;
+  gap: 14px;
+  margin: 14px 0 12px;
+  flex: 1;
+  align-content: center;
+}
+
+.pt-fb-explain-grid.is-one {
+  grid-template-columns: 1fr;
+}
+
+.pt-fb-explain-grid.is-two {
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  align-content: stretch;
+}
+
+.pt-fb-explain-grid.is-three {
+  grid-template-columns: 1fr;
+  gap: 11px;
+}
+
+.pt-fb-explain-grid.is-four {
+  grid-template-columns: 1fr 1fr;
+  gap: 13px;
+  align-content: stretch;
+}
+
+.pt-fb-explain-card {
+  border-radius: 16px;
+  padding: 16px 20px;
+  background: #f3f9ff;
+  border: 1.5px solid #d4e6f7;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.pt-fb-explain-grid.is-one .pt-fb-explain-card {
+  padding: 28px 34px;
+  align-items: center;
+  gap: 20px;
+}
+
+.pt-fb-explain-grid.is-two .pt-fb-explain-card {
+  flex-direction: column;
+  justify-content: center;
+  padding: 22px 24px;
+  gap: 12px;
+}
+
+.theme-warm .pt-fb-explain-card {
+  background: #fdf8ef;
+  border-color: rgba(44, 62, 80, 0.45);
+}
+
+.pt-fb-explain-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: var(--v-primary-soft);
+  color: var(--v-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.theme-warm .pt-fb-explain-icon {
+  background: #f8e9d2;
+  color: #cf5228;
+}
+
+.pt-fb-explain-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.pt-fb-explain-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pt-fb-explain-card h3 {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--v-ink);
+  line-height: 1.3;
+}
+
+.pt-fb-explain-grid.is-one .pt-fb-explain-card h3 {
+  font-size: 26px;
+}
+
+.pt-fb-explain-card p {
+  margin-top: 5px;
+  font-size: 16px;
+  line-height: 1.48;
+  font-weight: 600;
+  color: var(--v-ink-soft);
+}
+
+.pt-fb-explain-grid.is-one .pt-fb-explain-card p {
+  margin-top: 8px;
+  font-size: 19px;
+}
+
+.pt-fb-explain-tag {
+  font-size: 13.5px;
+  font-weight: 800;
+  padding: 3px 10px;
+  border-radius: 99px;
+  background: #ffffff;
+  border: 1px solid #cde1f6;
+  color: var(--v-primary-deep);
+  white-space: nowrap;
+}
+
+.theme-warm .pt-fb-explain-tag {
+  background: #fffdf9;
+  border-color: rgba(44, 62, 80, 0.35);
+  color: #cf5228;
+}
+
 /* Fallback: Steps */
 .pt-fb-steps-row {
   display: grid;
@@ -1095,6 +1262,22 @@
   gap: 16px;
   margin: 14px 0 12px;
   flex: 1;
+}
+
+.pt-fb-steps-row.is-four {
+  gap: 12px;
+}
+
+.pt-fb-steps-row.is-four .pt-fb-step-tile {
+  padding: 13px 13px 12px;
+}
+
+.pt-fb-steps-row.is-four .pt-fb-step-tile h3 {
+  font-size: 18px;
+}
+
+.pt-fb-steps-row.is-four .pt-fb-step-tile p {
+  font-size: 14.5px;
 }
 
 .pt-fb-step-tile {
@@ -1185,6 +1368,30 @@
   flex: 1;
 }
 
+.pt-fb-warn-grid.is-one {
+  grid-template-columns: 1fr;
+  align-content: center;
+}
+
+.pt-fb-warn-grid.is-one .pt-fb-warn-tile {
+  padding: 26px 32px;
+  align-items: center;
+}
+
+.pt-fb-warn-grid.is-one .pt-fb-warn-tile h3 {
+  font-size: 24px;
+}
+
+.pt-fb-warn-grid.is-one .pt-fb-warn-tile p {
+  font-size: 18px;
+}
+
+.pt-fb-warn-grid.is-three {
+  grid-template-columns: 1fr;
+  gap: 11px;
+  align-content: center;
+}
+
 .pt-fb-warn-tile {
   border-radius: 16px;
   padding: 15px 18px;
@@ -1234,6 +1441,22 @@
   margin: 14px 0 12px;
   flex: 1;
   justify-content: center;
+}
+
+.pt-fb-summary-list.is-four {
+  gap: 8px;
+}
+
+.pt-fb-summary-list.is-four .pt-fb-summary-row {
+  padding: 10px 16px;
+}
+
+.pt-fb-summary-list.is-four .pt-fb-summary-text strong {
+  font-size: 17.5px;
+}
+
+.pt-fb-summary-list.is-four .pt-fb-summary-text span {
+  font-size: 14px;
 }
 
 .pt-fb-summary-row {
