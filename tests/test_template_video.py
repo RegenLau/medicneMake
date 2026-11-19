@@ -36,25 +36,24 @@ class TemplateVideoTests(unittest.TestCase):
                         "slides": [
                             {
                                 "type": "cover",
+                                "name": "发烧先稳住",
                                 "chapterIndex": 0,
-                                "leftTop": "发烧先稳住",
-                                "leftBottom": "退烧核心是舒服",
                                 "headline": "孩子发烧退烧药怎么吃才安全",
                                 "accentPhrase": "怎么吃才安全",
                                 "lead": "按体重算剂量更稳妥",
                                 "pills": ["按体重给药", "认准单一成分", "警惕危险信号"],
-                                "spotPrompt": "儿童药瓶和量杯并排放在纯白底面上",
+                                "imagePrompt": "儿童退烧封面信息图，画药瓶、量杯与三个核心要点标签",
                                 "footerNote": "发热本身是免疫防御反应",
                                 "highlightWords": ["退烧药"],
                                 "line": "孩子发烧时先别慌，按体重和说明书核对退烧药更稳妥。"
                             },
                             {
                                 "type": "compare",
+                                "name": "认准成分",
                                 "chapterIndex": 1,
-                                "leftTop": "认准成分",
-                                "leftBottom": "不常规交替",
                                 "headline": "认准两种常见单一成分",
                                 "accentPhrase": "单一成分",
+                                "imagePrompt": "左右双栏对比信息图，对比对乙酰氨基酚与布洛芬",
                                 "columns": [
                                     {"title": "对乙酰氨基酚", "badge": "三个月以上", "points": ["间隔四到六小时"], "footLabel": "剂型", "footValue": "滴剂或混悬液"},
                                     {"title": "布洛芬", "badge": "六个月以上", "points": ["间隔六到八小时"], "footLabel": "剂型", "footValue": "混悬液"}
@@ -65,11 +64,11 @@ class TemplateVideoTests(unittest.TestCase):
                             },
                             {
                                 "type": "summary",
+                                "name": "药师提醒",
                                 "chapterIndex": 3,
-                                "leftTop": "药师提醒",
-                                "leftBottom": "有疑问问药师",
                                 "headline": "记住三条用药原则",
                                 "accentPhrase": "三条用药原则",
+                                "imagePrompt": "三条总结口诀卡片信息图",
                                 "points": [
                                     {"title": "看精神", "desc": "关注孩子状态"},
                                     {"title": "按体重", "desc": "对照说明书核对"}
@@ -94,9 +93,68 @@ class TemplateVideoTests(unittest.TestCase):
         )
         self.assertEqual(out["title"], "孩子发烧退烧药怎么吃")
         self.assertEqual(len(out["chapters"]), 4)
+        self.assertEqual(out["disclaimer"], "科普内容仅供参考，具体诊疗与用药请遵医嘱")
         self.assertEqual(len(out["slides"]), 3)
         self.assertEqual(out["slides"][0]["type"], "cover")
+        self.assertEqual(out["slides"][0]["name"], "发烧先稳住")
+        self.assertIn("儿童退烧封面信息图", out["slides"][0]["imagePrompt"])
         self.assertIn("布洛芬混悬液", seen["body"]["messages"][0]["content"])
+
+    def test_template_card_image_generation_demo_and_ark(self):
+        png_bytes = make_tiny_png()
+        b64_png = base64.b64encode(png_bytes).decode("ascii")
+        demo_req = {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "mode": "demo",
+            "kind": "images",
+            "template": True,
+            "styleReference": False,
+            "settings": {
+                "imageModel": "doubao-seedream-5-5-261028",
+                "imageSize": "2K",
+                "ratio": "16:9",
+                "watermark": True,
+                "videoModel": "doubao-seedance-2-5-flash-261115",
+                "resolution": "720p",
+                "voice": "无配音",
+            },
+            "style": 0,
+            "items": [
+                {
+                    "prompt": "测试模板科普卡片图",
+                    "variant": 1,
+                    "fallbackImage": "/assets/template-info-fever.jpg",
+                }
+            ],
+        }
+        server.setting_valid(demo_req)
+        demo_img = server.image_item(demo_req, demo_req["items"][0], 0)
+        self.assertEqual(demo_img, "/assets/template-info-fever.jpg")
+        self.assertTrue(server.media_path(demo_img).is_file())
+
+        ark_req = {**demo_req, "mode": "ark"}
+        captured = {}
+        recorded = []
+
+        def fake_ark(path, body):
+            captured["path"] = path
+            captured["body"] = body
+            return {"data": [{"b64_json": b64_png, "size": "2848x1600"}]}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            media_dir = Path(tmp)
+            with mock.patch.object(server, "MEDIA", media_dir), \
+                 mock.patch.object(server, "current_ark_key", return_value="ark-test"), \
+                 mock.patch.object(server, "ark", side_effect=fake_ark):
+                server.setting_valid(ark_req)
+                out_url = server.image_item(ark_req, ark_req["items"][0], 0, lambda k, row: recorded.append(row))
+                self.assertTrue(out_url.startswith("/media/"))
+                self.assertTrue((media_dir / out_url.split("/")[-1]).is_file())
+                self.assertEqual(captured["path"], "/images/generations")
+                self.assertEqual(captured["body"]["size"], "2848x1600")
+                self.assertNotIn("image", captured["body"])
+                self.assertEqual(len(recorded), 1)
+                self.assertEqual(recorded[0]["amount"], "0.23")
 
     def test_upload_frame_and_render_template_mp4(self):
         png_bytes = make_tiny_png()

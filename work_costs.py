@@ -5,9 +5,15 @@ from decimal import Decimal
 
 PRICE_DATE = "2026-11-19"
 ARK_PRICE = "https://console.volcengine.com/ark/region%3Acn-beijing/docs/model-pricing"
+DEEPSEEK_PRICE = "https://api-docs.deepseek.com/zh-cn/quick_start/pricing"
 SPEECH_PRICE = "https://docs.volcengine.com/docs/doubao-voice/billing-instructions?lang=zh"
 TEXT_RATES = {
-    # Standard online inference, per million input, cached input, and output tokens.
+    # Standard online inference (peak standard rates for DeepSeek), per million input, cached input, and output tokens.
+    "deepseek-flash": ("2.00", "0.04", "8.00"),
+    "deepseek-v4-flash": ("2.00", "0.04", "8.00"),
+    "deepseek-v4-pro": ("9.00", "0.30", "27.00"),
+    "deepseek-chat": ("2.00", "0.04", "8.00"),
+    "deepseek-reasoner": ("4.00", "0.10", "16.00"),
     "doubao-seed-2-1-lite-260915": ("0.80", "0.16", "2.70"),
     "doubao-seed-2.1-lite": ("0.80", "0.16", "2.70"),
 }
@@ -39,14 +45,16 @@ def entry(label, model, usage, amount, index=None):
 def text_cost(label, model, usage):
     incoming = counter(usage_value(usage, "prompt_tokens"))
     outgoing = counter(usage_value(usage, "completion_tokens"))
-    cached = counter(usage_value(usage_value(usage, "prompt_tokens_details"), "cached_tokens")) or 0
+    cached = counter(usage_value(usage, "prompt_cache_hit_tokens"))
+    if cached is None:
+        cached = counter(usage_value(usage_value(usage, "prompt_tokens_details"), "cached_tokens")) or 0
     if incoming is None or outgoing is None:
         return entry(label, model, "缺少 Token 用量", None)
     cached = min(cached, incoming)
     details = f"输入 {incoming:,} Token · 输出 {outgoing:,} Token"
     if cached:
         details += f" · 缓存命中 {cached:,} Token"
-    rate = TEXT_RATES.get(model)
+    rate = TEXT_RATES.get(model) or TEXT_RATES.get(str(model or "").lower())
     amount = None
     if rate:
         normal, hit, out = map(Decimal, rate)

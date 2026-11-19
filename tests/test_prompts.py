@@ -1,7 +1,9 @@
 import json
 import unittest
+from unittest.mock import patch
 
-from draft_content import article_draft, article_images, validate_request, video_draft
+import server
+from draft_content import article_draft, article_images, ask_json, validate_request, video_draft
 
 
 def fake_ark(payload, prompts):
@@ -77,6 +79,78 @@ class VideoPromptTests(unittest.TestCase):
         self.assertEqual(draft["setting"], "")
         with self.assertRaisesRegex(ValueError, "画幅"):
             validate_request({"type": "video", "topic": "有效期"}, {"ratio": "4:3", "videoModel": "m"}, {"m": None})
+
+
+class DeepSeekDraftTests(unittest.TestCase):
+    def test_ask_json_uses_max_tokens_and_thinking_disabled_for_deepseek(self):
+        captured = []
+
+        def fake_client(path, body, **_):
+            captured.append((path, body))
+            return {"choices": [{"finish_reason": "stop", "message": {"content": '{"ok": true}'}}]}
+
+        result = ask_json(fake_client, "deepseek-flash", "sys", {"a": 1}, 2048)
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(captured[0][0], "/chat/completions")
+        self.assertEqual(captured[0][1]["max_tokens"], 2048)
+        self.assertNotIn("max_completion_tokens", captured[0][1])
+        self.assertEqual(captured[0][1]["thinking"], {"type": "disabled"})
+
+        ask_json(fake_client, "deepseek-reasoner", "sys", {"a": 1}, 2048)
+        self.assertNotIn("thinking", captured[1][1])
+
+    def test_draft_validation_uses_deepseek_key_and_selected_model(self):
+        req = {
+            "mode": "ark",
+            "kind": "draft",
+            "draft": {"type": "video", "topic": "退烧药怎么吃"},
+            "settings": {
+                "ratio": "9:16",
+                "videoModel": "doubao-seedance-2-5-flash-261115",
+                "textModel": "deepseek-v4-pro",
+            },
+        }
+        with patch.object(server, "current_deepseek_key", return_value=""):
+            with self.assertRaisesRegex(ValueError, "DeepSeek"):
+                server.setting_valid(req)
+        with patch.object(server, "current_deepseek_key", return_value="sk-test"), \
+             patch.object(server, "DEEPSEEK_REMOTE_MODELS", ["deepseek-flash", "deepseek-v4-pro"]):
+            server.setting_valid(req)
+            bad = {**req, "settings": {**req["settings"], "textModel": "not-a-model"}}
+            with self.assertRaisesRegex(ValueError, "DeepSeek 文本模型"):
+                server.setting_valid(bad)
+
+    def test_write_draft_calls_deepseek_with_chosen_model(self):
+        calls = []
+
+        def fake_ds(path, body, **_):
+            calls.append((path, body["model"]))
+            return {
+                "model": body["model"],
+                "choices": [{"finish_reason": "stop", "message": {"content": json.dumps(
+                    {"title": "退烧药", "setting": "客厅", "beats": BEATS}, ensure_ascii=False,
+                )}}],
+                "usage": {"prompt_tokens": 500, "completion_tokens": 100, "prompt_cache_hit_tokens": 100},
+            }
+
+        req = {
+            "mode": "ark",
+            "kind": "draft",
+            "draft": {"type": "video", "topic": "退烧药怎么吃"},
+            "settings": {
+                "ratio": "9:16",
+                "videoModel": "doubao-seedance-2-5-flash-261115",
+                "textModel": "deepseek-v4-pro",
+            },
+        }
+        job = {"request": req}
+        recorded = []
+        with patch.object(server, "deepseek", side_effect=fake_ds):
+            server.write_draft(req, job, lambda: None, lambda k, row: recorded.append(row))
+        self.assertEqual(calls, [("/chat/completions", "deepseek-v4-pro")])
+        self.assertEqual(len(recorded), 1)
+        self.assertEqual(recorded[0]["model"], "deepseek-v4-pro")
+        self.assertIsNotNone(recorded[0]["amount"])
 
 
 if __name__ == "__main__":

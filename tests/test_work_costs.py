@@ -14,6 +14,12 @@ class WorkCostsTests(unittest.TestCase):
         usage = {"prompt_tokens": 1000, "completion_tokens": 100, "prompt_tokens_details": {"cached_tokens": 200}}
         row = work_costs.text_cost("文章正文", "doubao-seed-2-1-lite-260915", usage)
         self.assertEqual(row["amount"], "0.000942")
+        ds_usage = {"prompt_tokens": 1000, "completion_tokens": 100, "prompt_cache_hit_tokens": 200}
+        ds_row = work_costs.text_cost("口播与分镜脚本", "deepseek-flash", ds_usage)
+        self.assertEqual(ds_row["amount"], "0.002408")
+        self.assertIn("缓存命中 200 Token", ds_row["usage"])
+        pro_row = work_costs.text_cost("文章正文", "deepseek-v4-pro", ds_usage)
+        self.assertEqual(pro_row["amount"], "0.00996")
         self.assertIsNone(work_costs.text_cost("文章正文", "unknown", usage)["amount"])
         self.assertIsNone(work_costs.text_cost("文章正文", "doubao-seed-2-1-lite-260915", {})["amount"])
 

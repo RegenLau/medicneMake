@@ -41,7 +41,15 @@ for directory in (MEDIA, JOBS):
 PORT = int(os.environ.get("STUDIO_PORT", "8765"))
 ORIGIN = f"http://127.0.0.1:{PORT}"
 ARK = "https://ark.cn-beijing.volces.com/api/v3"
-TEXT_MODEL = os.environ.get("ARK_TEXT_MODEL", "").strip() or "doubao-seed-2-1-lite-260915"
+DEEPSEEK = "https://api.deepseek.com"
+TEXT_MODEL_LABELS = {
+    "deepseek-flash": "DeepSeek-V4.1-Flash",
+    "deepseek-v4-pro": "DeepSeek-V4-Pro",
+    "deepseek-chat": "DeepSeek Chat",
+    "deepseek-reasoner": "DeepSeek Reasoner",
+}
+DEFAULT_TEXT_MODELS = ("deepseek-flash", "deepseek-v4-pro")
+TEXT_MODEL = os.environ.get("DEEPSEEK_TEXT_MODEL", "").strip() or "deepseek-flash"
 MUSIC_TRACKS = {name: PUBLIC / "assets" / "music" / (name + ".flac") for name in ("calm", "light")}
 SPEECH_URL = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
 SPEECH_RESOURCE = "seed-tts-2.0"
@@ -169,15 +177,80 @@ def persist_key(account, key):
 
 
 PAGE_ARK_KEY = load_saved_key("ark")
+PAGE_DEEPSEEK_KEY = load_saved_key("deepseek")
 PAGE_SPEECH_KEY = load_saved_key("speech")
+DEEPSEEK_REMOTE_MODELS = []
 
 
 def current_ark_key():
     return PAGE_ARK_KEY or os.environ.get("ARK_API_KEY", "").strip()
 
 
+def current_deepseek_key():
+    return PAGE_DEEPSEEK_KEY or os.environ.get("DEEPSEEK_API_KEY", "").strip()
+
+
 def current_speech_key():
     return PAGE_SPEECH_KEY or os.environ.get("VOLC_SPEECH_API_KEY", "").strip()
+
+
+def text_models():
+    with CACHE_LOCK:
+        ids = list(DEEPSEEK_REMOTE_MODELS) if DEEPSEEK_REMOTE_MODELS else list(DEFAULT_TEXT_MODELS)
+    if TEXT_MODEL and TEXT_MODEL not in ids:
+        ids.insert(0, TEXT_MODEL)
+    return {model_id: TEXT_MODEL_LABELS.get(model_id, model_id) for model_id in ids}
+
+
+def default_text_model():
+    models = text_models()
+    if TEXT_MODEL in models:
+        return TEXT_MODEL
+    return next(iter(models))
+
+
+def deepseek_connection():
+    return {
+        "deepseekKeyPresent": bool(current_deepseek_key()),
+        "deepseekKeySource": "page"
+        if PAGE_DEEPSEEK_KEY
+        else "environment"
+        if current_deepseek_key()
+        else "",
+        "deepseekKeySaved": bool(PAGE_DEEPSEEK_KEY and KEY_STORAGE != "session"),
+        "deepseekKeyWarning": credential_warnings.get("deepseek", ""),
+    }
+
+
+def refresh_deepseek_models(key=None):
+    response = deepseek("/models", key=key, timeout=12)
+    if not isinstance(response, dict) or not isinstance(response.get("data"), list):
+        raise ValueError("DeepSeek 返回的模型列表异常，请稍后重试")
+    ids = []
+    for item in response["data"]:
+        model_id = item.get("id") if isinstance(item, dict) else None
+        if isinstance(model_id, str) and model_id.strip() and model_id not in ids:
+            ids.append(model_id.strip())
+    if ids:
+        with CACHE_LOCK:
+            DEEPSEEK_REMOTE_MODELS[:] = ids
+    return ids
+
+
+def connect_deepseek(key):
+    global PAGE_DEEPSEEK_KEY
+    if not isinstance(key, str) or not re.fullmatch(r"[!-~]{1,512}", key.strip()):
+        raise ValueError("请输入有效的 DeepSeek API Key")
+    key = key.strip()
+    refresh_deepseek_models(key=key)
+    with CACHE_LOCK:
+        persist_key("deepseek", key)
+        PAGE_DEEPSEEK_KEY = key
+        return {
+            **deepseek_connection(),
+            "textModels": text_models(),
+            "textModel": default_text_model(),
+        }
 
 
 def configure_speech(key):
@@ -271,12 +344,53 @@ def ark(path, body=None, *, key=None, timeout=240):
         raise
 
 
+def deepseek(path, body=None, *, key=None, timeout=120):
+    if key is None:
+        key = getattr(JOB_CREDENTIALS, "deepseek_key", None)
+    if key is None:
+        key = current_deepseek_key()
+    if not key:
+        raise ValueError("请在页面顶部连接 DeepSeek，再重试生成。")
+    request = Request(
+        DEEPSEEK + path,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            return json.load(response)
+    except HTTPError as error:
+        if path == "/models":
+            message = {
+                401: "DeepSeek 未接受此 Key，请检查是否复制完整或已失效。",
+                402: "DeepSeek 账户余额不足，请先充值后再试。",
+                403: "此 Key 无权查询 DeepSeek 模型列表，请检查权限。",
+            }.get(error.code, f"DeepSeek 验证失败（HTTP {error.code}），请稍后重试。")
+            raise ValueError(message) from None
+        try:
+            info = json.load(error).get("error", {})
+            message = str(info.get("message") or info.get("code") or "")
+        except (ValueError, AttributeError):
+            message = ""
+        if error.code == 402:
+            raise ValueError("DeepSeek 账户余额不足，请充值后重试。") from None
+        raise ValueError(
+            f"DeepSeek 返回 {error.code}。{message.replace(key, '[已隐藏]')[:450]}"
+        ) from None
+    except (URLError, TimeoutError):
+        if path == "/models":
+            raise ValueError("暂时连不上 DeepSeek，请检查网络后重试。") from None
+        raise
+
+
 def media_path(url):
     if not isinstance(url, str):
         raise ValueError("缺少分镜图")
-    if re.fullmatch(r"/media/[a-f0-9-]+\.(jpg|png|mp4|vtt)", url):
+    if re.fullmatch(r"/media/[a-f0-9-]+\.(jpg|png|webp|mp4|vtt)", url):
         path = MEDIA / url.split("/")[-1]
     elif re.fullmatch(r"/assets/style-[0-5]\.webp", url):
+        path = PUBLIC / url.lstrip("/")
+    elif re.fullmatch(r"/assets/template-[a-z0-9-]+\.(jpg|png|webp)", url):
         path = PUBLIC / url.lstrip("/")
     else:
         raise ValueError("请选择本作品的本地素材")
@@ -338,8 +452,11 @@ def setting_valid(p):
     if p.get("mode") not in ("demo", "ark") or p.get("kind") not in ("images", "video", "draft"):
         raise ValueError("未知的生成方式")
     if p["kind"] == "draft":
-        if p["mode"] != "ark" or not current_ark_key():
-            raise ValueError("请先连接火山方舟，再生成自定义内容。")
+        if not current_deepseek_key():
+            raise ValueError("请先连接 DeepSeek，再生成自定义内容。")
+        selected_text_model = p["settings"].get("textModel") or default_text_model()
+        if selected_text_model not in text_models():
+            raise ValueError("请选择有效的 DeepSeek 文本模型。")
         draft_content.validate_request(p["draft"], p["settings"], VIDEO_MODELS)
         return
     if p["kind"] == "video" and p.get("template") is True:
@@ -438,6 +555,19 @@ def image_item(p, item, index, record=None):
     style_asset = f"/assets/style-{p['style']}.webp"
     if p["mode"] == "demo":
         time.sleep(0.28)
+        if p.get("template") is True:
+            fallback = item.get("fallbackImage")
+            if isinstance(fallback, str) and re.fullmatch(r"/assets/template-[a-z0-9-]+\.(jpg|png|webp)", fallback):
+                if (PUBLIC / fallback.lstrip("/")).is_file():
+                    return fallback
+            pool = sorted(
+                "/assets/" + path.name
+                for path in (PUBLIC / "assets").glob("template-info-*.jpg")
+                if path.is_file()
+            )
+            if pool:
+                return pool[(index + int(item.get("variant", 0))) % len(pool)]
+            return "/assets/template-fever-visual.jpg"
         if p.get("styleReference") is True:
             return style_asset
         return f"/assets/style-{(p['style'] + index + int(item.get('variant', 0))) % 6}.webp"
@@ -1002,9 +1132,11 @@ def render_video(p, job, save, speech_key, record=None):
 
 
 def write_draft(p, job, save, record=None):
-    def tracked_ark(label):
+    model = p["settings"].get("textModel") or default_text_model()
+
+    def tracked_deepseek(label):
         def request(path, body, **kwargs):
-            result = ark(path, body, **kwargs)
+            result = deepseek(path, body, **kwargs)
             if record:
                 record(f"text:{uuid.uuid4()}", work_costs.text_cost(
                     label, result.get("model") or body["model"], result.get("usage") or {},
@@ -1019,13 +1151,13 @@ def write_draft(p, job, save, record=None):
             job["progress"] = "生成 5 页模板结构与口播脚本"
             save()
             job["output"] = draft_content.template_video_draft(
-                tracked_ark("模板讲解脚本"), TEXT_MODEL, item,
+                tracked_deepseek("模板讲解脚本"), model, item,
             )
             return
         job["progress"] = "撰写完整口播并划分分镜"
         save()
         job["output"] = draft_content.video_draft(
-            tracked_ark("口播与分镜脚本"), TEXT_MODEL, item, settings.get("duration"), VIDEO_MODELS[settings["videoModel"]][2],
+            tracked_deepseek("口播与分镜脚本"), model, item, settings.get("duration"), VIDEO_MODELS[settings["videoModel"]][2],
             settings.get("ratio", "9:16"),
         )
         return
@@ -1033,16 +1165,16 @@ def write_draft(p, job, save, record=None):
     if not job.get("output"):
         job["progress"] = "撰写文章正文"
         save()
-        job["output"] = draft_content.article_draft(tracked_ark("文章正文"), TEXT_MODEL, item)
+        job["output"] = draft_content.article_draft(tracked_deepseek("文章正文"), model, item)
     if "images" not in job["output"]:
         job["progress"] = "根据正文规划配图"
         save()
         job["output"]["images"] = draft_content.article_images(
-            tracked_ark("规划文章配图"), TEXT_MODEL, job["output"], item["layout"],
+            tracked_deepseek("规划文章配图"), model, job["output"], item["layout"],
         )
 
 
-def work(job, key=None, speech_key=""):
+def work(job, key=None, speech_key="", deepseek_key=None):
     def save():
         with CACHE_LOCK:
             write_json(JOBS / (job["id"] + ".json"), job)
@@ -1054,6 +1186,7 @@ def work(job, key=None, speech_key=""):
             save()
 
     JOB_CREDENTIALS.key = key
+    JOB_CREDENTIALS.deepseek_key = deepseek_key
     try:
         with SLOTS:
             p = job["request"]
@@ -1145,7 +1278,8 @@ def cost_details(request):
             unresolved = True
     amounts = [float(row["amount"]) for row in rows if row["amount"] is not None]
     return {"rows": rows, "total": math.fsum(amounts) if amounts else None, "unresolved": unresolved,
-            "priceDate": work_costs.PRICE_DATE, "arkPrice": work_costs.ARK_PRICE, "speechPrice": work_costs.SPEECH_PRICE}
+            "priceDate": work_costs.PRICE_DATE, "arkPrice": work_costs.ARK_PRICE,
+            "deepseekPrice": work_costs.DEEPSEEK_PRICE, "speechPrice": work_costs.SPEECH_PRICE}
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -1174,11 +1308,13 @@ class Handler(SimpleHTTPRequestHandler):
                 {
                     "imageModels": IMAGE_MODELS,
                     "videoModels": VIDEO_MODELS,
-                    "textModel": TEXT_MODEL,
+                    "textModels": text_models(),
+                    "textModel": default_text_model(),
                     "workCosts": True,
                     "videoBackgroundMusic": True,
                     "imageStyleReference": True,
                     **ark_connection(),
+                    **deepseek_connection(),
                     "encoder": bool(FFMPEG),
                     **speech_connection(),
                     "keyStorage": KEY_STORAGE,
@@ -1251,7 +1387,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         if (
-            self.path not in ("/api/jobs", "/api/costs", "/api/ark-key", "/api/speech-key", "/api/upload-frame")
+            self.path not in ("/api/jobs", "/api/costs", "/api/ark-key", "/api/deepseek-key", "/api/speech-key", "/api/upload-frame")
             or not self.allowed()
             or self.headers.get("Origin") not in (ORIGIN, f"http://localhost:{PORT}")
             or self.headers.get_content_type() != "application/json"
@@ -1269,9 +1405,11 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(200, save_uploaded_frame(p))
             if self.path == "/api/costs":
                 return self.send_json(200, cost_details(p))
-            if self.path in ("/api/ark-key", "/api/speech-key"):
+            if self.path in ("/api/ark-key", "/api/deepseek-key", "/api/speech-key"):
                 if self.path == "/api/speech-key":
                     return self.send_json(200, configure_speech(p.get("key")))
+                if self.path == "/api/deepseek-key":
+                    return self.send_json(200, connect_deepseek(p.get("key")))
                 return self.send_json(200, connect_ark(p.get("key")))
             job_id = str(uuid.UUID(p["id"]))
             if "workId" in p and (not isinstance(p["workId"], str) or str(uuid.UUID(p["workId"])) != p["workId"]):
@@ -1291,8 +1429,9 @@ class Handler(SimpleHTTPRequestHandler):
                 write_json(file, job)
                 ACTIVE.add(job_id)
                 key = current_ark_key() if p["mode"] == "ark" else None
+                ds_key = current_deepseek_key() if p["kind"] == "draft" else None
                 threading.Thread(
-                    target=work, args=(job, key, current_speech_key()), daemon=True
+                    target=work, args=(job, key, current_speech_key(), ds_key), daemon=True
                 ).start()
                 self.send_json(202, visible(job))
         except (ValueError, KeyError, TypeError) as error:
@@ -1312,6 +1451,13 @@ if __name__ == "__main__":
         except (OSError, ValueError):
             pass
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    if current_deepseek_key():
+        def _warm_deepseek_models():
+            try:
+                refresh_deepseek_models()
+            except Exception:
+                pass
+        threading.Thread(target=_warm_deepseek_models, daemon=True).start()
     if "--open" in sys.argv:
         webbrowser.open(ORIGIN)
     print(f"希息药事  {ORIGIN}", flush=True)

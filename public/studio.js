@@ -173,6 +173,7 @@ function loadState() {
 let data = loadState(),
   config,
   tab = "examples",
+  exampleFilter = "all",
   filter = "全部",
   toastTimer,
   selectedTags = [],
@@ -188,6 +189,7 @@ const musicLabels = { off: "无背景音乐", auto: "自动搭配", calm: "舒�
 
 const defaults = {
   mode: "ark",
+  textModel: "deepseek-flash",
   imageModel: "doubao-seedream-5-5-261028",
   imageSize: "2K",
   videoModel: "doubao-seedance-2-5-flash-261115",
@@ -198,6 +200,24 @@ const defaults = {
   voice: defaultVoice,
   music: "off",
 };
+
+function textModelMap() {
+  if (config?.textModels && Object.keys(config.textModels).length) return config.textModels;
+  const fallback = config?.textModel || defaults.textModel;
+  return { [fallback]: fallback };
+}
+
+function resolveTextModel(s) {
+  const map = textModelMap();
+  const chosen = s?.textModel;
+  if (chosen && Object.prototype.hasOwnProperty.call(map, chosen)) return chosen;
+  if (config?.textModel && Object.prototype.hasOwnProperty.call(map, config.textModel)) return config.textModel;
+  return Object.keys(map)[0];
+}
+
+function textModelLabel(id) {
+  return textModelMap()[id] || id || "";
+}
 
 data.settings = { ...defaults, ...data.settings };
 data.works ||= [];
@@ -267,13 +287,20 @@ function current() {
 }
 
 function workMedia(w) {
-  return [w.video?.url, ...(w.blocks ?? []).map((block) => block.image)]
-    .filter((url) => url?.startsWith("/media/"));
+  return [
+    w.video?.url,
+    ...(w.blocks ?? []).map((block) => block.image),
+    ...(w.templateDeck?.slides ?? []).map((slide) => slide.contentImage),
+    w.templateDeck?.pharmacist?.avatarImage,
+  ].filter((url) => url?.startsWith("/media/"));
 }
 
 function workJobIds(w) {
-  return [w.job, ...(w.blocks ?? []).map((block) => block.job)]
-    .flatMap((job) => job?.payload?.id ? [job.payload.id] : []);
+  return [
+    w.job,
+    ...(w.blocks ?? []).map((block) => block.job),
+    ...(w.templateDeck?.slides ?? []).map((slide) => slide.job),
+  ].flatMap((job) => job?.payload?.id ? [job.payload.id] : []);
 }
 
 const feeAmount = new Intl.NumberFormat("zh-CN", {
@@ -297,6 +324,7 @@ function renderWorkCosts(w, result) {
     (result.unresolved ? '<p class="footmeta">部分任务的用量仍待核对。</p>' : '') +
     '<p class="footmeta">按公开按量单价估算，账户折扣、资源包与实付金额以服务商账单为准。</p>' +
     '<p class="cost-sources small">' + esc(result.priceDate) + ' 核对单价' +
+    (result.deepseekPrice ? '<a href="' + esc(result.deepseekPrice) + '" target="_blank" rel="noopener noreferrer">DeepSeek 价格</a>' : '') +
     '<a href="' + esc(result.arkPrice) + '" target="_blank" rel="noopener noreferrer">方舟价格</a>' +
     '<a href="' + esc(result.speechPrice) + '" target="_blank" rel="noopener noreferrer">语音价格</a></p>';
 }
@@ -371,14 +399,14 @@ function speechStats(text, seconds) {
 
 function updateTopbar() {
   const gs = data.settings;
-  const dotCls =
-    gs.mode === "demo" ? "demo" : config?.keyPresent ? "" : "warn";
+  const keysReady = config && config.deepseekKeyPresent && (gs.mode === "demo" || config.keyPresent);
+  const dotCls = keysReady ? (gs.mode === "demo" ? "demo" : "") : "warn";
   const modeEl = $("#mode-indicator");
   if (modeEl) {
     modeEl.innerHTML =
       '<span class="dot ' +
       dotCls +
-      '" aria-hidden="true"></span><span class="mode-label">默认：' +
+      '" aria-hidden="true"></span><span class="mode-label">模型配置 · ' +
       (gs.mode === "ark" ? "火山方舟" : "本地演示") +
       "</span>" +
       ico("settings");
@@ -409,83 +437,112 @@ function openModal(title, body, type = "generic") {
   if (!dialog.open) dialog.showModal();
 }
 
-function openApiKeys(focus = "ark") {
-  const storageHint = {
-    "mac-keychain": "保存到当前用户的 macOS 钥匙串，重启后自动读取。",
-    "windows-dpapi": "使用当前 Windows 用户凭据加密保存，重启后自动读取。",
-  }[config.keyStorage];
-  const serviceHint = config.keyStorage === undefined
-    ? "当前服务仍使用旧版保存方式。下次启动工作台后，请重新填写需要保存在本机的 Key。"
-    : storageHint;
-  openModal(
-    "API Key 管理",
-    (serviceHint ? '<p class="footmeta">' + serviceHint + "</p>" : "") +
-    '<form id="ark-key-form" class="credential-form">' +
-      '<div class="card-head"><h3>文字、图片与视频 · 火山方舟</h3><span class="small" data-key-status>' +
-      (config.keySaved ? "已保存到本机" : config.keyPresent ? "已配置" : "未配置") + "</span></div>" +
-      '<label class="field" for="ark-key">方舟 API Key</label>' +
-      '<input type="password" id="ark-key" required maxlength="512" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="ark-key-hint">' +
-      '<p class="footmeta" id="ark-key-hint">' +
-      esc(config.keyWarning || "") +
-      (config.keySource === "environment" ? "当前使用环境变量中的 Key。" : "") +
-      '验证时只查询模型列表，成功后保存。</p>' +
-      '<p class="banner err" id="ark-key-error" role="alert" hidden></p>' +
-      '<button type="submit" class="primary">验证并连接</button></form>' +
-      '<form id="speech-key-form" class="credential-form">' +
-      '<div class="card-head"><h3>配音 · 豆包语音</h3><span class="small" data-key-status>' +
-      (config.speechKeySaved ? "已保存到本机" : config.speechKeyPresent ? "已配置" : "未配置") + "</span></div>" +
-      '<label class="field" for="speech-key">豆包语音 API Key</label>' +
-      '<input type="password" id="speech-key" required maxlength="512" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="speech-key-hint">' +
-      (config.speechKeyWarning ? '<p class="banner warn" data-storage-warning>' + esc(config.speechKeyWarning) + "</p>" : "") +
-      '<p class="footmeta" id="speech-key-hint">' +
-      (storageHint ? "" : "语音 Key 仅在本次运行中使用。") +
-      '使用已开通语音合成 2.0 的项目 Key，提交配音时校验并按字符计费。<a href="https://console.volcengine.com/speech/new/setting/apikeys" target="_blank" rel="noopener noreferrer">获取语音 Key</a></p>' +
-      '<p class="banner err" id="speech-key-error" role="alert" hidden></p>' +
-      '<button type="submit" class="primary">保存语音 Key</button></form>',
-    "api-keys",
+const keyProviders = {
+  deepseek: {
+    title: "DeepSeek",
+    label: "DeepSeek API Key",
+    endpoint: "/api/deepseek-key",
+    submit: "验证并连接",
+    link: ["https://platform.deepseek.com/api_keys", "获取 Key"],
+    status: () => [config.deepseekKeySaved, config.deepseekKeyPresent, config.deepseekKeySource, config.deepseekKeyWarning],
+  },
+  ark: {
+    title: "火山方舟",
+    label: "方舟 API Key",
+    endpoint: "/api/ark-key",
+    submit: "验证并连接",
+    link: ["https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey", "获取 Key"],
+    status: () => [config.keySaved, config.keyPresent, config.keySource, config.keyWarning],
+  },
+  speech: {
+    title: "豆包语音",
+    label: "豆包语音 API Key",
+    endpoint: "/api/speech-key",
+    submit: "保存",
+    link: ["https://console.volcengine.com/speech/new/setting/apikeys", "获取 Key"],
+    status: () => [config.speechKeySaved, config.speechKeyPresent, "", config.speechKeyWarning],
+  },
+};
+
+function keyStatusText(kind) {
+  const [saved, present] = keyProviders[kind].status();
+  return saved ? "已保存到本机" : present ? "已配置" : "未配置";
+}
+
+function keyForm(kind) {
+  const p = keyProviders[kind];
+  const [, present, source, warning] = p.status();
+  const notes = [
+    source === "environment" ? "当前使用环境变量中的 Key。" : "",
+    !config.keyStorage || config.keyStorage === "session" ? "Key 仅在本次运行中使用。" : "",
+  ].join("");
+  return (
+    '<form id="' + kind + '-key-form" class="credential-form" data-key-kind="' + kind + '">' +
+    '<div class="card-head"><h3>' + p.title + ' Key</h3><span class="key-status' + (present ? " ok" : "") +
+    '" data-key-status>' + keyStatusText(kind) + "</span></div>" +
+    '<div class="key-row">' +
+    '<input type="password" id="' + kind + '-key" required maxlength="512" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="' +
+    p.label + '" placeholder="' + (present ? "粘贴新 Key 可替换" : "粘贴 " + p.label) + '">' +
+    '<button type="submit" class="primary">' + p.submit + "</button></div>" +
+    (warning ? '<p class="banner warn" data-storage-warning>' + esc(warning) + "</p>" : "") +
+    '<p class="footmeta">' + notes +
+    '<a href="' + p.link[0] + '" target="_blank" rel="noopener noreferrer">' + p.link[1] + "</a></p>" +
+    '<p class="banner err" id="' + kind + '-key-error" role="alert" hidden></p>' +
+    "</form>"
   );
-  $(focus === "speech" ? "#speech-key" : "#ark-key").focus();
+}
+
+// Which tab of the model settings is open. Shared by the dialog and the setup page.
+let settingsTab = "text";
+const settingsTabLabels = { text: "文本", image: "图片", video: "视频" };
+
+function settingsTabsFor(which) {
+  if (which === "article") return ["text", "image"];
+  if (which === "template-video") return ["text", "image", "video"];
+  return ["text", "image", "video"];
+}
+
+function openApiKeys(focus = "deepseek") {
+  settingsTab = focus === "deepseek" ? "text" : focus === "speech" ? "video" : "image";
+  const w = route()[0] === "work" ? current() : null;
+  const available = settingsTabsFor(w ? (TemplateStudio.isTemplateVideo(w) ? "template-video" : w.type) : "all");
+  if (!available.includes(settingsTab)) prefs(null);
+  else prefs(w);
+  $("#" + focus + "-key", dialogBody)?.focus();
 }
 
 dialog.addEventListener("submit", async (event) => {
   const form = event.target;
-  const speech = form.id === "speech-key-form";
-  if (!speech && form.id !== "ark-key-form") return;
+  const kind = form.dataset.keyKind;
+  if (!keyProviders[kind]) return;
   event.preventDefault();
-  const input = form.querySelector(speech ? "#speech-key" : "#ark-key");
-  const feedback = form.querySelector(speech ? "#speech-key-error" : "#ark-key-error");
+  const input = form.querySelector("#" + kind + "-key");
+  const feedback = form.querySelector("#" + kind + "-key-error");
   const submit = form.querySelector('button[type="submit"]');
   const buttonLabel = submit.textContent;
   if (submit.disabled) return;
   submit.disabled = true;
-  submit.textContent = speech ? "正在保存…" : "正在验证…";
+  submit.textContent = kind === "speech" ? "正在保存…" : "正在验证…";
   input.readOnly = true;
   feedback.hidden = true;
   try {
-    const status = await jsonRequest(speech ? "/api/speech-key" : "/api/ark-key", {
+    const status = await jsonRequest(keyProviders[kind].endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ key: input.value.trim() }),
     });
     Object.assign(config, status);
     input.value = "";
-    if (form.isConnected) {
-      form.querySelector("[data-storage-warning]")?.remove();
-      const saved = speech ? status.speechKeySaved : status.keySaved;
-      form.querySelector("[data-key-status]").textContent = saved ? "已保存到本机" : "已配置";
-      if (!speech) {
-        $("#ark-key-hint", form).textContent = status.keySaved
-          ? "验证通过，Key 已保存到本机。"
-          : "验证通过，Key 仅在本次运行中使用。";
-      }
+    const saved = keyProviders[kind].status()[0];
+    if (dialog.open && modalType === "settings") {
+      const scope = modalScope === "global" ? null : data.works.find((x) => x.id === modalScope) || null;
+      prefs(scope);
     }
     render(true);
+    const extra = kind === "deepseek" ? `，已同步 ${Object.keys(textModelMap()).length} 个模型` : "";
     notify(
-      speech
-        ? "已保存火山语音 Key"
-        : status.keySaved
-          ? "已连接火山方舟，Key 已保存到本机"
-          : "已连接火山方舟，本次运行可用",
+      (kind === "speech" ? "已保存豆包语音 Key" : "已连接" + keyProviders[kind].title) +
+        (saved ? "，已保存到本机" : "，本次运行可用") + extra,
       "ok",
     );
   } catch (error) {
@@ -494,9 +551,11 @@ dialog.addEventListener("submit", async (event) => {
     input.readOnly = false;
     input.focus();
   } finally {
-    input.readOnly = false;
-    submit.disabled = false;
-    submit.textContent = buttonLabel;
+    if (submit.isConnected) {
+      input.readOnly = false;
+      submit.disabled = false;
+      submit.textContent = buttonLabel;
+    }
   }
 });
 
@@ -521,95 +580,133 @@ function modeSegment(mode, actionName = "set-mode") {
   );
 }
 
-function arkKeyWarning(switchAction = "set-mode") {
-  return !config.keyPresent
-    ? '<div class="banner warn">连接火山方舟后可生成自定义文字和图片或视频素材。' +
-        '<div class="banner-actions">' +
-        btn("连接火山方舟", "connect-ark", "secondary") +
-        btn("切换为本地演示", switchAction, "secondary", "demo") +
-        "</div></div>"
-    : "";
+function keyWarning(kind, text, extra = "") {
+  return (
+    '<div class="banner warn">' + text +
+    '<div class="banner-actions">' +
+    btn("填写" + keyProviders[kind].title + " Key", "connect-" + kind, "secondary") +
+    extra +
+    "</div></div>"
+  );
 }
 
-function settingsFields(s, which = "all", segAction = "set-mode") {
-  const images = Object.entries(config.imageModels).map(([id, v]) => [
-      id,
-      v[0],
-    ]),
+function arkKeyWarning(switchAction = "set-mode") {
+  return config.keyPresent ? "" : keyWarning("ark", "连接火山方舟后可生成图片与视频素材。",
+    btn("切换为本地演示", switchAction, "secondary", "demo"));
+}
+
+// inDialog: the dialog shows key forms inline; the setup page shows warnings that open the dialog.
+function settingsFields(s, which = "all", segAction = "set-mode", { inDialog = false, styleField = "" } = {}) {
+  const texts = Object.entries(textModelMap()),
+    images = Object.entries(config.imageModels).map(([id, v]) => [id, v[0]]),
     videos = Object.entries(config.videoModels).map(([id, v]) => [id, v[0]]);
   const isArk = s.mode === "ark";
   const isTplVideo = which === "template-video";
-  const musicField = which !== "article" && config.videoBackgroundMusic
-    ? field("背景音乐", "music", Object.entries(musicLabels), s.music ?? defaults.music, true)
+  const ratioField = field("画幅", "ratio", ["16:9", "3:4", "1:1", "9:16"], s.ratio);
+  const musicField = config.videoBackgroundMusic
+    ? field("背景音乐", "music", Object.entries(musicLabels), s.music ?? defaults.music)
     : "";
-  let h = modeSegment(s.mode, segAction);
-  if (isArk) h += arkKeyWarning(segAction);
+  const tabs = settingsTabsFor(which);
+  if (!tabs.includes(settingsTab)) settingsTab = tabs[0];
 
-  h += '<div class="fields">';
-  if (isTplVideo) {
-    h += field("配音", "voice", voiceOptions, s.voice, true);
-    h += musicField + "</div>";
-    h +=
-      '<div class="mode-box" style="margin-top:12px">' +
-      (isArk
-        ? "模板讲解模式固定输出 16:9（1280×720）高清信息图视频：自定义主题用方舟生成 5 页结构脚本，画面由本地模板直接渲染，<b>不消耗视频模型费用</b>。"
-        : "内置示例可直接零成本生成 5 页模板脚本并合成 16:9 高清 MP4；选择「无配音」时全程无需 API Key。") +
-      "</div>";
-  } else if (isArk) {
-    h +=
+  // 文本
+  let text = '<div class="fields">' +
+    field("文案与分镜模型", "textModel", texts, resolveTextModel(s), true) + "</div>";
+  if (inDialog) text += keyForm("deepseek");
+  else if (!config.deepseekKeyPresent) text += keyWarning("deepseek", "连接 DeepSeek 后可生成自定义文章与分镜脚本。");
+
+  // 图片
+  let image = "";
+  if (isArk) {
+    image += '<div class="fields">' +
       field("生图模型", "imageModel", images, s.imageModel, true) +
-      field(
-        "图片清晰度",
-        "imageSize",
-        config.imageModels[s.imageModel][1],
-        s.imageSize,
-      ) +
-      field("画幅", "ratio", ["16:9", "3:4", "1:1", "9:16"], s.ratio);
-    if (which !== "article") {
-      h +=
-        field("视频生成模型", "videoModel", videos, s.videoModel, true) +
-        field(
-          "视频分辨率",
-          "resolution",
-          config.videoModels[s.videoModel][1],
-          s.resolution,
-        ) +
-        field("配音", "voice", voiceOptions, s.voice);
-    }
-    h += musicField + "</div>";
-    h +=
+      field("图片清晰度", "imageSize", config.imageModels[s.imageModel][1], s.imageSize) +
+      (isTplVideo ? "" : ratioField + styleField) + "</div>" +
       '<label class="switchline"><input type="checkbox" data-setting="watermark" ' +
-      (s.watermark ? "checked" : "") +
-      "><span>生成素材添加方舟水印</span></label>";
-    if (config.keyPresent) {
-      h +=
-        '<p class="footmeta">已读取本机方舟 Key，仅在确认生成时按量计费。</p>';
+      (s.watermark ? "checked" : "") + "><span>生成素材添加方舟水印</span></label>";
+    if (isTplVideo) {
+      image += '<div class="mode-box" style="margin-top:12px">用于生成或重新生成模板右侧 884×544 带中文字科普信息图（固定 16:9 横图，沿用医疗白蓝或暖色手绘风格）。</div>';
+    }
+    if (inDialog) image += keyForm("ark");
+    else if (!config.keyPresent) {
+      image += keyWarning("ark", "连接火山方舟后可生成图片与视频素材。",
+        btn("切换为本地演示", segAction, "secondary", "demo"));
     }
   } else {
-    h += field(
-      "画幅",
-      "ratio",
-      ["16:9", "3:4", "1:1", "9:16"],
-      s.ratio,
-      which === "article",
-    );
-    if (which !== "article") {
-      h += field("配音", "voice", voiceOptions, s.voice);
-    }
-    h += musicField + "</div>";
-    h +=
-      '<div class="mode-box" style="margin-top:12px">使用内置示例图' +
-      (which === "article"
-        ? "生成图文演示"
-        : "合成 480p 演示视频。启用配音时，火山语音按字符计费") +
-      "。内置主题可用本地稿件演示，自定义内容由方舟生成，确认后按量计费。</div>";
-  }
-  if ((which === "video" || which === "template-video") && !config.speechKeyPresent) {
-    h += '<div class="banner-actions">' +
-      btn("配置火山语音", "configure-speech", "secondary") +
+    image += (isTplVideo ? "" : '<div class="fields">' + ratioField + styleField + "</div>") +
+      '<div class="mode-box" style="margin-top:12px">' +
+      (isTplVideo
+        ? "本地演示使用内置科普信息图样图，也可上传本地图片或直接用文字排版卡成片。"
+        : "本地演示使用所选风格的内置示例图。") +
       "</div>";
   }
-  return h;
+
+  // 视频
+  let video = '<div class="fields">';
+  if (isTplVideo) {
+    video += field("配音", "voice", voiceOptions, s.voice) + musicField + "</div>" +
+      '<div class="mode-box" style="margin-top:12px">' +
+      (isArk
+        ? "模板讲解固定输出 16:9（1280×720）。DeepSeek 生成脚本，右侧卡片支持 Seedream 生成或本地上传，画面与字幕由本地合成，<b>不消耗视频模型费用</b>。"
+        : "内置示例可零成本体验 16:9 模板成片，每张卡片图也可随时上传或更换样图；选择「无配音」时无需 API Key。") +
+      "</div>";
+  } else if (isArk) {
+    video +=
+      field("视频生成模型", "videoModel", videos, s.videoModel, true) +
+      field("视频分辨率", "resolution", config.videoModels[s.videoModel][1], s.resolution) +
+      ratioField + field("配音", "voice", voiceOptions, s.voice) + musicField + "</div>";
+    if (inDialog) {
+      video += '<p class="key-shared">' + "火山方舟 Key：" + keyStatusText("ark") +
+        (config.keyPresent ? "" : " " + btn("去填写", "settings-tab", "textbtn", "image")) + "</p>";
+    } else if (!config.keyPresent) {
+      video += keyWarning("ark", "连接火山方舟后可生成视频分镜。",
+        btn("切换为本地演示", segAction, "secondary", "demo"));
+    }
+  } else {
+    video += ratioField + field("配音", "voice", voiceOptions, s.voice) + musicField + "</div>" +
+      '<div class="mode-box" style="margin-top:12px">合成 480p 演示视频，启用配音时按字符计费。</div>';
+  }
+  if (inDialog) video += keyForm("speech");
+  else if (!config.speechKeyPresent) video += keyWarning("speech", "配置豆包语音后可为视频生成配音。");
+
+  const panels = { text, image, video };
+  const missing = {
+    text: !config.deepseekKeyPresent,
+    image: isArk && !config.keyPresent,
+    video: (!isTplVideo && isArk && !config.keyPresent) || !config.speechKeyPresent,
+  };
+  return (
+    modeSegment(s.mode, segAction) +
+    '<div class="settings-tabs-root">' +
+    '<div class="settings-tabs" role="tablist" aria-label="模型类型">' +
+    tabs.map((t) => btn(
+      settingsTabLabels[t] + (missing[t] ? '<span class="tab-dot" aria-label="缺少 Key"></span>' : ""),
+      "settings-tab",
+      "settings-tab" + (t === settingsTab ? " active" : ""),
+      t,
+      'role="tab" aria-selected="' + (t === settingsTab) + '"',
+    )).join("") +
+    "</div>" +
+    tabs.map((t) =>
+      '<div class="settings-panel" role="tabpanel" data-panel="' + t + '"' + (t === settingsTab ? "" : " hidden") + ">" +
+      panels[t] + "</div>",
+    ).join("") +
+    "</div>"
+  );
+}
+
+function showSettingsTab(name) {
+  settingsTab = name;
+  for (const root of document.querySelectorAll(".settings-tabs-root")) {
+    for (const tabBtn of root.querySelectorAll(".settings-tab")) {
+      const on = tabBtn.dataset.val === name;
+      tabBtn.classList.toggle("active", on);
+      tabBtn.setAttribute("aria-selected", String(on));
+    }
+    for (const panel of root.querySelectorAll(".settings-panel")) {
+      panel.hidden = panel.dataset.panel !== name;
+    }
+  }
 }
 
 function prefs(w) {
@@ -617,12 +714,11 @@ function prefs(w) {
   const s = w ? w.settings : data.settings;
   const tpl = w && TemplateStudio.isTemplateVideo(w);
   const styleField = w && !tpl ? field(w.type === "video" ? "画面风格" : "插图风格", "imageStyle",
-    styles.map((label, i) => [String(i), label]), String(w.style)) : "";
+    styles.map((label, i) => [String(i), label]), String(w.style), true) : "";
   openModal(
-    w ? "本作品生成参数" : "新作品默认参数",
-    settingsFields(s, w ? (tpl ? "template-video" : w.type) : "all", "modal-mode") +
-      (styleField ? '<div class="formrow">' + styleField + "</div>" : "") +
-      '<div style="margin-top:16px">' +
+    w ? "模型配置 · 本作品" : "模型配置 · 新作品默认",
+    settingsFields(s, w ? (tpl ? "template-video" : w.type) : "all", "modal-mode", { inDialog: true, styleField }) +
+      '<div style="margin-top:20px">' +
       btn("完成", "close", "primary widebtn") +
       "</div>",
     "settings",
@@ -658,7 +754,7 @@ function newWork(type, example, videoMode, tplSampleIdx) {
     topic: tplSample ? tplSample.topic : (example == null ? "" : examples[style]),
     layout: articleLayouts[0].name,
     style,
-    drug: "",
+    drug: tplSample?.drug || "",
     tags: [],
     settings: s,
     costTracking: !!config.workCosts,
@@ -733,26 +829,45 @@ function home() {
     ) +
     "</div>" +
     (tab === "examples"
-      ? '<div class="gallery">' +
-        TemplateStudio.templateSampleCardsHtml(esc, ico) +
-        styles
-          .map(
-            (s, i) =>
-              '<button type="button" class="sample" data-action="sample" data-val="' +
-              i +
-              '"><div class="cover"><img src="' +
-              asset(i) +
-              '" alt="' +
-              esc(s) +
-              '示例封面"><span class="tag">' +
-              s +
-              '</span><span class="play">' +
-              ico("arrow") +
-              "</span></div><h3>" +
-              examples[i] +
-              '</h3><div class="meta">用这个风格创作视频</div></button>',
+      ? '<div class="flexwrap workFilters">' +
+        [
+          ["all", `全部示例 · ${TemplateVideo.EXAMPLES.length + styles.length}`],
+          ["template", `信息图模板讲解 · ${TemplateVideo.EXAMPLES.length}`],
+          ["storyboard", `AI 分镜动画 · ${styles.length}`],
+        ]
+          .map(([k, label]) =>
+            btn(
+              label,
+              "example-filter",
+              "chip" + (exampleFilter === k ? " selected" : ""),
+              k,
+            ),
           )
           .join("") +
+        '</div><div class="gallery">' +
+        (exampleFilter !== "storyboard"
+          ? TemplateStudio.templateSampleCardsHtml(esc, ico)
+          : "") +
+        (exampleFilter !== "template"
+          ? styles
+              .map(
+                (s, i) =>
+                  '<button type="button" class="sample" data-action="sample" data-val="' +
+                  i +
+                  '"><div class="cover"><img src="' +
+                  asset(i) +
+                  '" alt="' +
+                  esc(s) +
+                  '示例封面"><span class="tag">' +
+                  s +
+                  '</span><span class="play">' +
+                  ico("arrow") +
+                  "</span></div><h3>" +
+                  examples[i] +
+                  '</h3><div class="meta">用这个风格创作视频</div></button>',
+              )
+              .join("")
+          : "") +
         "</div>"
       : worksList());
   if (tab === "examples") requestAnimationFrame(() => TemplateStudio.fitTemplatePreviews());
@@ -1000,6 +1115,7 @@ function layoutChoice(value) {
 
 function setup(w) {
   const video = w.type === "video";
+  const isTpl = TemplateStudio.isTemplateVideo(w);
   const hasBlocks = w.blocks.length > 0;
   let left =
     '<div class="sheet"><div class="card-head"><h2>科普主题</h2>' +
@@ -1010,7 +1126,8 @@ function setup(w) {
       ? "例如：给第一次用滴眼液的患者讲清使用前后要注意什么；开头用一个常见错误引入，结尾提醒有疑问问药师"
       : "例如：给家里有老人的读者讲清药盒上的有效期怎么看；开封后的药怎样核对（可换行列出要点）") + '">' +
     esc(w.topic) +
-    '</textarea><p class="field-error" id="topic-error" hidden>请先填写科普主题，再开始生成。</p><div class="dividerline"></div><div class="formrow"><span class="label">关联药品 <small>（选填）</small></span><div class="buttons">' +
+    '</textarea><p class="field-error" id="topic-error" hidden>请先填写科普主题，再开始生成。</p>' +
+    '<div class="dividerline"></div><div class="formrow"><span class="label">关联药品 <small>（选填）</small></span><div class="buttons">' +
     (w.drug
       ? '<span class="pill">' +
         esc(w.drug) +
@@ -1026,7 +1143,6 @@ function setup(w) {
       : btn("搜索或输入药品", "drug", "outline")) +
     "</div></div></div>";
 
-  const isTpl = TemplateStudio.isTemplateVideo(w);
   if (video) {
     const reference = videoReferenceSeconds(w);
     left +=
@@ -1076,12 +1192,57 @@ function setup(w) {
         "primary widebtn",
       );
 
+  const themeName = TemplateVideo.THEMES.find((t) => t.id === (w.templateTheme || "medical"))?.name || "医疗白蓝风";
+  const presName = TemplateVideo.PRESENTERS.find((p) => p.id === (w.templatePresenter || "digital"))?.name || "数字人";
+  const refSeconds = video ? videoReferenceSeconds(w) : null;
+  const summaryRows = video
+    ? isTpl
+      ? [
+          ["视频形式", "信息图模板讲解"],
+          ["视觉风格", themeName],
+          ["主讲形象", presName],
+          ["输出画面", "16:9 · 1280×720"],
+          ["脚本结构", "5 页卡片 + 口播字幕"],
+        ]
+      : [
+          ["视频形式", "AI 分镜动画"],
+          ["画面风格", styles[w.style]],
+          ["参考时长", refSeconds === null ? "自动" : `${refSeconds} 秒`],
+          ["出镜形象", w.avatar === pharmacistAvatar ? "药师出镜" : "无人物"],
+          ["画幅", w.settings.ratio],
+        ]
+    : [
+        ["内容风格", w.layout],
+        ["插图风格", styles[w.style]],
+        ["配图画幅", w.settings.ratio],
+      ];
+  if (w.drug) summaryRows.push(["关联药品", w.drug]);
+  const topicText = w.topic.trim();
+
   const right =
-    '<div class="sheet"><div class="card-head"><h2>生成配置</h2></div>' +
-    settingsFields(w.settings, isTpl ? "template-video" : w.type, "set-mode") +
-    '<div class="dividerline"></div><div id="initial-generation">' +
+    '<div class="sheet setup-panel">' +
+    '<div class="card-head"><h2>' + (video ? "生成视频脚本" : "生成图文草稿") + "</h2></div>" +
+    '<div class="setup-topic' + (topicText ? "" : " empty") + '">' +
+    '<span class="small">科普主题</span>' +
+    "<p>" + esc(topicText || "尚未填写主题，请在左侧输入或选择推荐主题") + "</p></div>" +
+    '<dl class="setup-summary">' +
+    summaryRows
+      .map(([k, val]) => '<div class="setup-summary-row"><dt>' + esc(k) + "</dt><dd>" + esc(val) + "</dd></div>")
+      .join("") +
+    "</dl>" +
+    '<div id="initial-generation">' +
     ctaArea +
-    "</div></div>";
+    "</div>" +
+    '<p class="footmeta setup-footnote">' +
+    (video
+      ? "生成后可在编辑页逐页修改文字、口播与配图。"
+      : "生成后可逐段修改正文，并为段落重做配图。") +
+    " 当前使用" +
+    (w.settings.mode === "ark" ? "火山方舟" : "本地演示") +
+    "，" +
+    btn("模型配置", "work-settings", "textbtn inline-link") +
+    "</p>" +
+    "</div>";
 
   shell(
     w,
@@ -1255,8 +1416,9 @@ function inlineJobError(job, index = "") {
 }
 
 function syncImageActions(w) {
-  const pending = w.blocks.some((b) => b.job);
-  const missing = w.type === "video" && w.blocks.some((b) => !b.image);
+  const pending = w.blocks.some((b) => b.job) ||
+    Boolean(w.templateDeck?.slides?.some((s) => s.job));
+  const missing = w.type === "video" && !TemplateStudio.isTemplateVideo(w) && w.blocks.some((b) => !b.image);
   for (const el of app.querySelectorAll(
     '[data-action="compose"], [data-action="submit"]',
   )) {
@@ -1281,7 +1443,8 @@ function syncImageActions(w) {
   }
   const regenerate = app.querySelector('[data-action="regenerate-all"]');
   if (regenerate) {
-    regenerate.disabled = w.blocks.some((b) => b.job && !b.job.error);
+    regenerate.disabled = w.blocks.some((b) => b.job && !b.job.error) ||
+      Boolean(w.templateDeck?.slides?.some((s) => s.job && !s.job.error));
   }
   const stale = app.querySelector("#video-stale");
   if (stale) stale.hidden = !w.videoDirty;
@@ -1564,15 +1727,35 @@ function articlePaper(w, editable) {
     "</article>";
 }
 
+function templateHooks() {
+  return {
+    data,
+    config,
+    esc,
+    btn,
+    opts,
+    openModal,
+    modeSegment,
+    arkKeyWarning,
+    jsonRequest,
+    changed,
+    render,
+    notify,
+    current,
+    authorize,
+    openApiKeys,
+  };
+}
+
 function editor(w) {
   const vid = w.type === "video";
   if (TemplateStudio.isTemplateVideo(w)) {
     shell(
       w,
-      "编辑模板科普页",
+      "编辑模板分镜",
       1,
       '<div class="layout"><div>' +
-        TemplateStudio.templateEditorBodyHtml(w, data, esc) +
+        TemplateStudio.templateEditorBodyHtml(w, data, esc, btn, ico) +
         '</div><aside class="aside">' +
         TemplateStudio.templateEditorAsideHtml(w, data, esc, btn, savedLabel) +
         "</aside></div>",
@@ -2122,15 +2305,19 @@ async function startJob(w, target, items, extra = {}, settings = w.settings) {
 
 function authorize(w, count, kind, fn, voicedCount = count) {
   const writing = kind === "draft";
-  const isArk = writing || w.settings.mode === "ark";
+  const isArk = !writing && w.settings.mode === "ark";
   const usesSpeech = kind === "video" && w.settings.voice !== "无配音" && voicedCount > 0;
-  if (!isArk && !usesSpeech) return fn();
+  if (!writing && !isArk && !usesSpeech) return fn();
   if (writing && !config.textModel) {
-    notify("请重启本地工作台，再刷新页面以启用方舟文字生成。", "warn");
+    notify("请重启本地工作台，再刷新页面以启用 DeepSeek 文字生成。", "warn");
+    return;
+  }
+  if (writing && !config.deepseekKeyPresent) {
+    openApiKeys("deepseek");
     return;
   }
   if (isArk && !config.keyPresent) {
-    openApiKeys();
+    openApiKeys("ark");
     return;
   }
   if (usesSpeech && !config.speechKeyPresent) {
@@ -2143,16 +2330,21 @@ function authorize(w, count, kind, fn, voicedCount = count) {
     ? (w.job ? w.job.articleImages?.settings : w.settings)
     : null;
   const pictureSummary = articlePictures?.mode === "ark"
-    ? `<p>正文完成后自动生成建议配图，每段最多 1 张，全篇最多 ${maxArticleImages} 张，按实际生成张数计费。</p>`
+    ? (config.keyPresent
+      ? `<p>正文完成后自动调用火山方舟生成建议配图，每段最多 1 张，全篇最多 ${maxArticleImages} 张，按实际生成张数计费。</p>`
+      : `<p>正文完成后将尝试调用火山方舟生成建议配图（当前尚未连接火山方舟，届时可补充连接或改用本地演示样图）。</p>`)
     : articlePictures ? "<p>正文完成后自动使用所选风格的本地样图。</p>" : "";
-  const textSummary = writing ? "<p>将使用方舟" +
-    (w.type === "video" ? (reference === null
-      ? "按主题生成完整口播，再根据口播安排分镜时长。"
-      : `参考 ${reference} 秒生成完整口播，再根据口播安排分镜时长。`) :
+  const chosenTextModel = resolveTextModel(w.settings);
+  const textSummary = writing ? "<p>将使用 DeepSeek " +
+    (w.type === "video" ? (TemplateStudio.isTemplateVideo(w)
+      ? "生成 5 页模板结构与口播脚本。"
+      : (reference === null
+        ? "按主题生成完整口播，再根据口播安排分镜时长。"
+        : `参考 ${reference} 秒生成完整口播，再根据口播安排分镜时长。`)) :
       w.job?.partial ? "根据已生成的正文规划配图。" : "生成完整文章，再按正文决定哪些段落需要配图。") +
     "预计提交 " + count + " 次文本请求，按 token 计费。</p>" + pictureSummary +
-    '<span class="pill">' + esc(config.textModel) + "</span>" : "";
-  const arkSummary = !isArk || writing ? "" : (
+    '<div class="summary-kv" style="margin-top:12px"><span class="pill">' + esc(textModelLabel(chosenTextModel)) + "</span></div>" : "";
+  const arkSummary = !isArk ? "" : (
     "<p>将按当前参数提交最多 <b>" +
       count +
       "</b> 个" +
@@ -2176,7 +2368,7 @@ function authorize(w, count, kind, fn, voicedCount = count) {
     ? "<p>最多为 <b>" + voicedCount + "</b> 个分镜生成火山语音配音，按口播字符数计费。</p>"
     : "";
   openModal(
-    isArk ? "确认使用火山方舟生成" : "确认使用火山语音配音",
+    writing ? "确认使用 DeepSeek 生成" : isArk ? "确认使用火山方舟生成" : "确认使用火山语音配音",
     textSummary + arkSummary + speechSummary + '<div class="actions dialog-actions">' +
       btn("取消", "close", "secondary") +
       btn("确认提交并计费", "confirm-paid", "primary") +
@@ -2223,7 +2415,7 @@ function generate(w) {
   if (w.job || w.blocks.some((b) => b.job && !b.job.error)) return;
   if (TemplateStudio.isTemplateVideo(w)) {
     const matchedIdx = TemplateVideo.EXAMPLES.findIndex((ex) => ex.topic === w.topic.trim());
-    if (matchedIdx >= 0 && (w.settings.mode === "demo" || !config.keyPresent)) {
+    if (matchedIdx >= 0 && (w.settings.mode === "demo" || !config.deepseekKeyPresent)) {
       const sample = TemplateVideo.cloneExample(matchedIdx);
       TemplateStudio.installTemplateDeck(w, {
         ...sample,
@@ -2236,7 +2428,7 @@ function generate(w) {
       return;
     }
     return authorize(w, 1, "draft", () => {
-      const settings = { ...w.settings, mode: "ark", ratio: "16:9" };
+      const settings = { ...w.settings, mode: "ark", ratio: "16:9", textModel: resolveTextModel(w.settings) };
       const job = createJob(w, "write-draft", [], settings);
       job.payload.draft = {
         type: "video",
@@ -2248,10 +2440,14 @@ function generate(w) {
       return sendJob(w);
     });
   }
-  const localExample = w.settings.mode === "demo" && examples.includes(w.topic.trim());
+  const localExample = w.settings.mode === "demo" && (
+    w.type === "video"
+      ? Object.prototype.hasOwnProperty.call(videoTopics, w.topic.trim())
+      : examples.includes(w.topic.trim())
+  );
   if (!localExample) {
     return authorize(w, w.type === "article" ? 2 : 1, "draft", () => {
-      const settings = { ...w.settings, mode: "ark" };
+      const settings = { ...w.settings, mode: "ark", textModel: resolveTextModel(w.settings) };
       if (w.type === "video") settings.duration = videoReferenceSeconds(w);
       const job = createJob(w, "write-draft", [], settings);
       job.payload.draft = { type: w.type, topic: w.topic.trim(), layout: w.layout, drug: w.drug };
@@ -2563,6 +2759,9 @@ function render(preserveScroll = false) {
     if (b.job.readyToSend) sendJob(w, b);
     else poll(w, b);
   }
+  if (TemplateStudio.isTemplateVideo(w)) {
+    TemplateStudio.resumeSlideJobs(w, templateHooks());
+  }
   revealSelectedScene();
   if (preserveScroll) window.scrollTo(0, prevScroll);
   else window.scrollTo(0, 0);
@@ -2601,6 +2800,10 @@ document.addEventListener("input", (e) => {
     if (w && preview) preview.value = picturePrompt(w, regenModal.index, el.value, regenModal.reference);
     return;
   }
+  if (el.id === "tpl-image-prompt") {
+    TemplateStudio.updateImageModalField(w, "prompt", el.value, templateHooks());
+    return;
+  }
   if (el.classList.contains("autogrow")) autoGrow(el);
   if (el.dataset.pharm) {
     const p = TemplateStudio.ensurePharmacist(data);
@@ -2625,8 +2828,18 @@ document.addEventListener("input", (e) => {
       TemplateStudio.refreshLivePreview(w, data);
       return;
     }
+    if (el.dataset.tplGlobal === "disclaimer") {
+      deck.disclaimer = el.value;
+      if (w.video) w.videoDirty = true;
+      changed(w);
+      TemplateStudio.refreshLivePreview(w, data);
+      return;
+    }
     if (el.dataset.tplChap !== undefined) {
-      deck.chapters[Number(el.dataset.tplChap)] = el.value;
+      const ci = Number(el.dataset.tplChap);
+      deck.chapters[ci] = el.value;
+      const opt = app.querySelector('select[data-tpl-chapter-idx] option[value="' + ci + '"]');
+      if (opt) opt.textContent = el.value.trim() || `章节${ci + 1}`;
       if (w.video) w.videoDirty = true;
       changed(w);
       TemplateStudio.refreshLivePreview(w, data);
@@ -2638,8 +2851,17 @@ document.addEventListener("input", (e) => {
       if (!slide) return;
       if (el.dataset.tplField) {
         slide[el.dataset.tplField] = el.value;
+        if (el.dataset.tplField === "name") {
+          const tabName = app.querySelector('.scene-choice[data-val="' + si + '"] [data-scene-name]');
+          if (tabName) tabName.textContent = el.value.trim() || slide.headline || `第 ${si + 1} 页`;
+        }
         if (el.dataset.tplField === "line") {
           slide.seconds = Math.max(4, recommendedShotSeconds(spokenChars(el.value)));
+          const paceEl = $("#tpl-pace-" + si);
+          if (paceEl) {
+            const st = speechStats(el.value, slide.seconds);
+            paceEl.textContent = st.label;
+          }
         }
       } else if (el.dataset.tplArr) {
         slide[el.dataset.tplArr] ||= [];
@@ -2684,6 +2906,12 @@ document.addEventListener("input", (e) => {
     if (el.id === "topic") {
       const counter = $("#chars");
       if (counter) counter.textContent = el.value.length + " / 300";
+      const topicBox = app.querySelector(".setup-topic");
+      if (topicBox) {
+        const txt = el.value.trim();
+        topicBox.classList.toggle("empty", !txt);
+        topicBox.querySelector("p").textContent = txt || "尚未填写主题，请在左侧输入或选择推荐主题";
+      }
       if (el.value.trim() && el.classList.contains("invalid")) {
         el.classList.remove("invalid");
         el.removeAttribute("aria-invalid");
@@ -2760,9 +2988,18 @@ document.addEventListener("change", (e) => {
     const file = el.files?.[0];
     el.value = "";
     if (file) {
-      TemplateStudio.handleFileUpload(file, el.dataset.tplUpload, w, data, changed, render, notify)
+      const slideIdx = el.dataset.tplSlide !== undefined ? Number(el.dataset.tplSlide) : undefined;
+      TemplateStudio.handleFileUpload(file, el.dataset.tplUpload, w, data, changed, render, notify, slideIdx)
         .catch((err) => notify(err.message || "上传图片失败", "warn"));
     }
+    return;
+  }
+  if (el.id === "tpl-picture-model") {
+    TemplateStudio.updateImageModalField(w, "model", el.value, templateHooks());
+    return;
+  }
+  if (el.id === "tpl-picture-size") {
+    TemplateStudio.updateImageModalField(w, "size", el.value, templateHooks());
     return;
   }
   if (el.dataset.tplChapterIdx && w?.templateDeck) {
@@ -2824,7 +3061,14 @@ document.addEventListener("change", (e) => {
       ? data.settings
       : w?.settings || data.settings;
   if (k === "music" && s === w?.settings && w.video && (s.music ?? defaults.music) !== el.value) w.videoDirty = true;
-  applySettingMutation(s, k, el.type === "checkbox" ? el.checked : el.value);
+  const val = el.type === "checkbox" ? el.checked : el.value;
+  applySettingMutation(s, k, val);
+  if (s === data.settings && w && w.stage === "setup" && !w.blocks.length) {
+    if (!(k === "ratio" && TemplateStudio.isTemplateVideo(w))) {
+      applySettingMutation(w.settings, k, val);
+      changed(w);
+    }
+  }
   if (w && s === w.settings) changed(w);
   if (inside) {
     prefs(modalScope === "global" ? null : w);
@@ -2862,9 +3106,30 @@ document.addEventListener("click", async (e) => {
         tab = "examples";
         home();
         break;
+      case "example-filter":
+        exampleFilter = v;
+        home();
+        break;
       case "filter":
         filter = v;
         home();
+        break;
+      case "pick-video-topic":
+        if (w) {
+          w.topic = v;
+          if (TemplateStudio.isTemplateVideo(w)) {
+            const matched = TemplateVideo.EXAMPLES.find((ex) => ex.topic === v);
+            if (matched) {
+              if (!w.blocks.length) {
+                w.templateTheme = matched.theme;
+                w.templatePresenter = matched.presenter;
+              }
+              w.drug = matched.drug || "";
+            }
+          }
+          changed(w);
+          render(true);
+        }
         break;
       case "new":
         newWork(v);
@@ -2915,6 +3180,115 @@ document.addEventListener("click", async (e) => {
           render(true);
         }
         break;
+      case "tpl-slide-add":
+        if (w && TemplateStudio.isTemplateVideo(w)) {
+          TemplateStudio.addSlide(w, data, changed, render, notify);
+        }
+        break;
+      case "tpl-slide-move":
+        if (w && TemplateStudio.isTemplateVideo(w)) {
+          const [rawIdx, rawDir] = v.split(":").map(Number);
+          TemplateStudio.moveSlide(w, rawIdx, rawDir, data, changed, render);
+        }
+        break;
+      case "tpl-slide-remove":
+        if (w && TemplateStudio.isTemplateVideo(w)) {
+          TemplateStudio.removeSlide(w, Number(v), data, changed, render, notify);
+        }
+        break;
+      case "tpl-reimage":
+        if (w && TemplateStudio.isTemplateVideo(w)) {
+          TemplateStudio.openImageDialog(w, Number(v), templateHooks());
+        }
+        break;
+      case "tpl-regen-mode":
+        if (w && TemplateStudio.isTemplateVideo(w)) {
+          TemplateStudio.updateImageModalField(w, "mode", v, templateHooks());
+        }
+        break;
+      case "tpl-regen-ark":
+      case "tpl-regen-demo":
+        if (w && TemplateStudio.isTemplateVideo(w)) {
+          const slideIdx = Number(v);
+          const promptVal = ($("#tpl-image-prompt", dialogBody)?.value || "").trim();
+          const isArk = action === "tpl-regen-ark";
+          const settings = {
+            ...w.settings,
+            mode: isArk ? "ark" : "demo",
+            ratio: "16:9",
+            imageModel: $("#tpl-picture-model", dialogBody)?.value || w.settings.imageModel,
+            imageSize: $("#tpl-picture-size", dialogBody)?.value || w.settings.imageSize,
+          };
+          if (isArk && !config.keyPresent) {
+            openApiKeys("ark");
+            return;
+          }
+          dialog.close();
+          await TemplateStudio.startSlideImageJob(w, slideIdx, promptVal, settings, templateHooks());
+        }
+        break;
+      case "tpl-pick-demo-img":
+        if (w && TemplateStudio.isTemplateVideo(w) && w.templateDeck) {
+          const sep = v.indexOf("|");
+          const slideIdx = Number(v.slice(0, sep));
+          const src = v.slice(sep + 1);
+          const slide = w.templateDeck.slides[slideIdx];
+          if (slide && src) {
+            slide.contentImage = src;
+            slide.imageSource = "preset";
+            slide.imageModel = "";
+            slide.imageSize = "";
+            slide.job = null;
+            TemplateStudio.syncBlocksFromDeck(w);
+            if (w.video) w.videoDirty = true;
+            dialog.close();
+            changed(w);
+            render(true);
+            notify(`已选用内置信息图替换第 ${slideIdx + 1} 页`, "ok");
+          }
+        }
+        break;
+      case "tpl-clear-image":
+        if (w && TemplateStudio.isTemplateVideo(w) && w.templateDeck) {
+          const slideIdx = Number(v);
+          const slide = w.templateDeck.slides[slideIdx];
+          if (slide && !slide.job) {
+            slide.contentImage = "";
+            slide.imageSource = "";
+            slide.imageModel = "";
+            slide.imageSize = "";
+            TemplateStudio.syncBlocksFromDeck(w);
+            if (w.video) w.videoDirty = true;
+            changed(w);
+            render(true);
+            notify("已切回文字排版卡", "ok");
+          }
+        }
+        break;
+      case "tpl-fill-images":
+        if (w && TemplateStudio.isTemplateVideo(w) && w.templateDeck) {
+          const missing = w.templateDeck.slides
+            .map((sl, si) => (!sl.contentImage && !sl.job ? si : -1))
+            .filter((si) => si >= 0);
+          TemplateStudio.queueBatchSlideImages(w, missing, templateHooks());
+        }
+        break;
+      case "tpl-restyle-images":
+        if (w && TemplateStudio.isTemplateVideo(w) && w.templateDeck) {
+          const allIndices = w.templateDeck.slides.map((_, si) => si);
+          TemplateStudio.queueBatchSlideImages(w, allIndices, templateHooks());
+        }
+        break;
+      case "tpl-retry-image":
+        if (w && TemplateStudio.isTemplateVideo(w)) {
+          TemplateStudio.retrySlideImage(w, Number(v), templateHooks());
+        }
+        break;
+      case "tpl-abort-image":
+        if (w && TemplateStudio.isTemplateVideo(w)) {
+          TemplateStudio.abortSlideImage(w, Number(v), templateHooks());
+        }
+        break;
       case "tpl-cue":
         if (w) {
           TemplateStudio.setCueIndex(w, Number(v));
@@ -2956,9 +3330,16 @@ document.addEventListener("click", async (e) => {
       case "global-settings":
         prefs(null);
         break;
-      case "connect-ark":
-        if (config) openApiKeys();
+      case "settings-tab":
+        showSettingsTab(v);
         break;
+      case "connect-deepseek":
+        if (config) openApiKeys("deepseek");
+        break;
+      case "connect-ark":
+        if (config) openApiKeys("ark");
+        break;
+      case "connect-speech":
       case "configure-speech":
         if (config) openApiKeys("speech");
         break;
@@ -2982,6 +3363,10 @@ document.addEventListener("click", async (e) => {
         const s =
           modalScope === "global" ? data.settings : w?.settings || data.settings;
         applySettingMutation(s, "mode", v);
+        if (s === data.settings && w && w.stage === "setup" && !w.blocks.length) {
+          applySettingMutation(w.settings, "mode", v);
+          changed(w);
+        }
         if (w && s === w.settings) {
           changed(w);
           render(true);
@@ -3028,13 +3413,25 @@ document.addEventListener("click", async (e) => {
       case "fill": {
         const pool = TemplateStudio.isTemplateVideo(w)
           ? TemplateVideo.EXAMPLES.map((ex) => ex.topic)
-          : examples;
+          : w.type === "video"
+            ? allVideoTopics
+            : examples;
         const currentIdx = pool.indexOf(w.topic.trim());
         const nextIdx =
           currentIdx >= 0
             ? (currentIdx + 1) % pool.length
             : exampleCursor++ % pool.length;
         w.topic = pool[nextIdx];
+        if (TemplateStudio.isTemplateVideo(w)) {
+          const matched = TemplateVideo.EXAMPLES.find((ex) => ex.topic === w.topic);
+          if (matched) {
+            if (!w.blocks.length) {
+              w.templateTheme = matched.theme;
+              w.templatePresenter = matched.presenter;
+            }
+            w.drug = matched.drug || "";
+          }
+        }
         changed(w);
         render(true);
         break;
@@ -3267,7 +3664,7 @@ document.addEventListener("click", async (e) => {
             $("#picture-size", dialogBody)?.value || w.settings.imageSize,
         };
         if (isArk && !config.keyPresent) {
-          openApiKeys();
+          openApiKeys("ark");
           return;
         }
         dialog.close();
@@ -3416,11 +3813,39 @@ document.addEventListener("click", async (e) => {
 
 dialog.addEventListener("close", () => {
   if (dialog.open) return;
-  if (modalType === "api-keys") dialogBody.replaceChildren();
+  if (modalType === "settings") dialogBody.replaceChildren();
   retryPayload = null;
   regenModal = null;
+  TemplateStudio.clearImageModal();
   modalType = null;
   updateTopbar();
+});
+
+document.addEventListener("dragover", (e) => {
+  const zone = e.target.closest?.("[data-tpl-dropzone]");
+  if (!zone) return;
+  e.preventDefault();
+  zone.classList.add("tpl-drop-active");
+});
+
+document.addEventListener("dragleave", (e) => {
+  const zone = e.target.closest?.("[data-tpl-dropzone]");
+  if (!zone || zone.contains(e.relatedTarget)) return;
+  zone.classList.remove("tpl-drop-active");
+});
+
+document.addEventListener("drop", (e) => {
+  const zone = e.target.closest?.("[data-tpl-dropzone]");
+  if (!zone) return;
+  e.preventDefault();
+  zone.classList.remove("tpl-drop-active");
+  const w = current();
+  const file = e.dataTransfer?.files?.[0];
+  if (file && w && TemplateStudio.isTemplateVideo(w)) {
+    const slideIdx = Number(zone.dataset.tplDropzone);
+    TemplateStudio.handleFileUpload(file, "slide-image", w, data, changed, render, notify, slideIdx)
+      .catch((err) => notify(err.message || "上传图片失败", "warn"));
+  }
 });
 
 window.addEventListener("hashchange", () => render(false));
@@ -3428,6 +3853,10 @@ window.addEventListener("hashchange", () => render(false));
 (async () => {
   try {
     config = await jsonRequest("/api/config");
+    data.settings.textModel = resolveTextModel(data.settings);
+    for (const w of data.works) {
+      if (w.settings) w.settings.textModel = resolveTextModel(w.settings);
+    }
     render();
   } catch {
     app.innerHTML =
