@@ -1419,13 +1419,6 @@
     if (w.job || exportingWorkId) return;
 
     const usesSpeech = w.settings.voice !== "无配音";
-    const musicChoice = hooks.videoMusic(w);
-    const needsAutoMusicKey = musicChoice === "auto" && !w.customMusic?.url;
-    if (needsAutoMusicKey && !hooks.autoMusicReady) {
-      hooks.notify("当前背景音乐为「自动搭配」，请先在「背景音乐」配置 Mureka API Key，或切换其他配乐。", "warn");
-      hooks.openApiKeys("mureka");
-      return;
-    }
     const rawAvatarMode = w.settings.avatarMode ?? dataStore.settings?.avatarMode ?? defaults.avatarMode;
     const avatarMode = typeof resolveAvatarMode === "function" ? resolveAvatarMode(rawAvatarMode) : (rawAvatarMode === "static" ? "static" : "videoretalk");
     const avatarResolution = w.settings.avatarResolution || dataStore.settings?.avatarResolution || defaults.avatarResolution || "480P";
@@ -1504,7 +1497,6 @@
           });
         }
         setStatus(usesAvatar ? "画面已就绪，正在后台生成数字人对口型与 MP4..." : "画面已就绪，正在后台合成配音与 MP4...");
-        const musicSettings = hooks.videoMusicSettings ? hooks.videoMusicSettings(w) : { music: musicChoice };
         const payload = {
           id: crypto.randomUUID(),
           mode: "ark",
@@ -1514,16 +1506,13 @@
             ...w.settings,
             mode: "ark",
             ratio: "16:9",
-            ...musicSettings,
+            ...hooks.videoMusicSettings(w),
             avatarMode,
             avatarResolution,
           },
           style: w.style || 0,
           items,
         };
-        if (musicChoice === "auto" && hooks.workMusicContext) {
-          payload.musicContext = hooks.workMusicContext(w);
-        }
         if (usesAvatar && firstAvatarBox) {
           payload.avatar = {
             enabled: true,

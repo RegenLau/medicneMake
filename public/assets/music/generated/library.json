@@ -1,0 +1,50 @@
+[
+  {
+    "id": "bedb95f1a36f",
+    "filename": "clean-soul.mp3",
+    "url": "/assets/music/generated/clean-soul.mp3",
+    "title": "Clean Soul",
+    "mood": "温和讲解",
+    "styleLabel": "电钢琴与贝斯",
+    "description": "留白多，适合常规药师口播。 作者 Kevin MacLeod，CC BY 4.0，发布时需署名。",
+    "duration": 306.73,
+    "provider": "library",
+    "createdAt": 1795103340
+  },
+  {
+    "id": "fa687d97d550",
+    "filename": "friday-morning.mp3",
+    "url": "/assets/music/generated/friday-morning.mp3",
+    "title": "Friday Morning",
+    "mood": "安静说明",
+    "styleLabel": "钢琴独奏",
+    "description": "安静舒缓，适合用药步骤和注意事项。 作者 Kevin MacLeod，CC BY 4.0，发布时需署名。",
+    "duration": 210.34,
+    "provider": "library",
+    "createdAt": 1795103340
+  },
+  {
+    "id": "bc4296a1138c",
+    "filename": "carefree.mp3",
+    "url": "/assets/music/generated/carefree.mp3",
+    "title": "Carefree",
+    "mood": "轻快提醒",
+    "styleLabel": "木琴与尤克里里",
+    "description": "节奏轻快，适合日常习惯和用药小贴士。 作者 Kevin MacLeod，CC BY 4.0，发布时需署名。",
+    "duration": 205.14,
+    "provider": "library",
+    "createdAt": 1795103340
+  },
+  {
+    "id": "2142ab73a83b",
+    "filename": "solace.mp3",
+    "url": "/assets/music/generated/solace.mp3",
+    "title": "Solace",
+    "mood": "沉静舒缓",
+    "styleLabel": "钢琴与弦乐",
+    "description": "沉静的钢琴与弦乐，适合语气稳重的专题。 作者 Scott Buckley，CC BY 4.0，发布时需署名。",
+    "duration": 356.36,
+    "provider": "library",
+    "createdAt": 1795103340
+  }
+]

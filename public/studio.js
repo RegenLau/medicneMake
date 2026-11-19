@@ -223,27 +223,9 @@ const defaults = {
   watermark: true,
   voice: defaultVoice,
   music: "auto",
-  musicModel: "auto",
   avatarMode: "videoretalk",
   avatarResolution: "480P",
 };
-
-function musicModelMap() {
-  if (config?.musicModels && Object.keys(config.musicModels).length) return config.musicModels;
-  return { auto: ["Mureka Auto（推荐 · 自动选最新模型）", null] };
-}
-
-function hasAutoMusicConfig() {
-  return Boolean(config?.murekaKeyPresent);
-}
-
-function resolveMusicModel(s) {
-  const map = musicModelMap();
-  const chosen = s?.musicModel;
-  if (chosen && Object.prototype.hasOwnProperty.call(map, chosen)) return chosen;
-  if (config?.musicModel && Object.prototype.hasOwnProperty.call(map, config.musicModel)) return config.musicModel;
-  return Object.keys(map)[0];
-}
 
 function textModelMap() {
   if (config?.textModels && Object.keys(config.textModels).length) return config.textModels;
@@ -270,8 +252,7 @@ if (data.settings.avatarMode === "liveportrait") {
 data.works ||= [];
 const watching = new Set();
 const submitting = new Set();
-const generatingMusicWorks = new Set();
-const musicHintDrafts = new WeakMap();
+let autoMusicRules = [];
 const selectedScenes = new WeakMap();
 const storyboardTabs = new WeakMap();
 const rejectedPortraitFrames = new WeakMap();
@@ -410,57 +391,11 @@ function videoMusic(w) {
   return w?.settings?.music ?? defaults.music;
 }
 
-function workMusicLines(w) {
-  if (!w) return [];
-  if (TemplateStudio.isTemplateVideo(w) && Array.isArray(w.templateDeck?.slides)) {
-    return w.templateDeck.slides.map((s) => String(s.line || "").trim()).filter(Boolean);
-  }
-  return (w.blocks || []).map((b) => String(b.line || "").trim()).filter(Boolean);
-}
-
-function workMusicSignature(w) {
-  if (!w) return "";
-  const title = (TemplateStudio.isTemplateVideo(w) ? w.templateDeck?.title : "") || w.title || "";
-  return JSON.stringify([title.trim(), (w.topic || "").trim(), (w.drug || "").trim(), workMusicLines(w)]);
-}
-
-function isCustomMusicStale(w) {
-  return Boolean(w?.customMusic?.url && w.customMusic.clientSig && w.customMusic.clientSig !== workMusicSignature(w));
-}
-
-function workMusicContext(w, { hint, nextVariant = false } = {}) {
-  const title = (TemplateStudio.isTemplateVideo(w) ? w.templateDeck?.title : "") || w?.title || "";
-  const draftHint = hint !== undefined ? hint : (musicHintDrafts.get(w) ?? w?.customMusic?.hint ?? "");
-  const prev = w?.customMusic || null;
-  const variant = nextVariant ? ((Number(prev?.variant) || 0) + (prev ? 1 : 0)) : (Number(prev?.variant) || 0);
-  return {
-    title: title.trim(),
-    topic: (w?.topic || "").trim(),
-    drug: (w?.drug || "").trim(),
-    lines: workMusicLines(w),
-    hint: String(draftHint || "").trim(),
-    variant,
-    ...(nextVariant && prev
-      ? { previous: { styleLabel: prev.styleLabel, mood: prev.mood, bpm: prev.bpm } }
-      : {}),
-    musicModel: resolveMusicModel(w?.settings || data.settings),
-    textModel: resolveTextModel(w?.settings || data.settings),
-    ...(w?.id ? { workId: w.id } : {}),
-  };
-}
-
 function videoMusicSettings(w) {
   const choice = videoMusic(w);
-  const musicModel = resolveMusicModel(w?.settings || data.settings);
-  if (choice === "auto" && w?.customMusic?.url) {
-    return {
-      music: "auto",
-      musicModel,
-      musicUrl: w.customMusic.url,
-      musicMeta: w.customMusic,
-    };
-  }
-  return { music: choice, ...(choice === "auto" ? { musicModel } : {}) };
+  if (choice !== "auto") return { music: choice };
+  const track = automaticMusicTrack(w);
+  return { music: track ? "library:" + track.id : "off" };
 }
 
 function musicLibrary() {
@@ -471,6 +406,15 @@ function findLibraryTrack(choice) {
   if (typeof choice !== "string" || !choice.startsWith("library:")) return null;
   const id = choice.slice("library:".length);
   return musicLibrary().find((t) => t.id === id) || null;
+}
+
+function automaticMusicTrack(w) {
+  const topic = w?.topic?.trim() || w?.templateDeck?.title?.trim() || w?.title?.trim() || "";
+  const available = autoMusicRules
+    .map((rule) => ({ keywords: rule.keywords, track: findLibraryTrack("library:" + rule.trackId) }))
+    .filter(({ track }) => track);
+  const selected = available.find(({ keywords }) => keywords.some((word) => topic.includes(word))) ?? available.at(-1);
+  return selected?.track ?? null;
 }
 
 function musicFieldHtml(currentVal, label = "配乐方式") {
@@ -501,7 +445,8 @@ function musicSummaryLabel(w) {
     return track ? `配乐：${track.title}` : "配乐：项目已存配乐";
   }
   if (choice === "auto") {
-    return w?.customMusic?.title ? `配乐：${w.customMusic.title}` : "配乐：自动搭配（Mureka AI）";
+    const track = automaticMusicTrack(w);
+    return track ? `自动搭配 · ${track.title}` : "自动搭配 · 无可用曲目";
   }
   return `配乐：${musicLabels[choice] || choice}`;
 }
@@ -537,12 +482,12 @@ function renderLibraryPickerHtml(choice) {
   );
 }
 
-function renderLibraryTrackCard(track, { compact = false, work = null } = {}) {
+function renderLibraryTrackCard(track, { compact = false, automatic = false } = {}) {
   if (!track) {
     return (
       '<div class="bgm-card' + (compact ? " is-compact" : "") + '">' +
       '<div class="bgm-card-head"><strong>已选项目配乐未找到</strong><span class="bgm-badge is-warn">文件已移除</span></div>' +
-      '<p class="bgm-desc">该音频文件可能已从项目目录移除，请重新选择其他配乐或切换「自动搭配」重新生成。</p>' +
+      '<p class="bgm-desc">该音频文件可能已从项目目录移除，请从曲库重新选择，或切换到「自动搭配」。</p>' +
       "</div>"
     );
   }
@@ -551,7 +496,7 @@ function renderLibraryTrackCard(track, { compact = false, work = null } = {}) {
     '<div class="bgm-card' + (compact ? " is-compact" : "") + '">' +
     '<div class="bgm-card-head">' +
     "<strong>" + esc(track.title) + "</strong>" +
-    '<span class="bgm-badge is-ok">项目已存 · 免费复用</span>' +
+    '<span class="bgm-badge is-ok">' + (automatic ? "自动搭配" : "项目已存 · 免费复用") + "</span>" +
     "</div>" +
     (tags.length ? '<div class="bgm-meta">' + tags.map((t) => '<span class="bgm-tag">' + esc(t) + "</span>").join("") + "</div>" : "") +
     (track.description ? '<p class="bgm-desc">' + esc(track.description) + "</p>" : "") +
@@ -560,7 +505,6 @@ function renderLibraryTrackCard(track, { compact = false, work = null } = {}) {
     '<div class="bgm-library-actions">' +
     btn("重命名", "rename-bgm", "outline", track.id) +
     btn("从项目库删除", "delete-bgm", "textbtn danger", track.id) +
-    (work ? btn("改用 AI 重新生成新配乐", "set-video-music", "textbtn", "auto") : "") +
     "</div>" +
     "</div>"
   );
@@ -569,12 +513,6 @@ function renderLibraryTrackCard(track, { compact = false, work = null } = {}) {
 function renderMusicStudioCard(w, { compact = false, showModeChips = false } = {}) {
   if (!config?.videoBackgroundMusic || !w) return "";
   const choice = videoMusic(w);
-  const busy = generatingMusicWorks.has(w.id);
-  const cm = w.customMusic?.url ? w.customMusic : null;
-  const stale = isCustomMusicStale(w);
-  const hintVal = musicHintDrafts.get(w) ?? cm?.hint ?? "";
-  const musicReady = hasAutoMusicConfig();
-
   const chipsHtml = showModeChips
     ? '<div class="chips" style="margin-top:6px">' +
       Object.entries(musicLabels)
@@ -582,7 +520,7 @@ function renderMusicStudioCard(w, { compact = false, showModeChips = false } = {
           '<button type="button" class="chip' + (choice === k ? " selected" : "") +
           '" data-action="set-video-music" data-val="' + k +
           '" aria-pressed="' + (choice === k) + '">' +
-          esc(k === "auto" ? "自动搭配（AI 生成）" : label) +
+          esc(label) +
           "</button>"
         )
         .join("") +
@@ -595,7 +533,7 @@ function renderMusicStudioCard(w, { compact = false, showModeChips = false } = {
   }
 
   if (choice.startsWith("library:")) {
-    return chipsHtml + renderLibraryTrackCard(findLibraryTrack(choice), { compact, work: w });
+    return chipsHtml + renderLibraryTrackCard(findLibraryTrack(choice), { compact });
   }
 
   if (choice === "calm" || choice === "light") {
@@ -609,63 +547,10 @@ function renderMusicStudioCard(w, { compact = false, showModeChips = false } = {
     );
   }
 
-  // choice === "auto"
-  const badgeText = busy
-    ? "Mureka 生成中…"
-    : !musicReady && !cm
-      ? "待配 Mureka Key"
-      : stale
-        ? "内容已更新"
-        : cm
-          ? "已存项目库"
-          : "Mureka AI 生成";
-  const badgeTone = busy ? " is-busy" : (!musicReady && !cm) || stale ? " is-warn" : cm ? " is-ok" : "";
-  const tags = cm
-    ? [cm.mood, cm.styleLabel, cm.model, cm.bpm ? cm.bpm + " BPM" : "", cm.duration ? Math.round(cm.duration) + "秒" : ""].filter(Boolean)
-    : [];
-
-  return (
-    chipsHtml +
-    '<div class="bgm-card' + (compact ? " is-compact" : "") + '">' +
-    '<div class="bgm-card-head">' +
-    "<strong>" + esc(cm ? cm.title : "按视频主题与内容调用 Mureka 生成纯音乐") + "</strong>" +
-    '<span class="bgm-badge' + badgeTone + '">' + esc(badgeText) + "</span>" +
-    "</div>" +
-    (cm
-      ? '<div class="bgm-meta">' + tags.map((t) => '<span class="bgm-tag">' + esc(t) + "</span>").join("") + "</div>" +
-        (cm.description ? '<p class="bgm-desc">' + esc(cm.description) + "</p>" : "") +
-        (cm.filename ? '<p class="bgm-file-path">已保存：public/assets/music/generated/' + esc(cm.filename) + "</p>" : "") +
-        '<audio class="bgm-audio" controls preload="metadata" src="' + esc(cm.url) + '"></audio>' +
-        (cm.id
-          ? '<div class="bgm-library-actions">' +
-            btn("重命名", "rename-bgm", "outline", cm.id) +
-            btn("从项目库删除", "delete-bgm", "textbtn danger", cm.id) +
-            "</div>"
-          : "") +
-        (stale ? '<p class="bgm-stale-note">视频标题或口播内容已修改，可点击下方按钮调用 Mureka 重新生成更贴合当前内容的配乐。</p>' : "")
-      : '<p class="bgm-desc">根据当前视频主题、关联药品与口播台词，调用 Mureka 纯音乐接口生成无人声背景音乐（约 30–60 秒）；生成后自动命名并保存到项目目录，后续所有视频均可免费复用。</p>') +
-    (!musicReady
-      ? '<p class="bgm-stale-note">尚未配置 Mureka API Key，' +
-        btn("去背景音乐页配置", "connect-music", "textbtn") +
-        "</p>"
-      : "") +
-    '<div class="bgm-controls">' +
-    '<input type="text" maxlength="100" class="bgm-hint-input" data-music-hint="1" value="' + esc(hintVal) +
-    '" placeholder="可选：补充氛围偏好（如：更轻快 / 温暖钢琴 / 适合儿童）"' + (busy ? " disabled" : "") + ">" +
-    btn(
-      busy
-        ? "Mureka 生成中…"
-        : cm
-          ? "根据内容重新生成"
-          : "立即生成背景音乐",
-      "generate-bgm",
-      cm ? "outline" : "secondary",
-      w.id,
-      busy ? "disabled" : "",
-    ) +
-    "</div>" +
-    "</div>"
-  );
+  const track = automaticMusicTrack(w);
+  return chipsHtml + (track
+    ? renderLibraryTrackCard(track, { compact, automatic: true })
+    : '<p class="bgm-desc">自动搭配曲目暂不可用。可手动选曲，否则成片无背景音乐。</p>');
 }
 
 async function refreshMusicLibrary() {
@@ -747,52 +632,9 @@ async function deleteLibraryMusic(trackId) {
   }
 }
 
-async function generateWorkMusic(w) {
-  if (!w || generatingMusicWorks.has(w.id)) return;
-  if (!hasAutoMusicConfig()) {
-    notify("请先在「模型配置 → 背景音乐」填写 Mureka API Key", "warn");
-    openApiKeys("mureka");
-    return;
-  }
-  generatingMusicWorks.add(w.id);
-  const inSettingsDialog = dialog.open && modalType === "settings" && modalScope === w.id;
-  if (inSettingsDialog) prefs(w);
-  render(true);
-  try {
-    const context = workMusicContext(w, { nextVariant: Boolean(w.customMusic) });
-    const result = await jsonRequest("/api/generate-music", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(context),
-    });
-    if (Array.isArray(result.library)) {
-      config.musicLibrary = result.library;
-    }
-    const { library: _unusedLibrary, ...trackMeta } = result;
-    w.customMusic = {
-      ...trackMeta,
-      clientSig: workMusicSignature(w),
-    };
-    musicHintDrafts.set(w, trackMeta.hint || "");
-    if ((w.settings.music ?? defaults.music) !== "auto") {
-      w.settings.music = "auto";
-    }
-    if (w.video) w.videoDirty = true;
-    changed(w);
-    notify(`已生成并保存到项目配乐库：${trackMeta.title}`, "ok");
-  } catch (error) {
-    notify(error.message || "背景音乐生成失败，请稍后重试", "err");
-  } finally {
-    generatingMusicWorks.delete(w.id);
-    if (dialog.open && modalType === "settings" && modalScope === w.id) prefs(w);
-    render(true);
-  }
-}
-
 window.StudioMusic = {
   videoMusic,
   videoMusicSettings,
-  workMusicContext,
   musicSummaryLabel,
   renderMusicStudioCard,
 };
@@ -902,14 +744,6 @@ const keyProviders = {
     submit: "验证并连接",
     link: ["https://bailian.console.aliyun.com/?tab=model#/api-key", "获取 Key"],
     status: () => [config.dashscopeKeySaved, config.dashscopeKeyPresent, config.dashscopeKeySource, config.dashscopeKeyWarning],
-  },
-  mureka: {
-    title: "Mureka 音乐",
-    label: "Mureka API Key",
-    endpoint: "/api/mureka-key",
-    submit: "验证并连接",
-    link: ["https://platform.mureka.cn/apiKeys", "获取 Key"],
-    status: () => [config.murekaKeySaved, config.murekaKeyPresent, config.murekaKeySource, config.murekaKeyWarning],
   },
 };
 
@@ -1064,8 +898,7 @@ function arkKeyWarning() {
 function settingsFields(s, which = "all", { inDialog = false, styleField = "", work = null } = {}) {
   const texts = Object.entries(textModelMap()),
     images = Object.entries(config.imageModels).map(([id, v]) => [id, v[0]]),
-    videos = Object.entries(config.videoModels).map(([id, v]) => [id, v[0]]),
-    musics = Object.entries(musicModelMap()).map(([id, v]) => [id, v[0]]);
+    videos = Object.entries(config.videoModels).map(([id, v]) => [id, v[0]]);
   const isTplVideo = which === "template-video";
   const ratioField = field("画幅", "ratio", ["16:9", "3:4", "1:1", "9:16"], s.ratio);
   const musicMode = s.music ?? defaults.music;
@@ -1096,18 +929,16 @@ function settingsFields(s, which = "all", { inDialog = false, styleField = "", w
   // 视频
   let video = "";
   const selectedLibTrack = findLibraryTrack(musicMode);
-  const currentMusicText = selectedLibTrack
-    ? selectedLibTrack.title + "（项目已存）"
-    : musicMode === "auto" && work?.customMusic?.title
-      ? work.customMusic.title
-      : (musicLabels[musicMode] || musicMode);
+  const autoTrack = musicMode === "auto" && work ? automaticMusicTrack(work) : null;
+  const currentMusicText = autoTrack
+    ? `自动搭配 · ${autoTrack.title}`
+    : selectedLibTrack?.title || musicLabels[musicMode] || musicMode;
   if (isTplVideo) {
     video +=
       '<div class="mode-box">模板讲解固定输出 16:9（1280×720）。DeepSeek 生成脚本，右侧卡片支持 Seedream 生成或本地上传，画面与字幕由本地合成，<b>不消耗视频模型费用</b>。</div>' +
       '<p class="key-shared">当前配音：' + esc(voiceLabel(s.voice)) + " · " + keyStatusText("speech") + " " +
       btn("去配音页设置", "settings-tab", "textbtn", "voice") + "</p>" +
-      '<p class="key-shared">当前背景音乐：' + esc(currentMusicText) +
-      (musicMode === "auto" ? " · " + keyStatusText("mureka") : "") + " " +
+      '<p class="key-shared">当前背景音乐：' + esc(currentMusicText) + " " +
       btn("去背景音乐页设置", "settings-tab", "textbtn", "music") + "</p>";
   } else {
     video += '<div class="fields">' +
@@ -1133,23 +964,13 @@ function settingsFields(s, which = "all", { inDialog = false, styleField = "", w
   }
 
   // 背景音乐
-  const libCount = musicLibrary().length;
-  let music = '<div class="fields">' +
-    musicFieldHtml(musicMode, "配乐方式") +
-    field("音乐生成模型", "musicModel", musics, resolveMusicModel(s)) +
-    "</div>" +
-    '<div class="mode-box" style="margin-top:12px">选择<b>自动搭配</b>时，先结合视频主题、关联药品与口播台词规划提示词，再调用 <b>Mureka 纯音乐接口</b>生成无人声背景音乐（含商用授权），并自动命名保存到 <code>public/assets/music/generated/</code>。' +
-    (libCount ? `当前项目配乐库已有 <b>${libCount}</b> 首，可直接在上方「配乐方式」下拉框免费复用。` : "生成后可在上方「配乐方式」下拉框随时免费复用。") +
-    "</div>";
+  let music = '<div class="fields">' + musicFieldHtml(musicMode) + "</div>";
   if (inDialog && work && work.type === "video") {
     music += renderMusicStudioCard(work, { compact: true });
   } else if (inDialog && musicMode.startsWith("library:")) {
     music += renderLibraryTrackCard(selectedLibTrack, { compact: true });
-  }
-  if (inDialog) {
-    music += keyForm("mureka");
-  } else if (musicMode === "auto" && !hasAutoMusicConfig()) {
-    music += keyWarning("mureka", "配置 Mureka API Key 后，选择「自动搭配」即可按视频主题与内容生成专属背景音乐。");
+  } else if (musicMode === "auto") {
+    music += '<p class="small">自动搭配按视频主题从本地曲库选曲。</p>';
   }
 
   // 数字人服务
@@ -1175,7 +996,6 @@ function settingsFields(s, which = "all", { inDialog = false, styleField = "", w
     image: !config.keyPresent,
     video: !isTplVideo && !config.keyPresent,
     voice: s.voice !== "无配音" && !config.speechKeyPresent,
-    music: musicMode === "auto" && !hasAutoMusicConfig(),
     avatar: avatarMode !== "static" && !config.dashscopeKeyPresent,
   };
   return (
@@ -2812,7 +2632,6 @@ async function poll(w, owner = w) {
           if (job.target === "compose") {
             w.video = result.output;
             if (result.output?.music === "auto" && result.output?.musicMeta?.url) {
-              w.customMusic = { ...result.output.musicMeta, clientSig: workMusicSignature(w) };
               refreshMusicLibrary();
             }
             if (result.output.shotSeconds?.length === w.blocks.length) {
@@ -3414,13 +3233,6 @@ function applySettingMutation(s, key, val) {
 document.addEventListener("input", (e) => {
   const w = current(),
     el = e.target;
-  if (el.dataset.musicHint) {
-    const target = (dialog.open && modalScope && modalScope !== "global")
-      ? data.works.find((x) => x.id === modalScope)
-      : w;
-    if (target) musicHintDrafts.set(target, el.value);
-    return;
-  }
   if (el.id === "drugquery") {
     const list = $("#druglist", dialogBody);
     if (list) list.innerHTML = renderDrugList(el.value);
@@ -4053,15 +3865,12 @@ document.addEventListener("click", async (e) => {
           await TemplateStudio.composeTemplateVideo(w, data, {
             notify,
             render,
-            videoMusic,
             videoMusicSettings,
-            workMusicContext,
             sendJob,
             openApiKeys,
             authorizeSpeechOnly,
             speechKeyPresent: config.speechKeyPresent,
             dashscopeKeyPresent: !!config.dashscopeKeyPresent,
-            autoMusicReady: hasAutoMusicConfig(),
             workCostsEnabled: !!config.workCosts,
           });
         }
@@ -4111,15 +3920,6 @@ document.addEventListener("click", async (e) => {
       case "connect-dashscope":
         if (config) openApiKeys("dashscope");
         break;
-      case "connect-music":
-      case "connect-mureka":
-        if (config) openApiKeys("mureka");
-        break;
-      case "generate-bgm": {
-        const target = v ? data.works.find((item) => item.id === v) : w;
-        if (target) await generateWorkMusic(target);
-        break;
-      }
       case "rename-bgm":
         if (v) await renameLibraryMusic(v);
         break;
@@ -4312,11 +4112,6 @@ document.addEventListener("click", async (e) => {
           );
           return;
         }
-        if (videoMusic(w) === "auto" && !w.customMusic?.url && !hasAutoMusicConfig()) {
-          notify("当前背景音乐为「自动搭配」，请先在「背景音乐」填写 Mureka API Key，或切换其他配乐。", "warn");
-          openApiKeys("mureka");
-          return;
-        }
         authorize(w, w.blocks.length, "video", () =>
           startJob(
             w,
@@ -4326,7 +4121,7 @@ document.addEventListener("click", async (e) => {
               return { prompt: storyboardPrompt(w, index, prompt, matchNext), image, line, seconds, matchNext,
                 autoDuration: !manualSeconds };
             }),
-            videoMusic(w) === "auto" ? { musicContext: workMusicContext(w) } : {},
+            {},
             { ...w.settings, ...videoMusicSettings(w) },
           ),
         );
@@ -4453,6 +4248,10 @@ document.addEventListener("click", async (e) => {
         const owner = v === "" || v == null ? w : w.blocks[Number(v)];
         const j = owner.job;
         if (portraitRejected(j)) return;
+        if (j.target === "compose" && j.payload.settings.music === "auto" && config.videoAutoMusicGeneration) {
+          notify("本地服务仍在运行旧版自动配乐。请重启工作台后继续此任务。", "warn");
+          break;
+        }
         if (j.target === "write-draft") {
           authorize(w, w.type === "article" && !j.partial ? 2 : 1, "draft", () => sendJob(w));
           break;
@@ -4626,7 +4425,10 @@ window.addEventListener("hashchange", () => render(false));
 
 (async () => {
   try {
-    config = await jsonRequest("/api/config");
+    [config, autoMusicRules] = await Promise.all([
+      jsonRequest("/api/config"),
+      jsonRequest("/assets/music/auto-music.json").catch(() => []),
+    ]);
     data.settings.textModel = resolveTextModel(data.settings);
     for (const w of data.works) {
       if (w.settings) w.settings.textModel = resolveTextModel(w.settings);

@@ -3646,7 +3646,7 @@ dialog p b {
   }
 }
 
-/* AI background music panel */
+/* Background music panel */
 .bgm-card {
   margin-top: 12px;
   padding: 12px 14px;
@@ -3696,11 +3696,6 @@ dialog p b {
   color: var(--amber-ink);
 }
 
-.bgm-badge.is-busy {
-  background: rgba(15, 118, 110, 0.16);
-  color: var(--brand-700);
-}
-
 .bgm-meta {
   display: flex;
   flex-wrap: wrap;
@@ -3727,37 +3722,6 @@ dialog p b {
   width: 100%;
   height: 36px;
   display: block;
-}
-
-.bgm-stale-note {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--amber-ink);
-}
-
-.bgm-controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  margin-top: 2px;
-}
-
-.bgm-hint-input {
-  flex: 1 1 180px;
-  min-width: 0;
-  margin-top: 0 !important;
-  font-size: 12.5px;
-  min-height: 36px;
-  padding: 6px 10px;
-}
-
-.bgm-controls button {
-  flex: none;
-  min-height: 36px;
-  padding: 6px 12px;
-  font-size: 13px;
 }
 
 .bgm-reuse-field {

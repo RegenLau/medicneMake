@@ -142,6 +142,44 @@ class MusicGenerationTests(unittest.TestCase):
             self.assertEqual(remaining, [])
             self.assertFalse((lib_dir / renamed["filename"]).exists())
 
+    def test_video_auto_music_uses_local_tracks_without_provider_access(self):
+        cases = {
+            "药物的作用是什么": "clean-soul.mp3",
+            "滴眼液操作步骤": "friday-morning.mp3",
+            "旅行药箱小贴士": "carefree.mp3",
+            "日常服药误服过量怎么办": "solace.mp3",
+        }
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(server, "GENERATED_MUSIC_DIR", Path(tmp)), \
+             mock.patch.object(server, "current_mureka_key", side_effect=AssertionError("Unexpected Mureka access")), \
+             mock.patch.object(server, "current_deepseek_key", side_effect=AssertionError("Unexpected DeepSeek access")), \
+             mock.patch.object(music_gen, "generate_music", side_effect=AssertionError("Unexpected generation")):
+            library = Path(tmp)
+            for filename in (*cases.values(), "other.mp3"):
+                (library / filename).write_bytes(make_fake_mp3())
+            settings = {"music": "auto", "musicUrl": "/media/bgm-deadbeef.mp3"}
+            server.validate_video_music_settings(settings)
+            for topic, filename in cases.items():
+                with self.subTest(topic=topic):
+                    path, choice, url, track = server.resolve_video_music({
+                        "settings": settings,
+                        "musicContext": {"topic": topic},
+                    })
+                    self.assertEqual(path, (library / filename).resolve())
+                    self.assertEqual(choice, "library:" + track["id"])
+                    self.assertEqual(url, track["url"])
+
+            manual = next(track for track in music_gen.list_music_library(library) if track["filename"] == "other.mp3")
+            path, _, _, _ = server.resolve_video_music({
+                "settings": {"music": "library:" + manual["id"]},
+                "musicContext": {"topic": "旅行药箱小贴士"},
+            })
+            self.assertEqual(path, (library / "other.mp3").resolve())
+
+            for filename in cases.values():
+                (library / filename).unlink()
+            self.assertEqual(server.resolve_video_music({"settings": settings}), (None, "off", None, None))
+
     def test_server_generate_music_request_checks_mureka_key_and_records_cost(self):
         fake_mp3 = make_fake_mp3(2048)
 

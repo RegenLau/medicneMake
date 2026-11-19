@@ -813,14 +813,7 @@ def save_uploaded_frame(p):
 
 
 def validate_video_music_settings(s):
-    track = s.get("music", "off")
-    existing = music_path(track, s.get("musicUrl"), allow_missing_auto=True)
-    if track == "auto":
-        music_model = s.get("musicModel") or music_gen.DEFAULT_MUSIC_MODEL
-        if music_model not in music_gen.MUSIC_MODELS:
-            raise ValueError("请选择有效的 Mureka 音乐模型。")
-        if existing is None and not current_mureka_key():
-            raise ValueError("请先在「模型配置 → 背景音乐」填写 Mureka API Key，再使用自动搭配生成背景音乐。")
+    music_path(s.get("music", "off"))
 
 
 def setting_valid(p):
@@ -1252,38 +1245,12 @@ def storyboard_timing(item, spoken_seconds, max_seconds, tail_image):
     return {**item, "seconds": seconds, "prompt": f"{item['prompt']}\n{timing}"}
 
 
-def _resolve_generated_music_url(music_url):
-    if not isinstance(music_url, str):
-        raise ValueError("背景音乐素材路径无效。")
-    if music_url.startswith(music_gen.LIBRARY_URL_PREFIX):
-        filename = unquote(music_url[len(music_gen.LIBRARY_URL_PREFIX) :])
-        if not filename or "/" in filename or "\\" in filename or Path(filename).suffix.lower() not in music_gen.AUDIO_EXTENSIONS:
-            raise ValueError("背景音乐素材路径无效。")
-        path = (GENERATED_MUSIC_DIR / filename).resolve()
-        if GENERATED_MUSIC_DIR.resolve() not in path.parents:
-            raise ValueError("背景音乐素材路径无效。")
-        return path
-    if re.fullmatch(r"/media/(?:bgm-)?[a-f0-9-]+\.(?:flac|mp3|wav)", music_url):
-        return MEDIA / music_url.split("/")[-1]
-    raise ValueError("背景音乐素材路径无效。")
-
-
-def music_path(track, music_url=None, allow_missing_auto=False):
-    if track == "off":
+def music_path(track):
+    if track in ("off", "auto"):
         return None
     if isinstance(track, str) and track.startswith("library:"):
-        track_id = track.split(":", 1)[1]
-        path, _ = music_gen.resolve_library_track(GENERATED_MUSIC_DIR, track_id)
+        path, _ = music_gen.resolve_library_track(GENERATED_MUSIC_DIR, track.split(":", 1)[1])
         return path
-    if track == "auto":
-        if music_url:
-            path = _resolve_generated_music_url(music_url)
-            if path.is_file():
-                return path
-            if allow_missing_auto:
-                return None
-            raise ValueError("缺少生成的背景音乐文件，请重新生成背景音乐。")
-        return None
     if not isinstance(track, str) or track not in MUSIC_TRACKS:
         raise ValueError("请选择有效的背景音乐。")
     path = MUSIC_TRACKS[track]
@@ -1308,68 +1275,32 @@ def _make_tracked_deepseek(key, record=None, label="专属背景音乐提示词�
     return request
 
 
-def resolve_video_music(p, job, save, record=None, deepseek_key=None, mureka_key=None):
-    global MUREKA_HOST
-    settings = p["settings"]
-    track = settings.get("music", "off")
-    if isinstance(track, str) and track.startswith("library:"):
-        track_id = track.split(":", 1)[1]
-        path, entry = music_gen.resolve_library_track(GENERATED_MUSIC_DIR, track_id)
-        return path, track, entry["url"], entry
-    if track != "auto":
-        return music_path(track), track, None, None
-    existing_url = settings.get("musicUrl")
-    existing_path = music_path("auto", existing_url, allow_missing_auto=True)
-    if existing_path is not None:
-        meta = settings.get("musicMeta") if isinstance(settings.get("musicMeta"), dict) else {"url": existing_url}
-        return existing_path, "auto", existing_url, {**meta, "url": existing_url}
-
-    mk_key = mureka_key if mureka_key is not None else current_mureka_key()
-    if not mk_key:
-        raise ValueError("请先在「模型配置 → 背景音乐」填写 Mureka API Key，再使用自动搭配生成背景音乐。")
-    music_model = settings.get("musicModel") or music_gen.DEFAULT_MUSIC_MODEL
-    if music_model not in music_gen.MUSIC_MODELS:
-        music_model = music_gen.DEFAULT_MUSIC_MODEL
-
-    job["progress"] = "正在调用 Mureka 按视频内容生成专属纯音乐"
-    save()
-    raw_ctx = p.get("musicContext") if isinstance(p.get("musicContext"), dict) else {}
-    lines = raw_ctx.get("lines") if isinstance(raw_ctx.get("lines"), list) else []
-    if not lines:
-        lines = [
-            item.get("line", "").strip()
-            for item in p.get("items", [])
-            if isinstance(item, dict) and isinstance(item.get("line"), str) and item.get("line").strip()
-        ]
-    context = {**raw_ctx, "lines": lines}
-    ds_key = deepseek_key if deepseek_key is not None else current_deepseek_key()
-    model = settings.get("textModel") or default_text_model()
-    if model not in text_models():
-        model = default_text_model()
-
-    def update_music_progress(stage_text):
-        job["progress"] = f"Mureka 正在生成专属背景音乐（{stage_text}…）"
-        save()
-
-    generated = music_gen.generate_music(
-        context,
-        GENERATED_MUSIC_DIR,
-        mk_key,
-        music_model=music_model,
-        mureka_host=MUREKA_HOST or None,
-        deepseek_fn=_make_tracked_deepseek(ds_key, record=record),
-        text_model=model,
-        on_progress=update_music_progress,
-    )
-    if generated.get("host"):
-        with CACHE_LOCK:
-            MUREKA_HOST = generated["host"]
-    if record:
-        record(
-            f"music:{uuid.uuid4()}",
-            work_costs.music_cost(generated["model"], generated.get("duration"), generated.get("spentCny")),
+def resolve_video_music(p):
+    track = p["settings"].get("music", "off")
+    if track == "auto":
+        # Older clients send the mode instead of the resolved library selection.
+        context = p.get("musicContext")
+        context = context if isinstance(context, dict) else {}
+        topic = next(
+            (value.strip() for value in (context.get("topic"), context.get("title"))
+             if isinstance(value, str) and value.strip()),
+            "",
         )
-    return _resolve_generated_music_url(generated["url"]), "auto", generated["url"], generated
+        library_ids = {item["id"] for item in music_gen.list_music_library(GENERATED_MUSIC_DIR)}
+        rules = read_json(PUBLIC / "assets" / "music" / "auto-music.json")
+        available = [rule for rule in rules if rule["trackId"] in library_ids]
+        if available:
+            selected = next(
+                (rule for rule in available if any(word in topic for word in rule["keywords"])),
+                available[-1],
+            )
+            track = "library:" + selected["trackId"]
+        else:
+            track = "off"
+    if isinstance(track, str) and track.startswith("library:"):
+        path, entry = music_gen.resolve_library_track(GENERATED_MUSIC_DIR, track.split(":", 1)[1])
+        return path, track, entry["url"], entry
+    return music_path(track), track, None, None
 
 
 def generate_music_request(p):
@@ -1838,11 +1769,9 @@ def _build_template_slide_xfade(cue_specs, prev_img=None):
     return input_args, ";".join(filters), f"[{acc}]", in_idx
 
 
-def render_template_video(p, job, save, speech_key, record=None, dashscope_key="", deepseek_key=None, mureka_key=None):
+def render_template_video(p, job, save, speech_key, record=None, dashscope_key=""):
     settings = p["settings"]
-    music, track, music_url, music_meta = resolve_video_music(
-        p, job, save, record=record, deepseek_key=deepseek_key, mureka_key=mureka_key
-    )
+    music, track, music_url, music_meta = resolve_video_music(p)
     music_extra = {"musicUrl": music_url, "musicMeta": music_meta} if music_url else {}
     items = p["items"]
     voiced = settings.get("voice") in SPEAKERS and any(item.get("line", "").strip() for item in items)
@@ -2298,13 +2227,11 @@ def render_template_video(p, job, save, speech_key, record=None, dashscope_key="
     return {"url": f"/media/{base}.mp4", "captions": f"/media/{base}.vtt", "music": track, "shotSeconds": shot_seconds, **music_extra}
 
 
-def render_video(p, job, save, speech_key, record=None, dashscope_key="", deepseek_key=None, mureka_key=None):
+def render_video(p, job, save, speech_key, record=None, dashscope_key=""):
     if p.get("template") is True:
-        return render_template_video(p, job, save, speech_key, record, dashscope_key, deepseek_key, mureka_key)
+        return render_template_video(p, job, save, speech_key, record, dashscope_key)
     settings = p["settings"]
-    music, track, music_url, music_meta = resolve_video_music(
-        p, job, save, record=record, deepseek_key=deepseek_key, mureka_key=mureka_key
-    )
+    music, track, music_url, music_meta = resolve_video_music(p)
     music_extra = {"musicUrl": music_url, "musicMeta": music_meta} if music_url else {}
     segments = []
     cues = ["WEBVTT\n"]
@@ -2459,7 +2386,7 @@ def write_draft(p, job, save, record=None):
         )
 
 
-def work(job, key=None, speech_key="", deepseek_key=None, dashscope_key="", mureka_key=None):
+def work(job, key=None, speech_key="", deepseek_key=None, dashscope_key=""):
     def save():
         with CACHE_LOCK:
             write_json(JOBS / (job["id"] + ".json"), job)
@@ -2488,7 +2415,7 @@ def work(job, key=None, speech_key="", deepseek_key=None, dashscope_key="", mure
             elif p["kind"] == "draft":
                 write_draft(p, job, save, record)
             else:
-                job["output"] = render_video(p, job, save, speech_key, record, dashscope_key, deepseek_key, mureka_key)
+                job["output"] = render_video(p, job, save, speech_key, record, dashscope_key)
             job["status"] = "done"
     except Exception as error:
         job.update(status="failed", error=str(error)[:650])
@@ -2605,7 +2532,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "musicLibrary": music_gen.list_music_library(GENERATED_MUSIC_DIR),
                     "workCosts": True,
                     "videoBackgroundMusic": True,
-                    "videoAutoMusicGeneration": True,
+                    "videoAutoMusicGeneration": False,
                     "imageStyleReference": True,
                     **ark_connection(),
                     **deepseek_connection(),
@@ -2742,13 +2669,10 @@ class Handler(SimpleHTTPRequestHandler):
                 write_json(file, job)
                 ACTIVE.add(job_id)
                 key = current_ark_key()
-                needs_auto_music = p["kind"] == "video" and p.get("settings", {}).get("music") == "auto"
-                needs_deepseek = p["kind"] == "draft" or needs_auto_music
-                ds_key = current_deepseek_key() if needs_deepseek else None
+                ds_key = current_deepseek_key() if p["kind"] == "draft" else None
                 dash_key = current_dashscope_key() if p["kind"] == "video" and p.get("template") is True else ""
-                mk_key = current_mureka_key() if needs_auto_music else None
                 threading.Thread(
-                    target=work, args=(job, key, current_speech_key(), ds_key, dash_key, mk_key), daemon=True
+                    target=work, args=(job, key, current_speech_key(), ds_key, dash_key), daemon=True
                 ).start()
                 self.send_json(202, visible(job))
         except (ValueError, KeyError, TypeError) as error:
