@@ -538,6 +538,7 @@ function settingsFields(s, which = "all", segAction = "set-mode") {
     ]),
     videos = Object.entries(config.videoModels).map(([id, v]) => [id, v[0]]);
   const isArk = s.mode === "ark";
+  const isTplVideo = which === "template-video";
   const musicField = which !== "article" && config.videoBackgroundMusic
     ? field("背景音乐", "music", Object.entries(musicLabels), s.music ?? defaults.music, true)
     : "";
@@ -545,7 +546,16 @@ function settingsFields(s, which = "all", segAction = "set-mode") {
   if (isArk) h += arkKeyWarning(segAction);
 
   h += '<div class="fields">';
-  if (isArk) {
+  if (isTplVideo) {
+    h += field("配音", "voice", voiceOptions, s.voice, true);
+    h += musicField + "</div>";
+    h +=
+      '<div class="mode-box" style="margin-top:12px">' +
+      (isArk
+        ? "模板讲解模式固定输出 16:9（1280×720）高清信息图视频：自定义主题用方舟生成 5 页结构脚本，画面由本地模板直接渲染，<b>不消耗视频模型费用</b>。"
+        : "内置示例可直接零成本生成 5 页模板脚本并合成 16:9 高清 MP4；选择「无配音」时全程无需 API Key。") +
+      "</div>";
+  } else if (isArk) {
     h +=
       field("生图模型", "imageModel", images, s.imageModel, true) +
       field(
@@ -594,7 +604,7 @@ function settingsFields(s, which = "all", segAction = "set-mode") {
         : "合成 480p 演示视频。启用配音时，火山语音按字符计费") +
       "。内置主题可用本地稿件演示，自定义内容由方舟生成，确认后按量计费。</div>";
   }
-  if (which === "video" && !config.speechKeyPresent) {
+  if ((which === "video" || which === "template-video") && !config.speechKeyPresent) {
     h += '<div class="banner-actions">' +
       btn("配置火山语音", "configure-speech", "secondary") +
       "</div>";
@@ -605,11 +615,12 @@ function settingsFields(s, which = "all", segAction = "set-mode") {
 function prefs(w) {
   modalScope = w?.id || "global";
   const s = w ? w.settings : data.settings;
-  const styleField = w ? field(w.type === "video" ? "画面风格" : "插图风格", "imageStyle",
+  const tpl = w && TemplateStudio.isTemplateVideo(w);
+  const styleField = w && !tpl ? field(w.type === "video" ? "画面风格" : "插图风格", "imageStyle",
     styles.map((label, i) => [String(i), label]), String(w.style)) : "";
   openModal(
     w ? "本作品生成参数" : "新作品默认参数",
-    settingsFields(s, w ? w.type : "all", "modal-mode") +
+    settingsFields(s, w ? (tpl ? "template-video" : w.type) : "all", "modal-mode") +
       (styleField ? '<div class="formrow">' + styleField + "</div>" : "") +
       '<div style="margin-top:16px">' +
       btn("完成", "close", "primary widebtn") +
@@ -618,19 +629,33 @@ function prefs(w) {
   );
 }
 
-function newWork(type, example) {
+function newWork(type, example, videoMode, tplSampleIdx) {
   const id = crypto.randomUUID(),
     style = example ?? 0;
   const s = { ...data.settings };
+  const effectiveVideoMode = type === "video"
+    ? (videoMode || (example == null ? "template" : "storyboard"))
+    : undefined;
   if (type === "article" && example == null && s.ratio === "9:16") {
     s.ratio = "16:9";
   }
+  if (effectiveVideoMode === "template") {
+    s.ratio = "16:9";
+  }
+  const tplSample = tplSampleIdx != null ? TemplateVideo.EXAMPLES[tplSampleIdx] : null;
   const w = {
     id,
     type,
+    ...(effectiveVideoMode ? { videoMode: effectiveVideoMode } : {}),
+    ...(effectiveVideoMode === "template"
+      ? {
+          templateTheme: tplSample ? tplSample.theme : "medical",
+          templatePresenter: tplSample ? tplSample.presenter : "digital",
+        }
+      : {}),
     stage: "setup",
     title: "",
-    topic: example == null ? "" : examples[style],
+    topic: tplSample ? tplSample.topic : (example == null ? "" : examples[style]),
     layout: articleLayouts[0].name,
     style,
     drug: "",
@@ -709,6 +734,7 @@ function home() {
     "</div>" +
     (tab === "examples"
       ? '<div class="gallery">' +
+        TemplateStudio.templateSampleCardsHtml(esc, ico) +
         styles
           .map(
             (s, i) =>
@@ -729,6 +755,7 @@ function home() {
           .join("") +
         "</div>"
       : worksList());
+  if (tab === "examples") requestAnimationFrame(() => TemplateStudio.fitTemplatePreviews());
 }
 
 function worksList() {
@@ -999,23 +1026,27 @@ function setup(w) {
       : btn("搜索或输入药品", "drug", "outline")) +
     "</div></div></div>";
 
+  const isTpl = TemplateStudio.isTemplateVideo(w);
   if (video) {
     const reference = videoReferenceSeconds(w);
     left +=
       '<div class="sheet"><div class="card-head"><h2>视频设置</h2></div>' +
-      styleChoice(w.style, "画面风格") +
-      choice(
-        "参考时长",
-        videoReferenceDurations.map((seconds) => seconds === null ? "自动" : `${seconds} 秒`),
-        reference === null ? "自动" : `${reference} 秒`,
-        "duration",
-      ) +
-      choice(
-        "出镜形象",
-        ["无人物", "药师出镜"],
-        w.avatar === pharmacistAvatar ? "药师出镜" : "无人物",
-        "avatar",
-      ) +
+      TemplateStudio.modeSwitcherHtml(w) +
+      (isTpl
+        ? TemplateStudio.templateSetupHtml(w, data, esc, btn)
+        : styleChoice(w.style, "画面风格") +
+          choice(
+            "参考时长",
+            videoReferenceDurations.map((seconds) => seconds === null ? "自动" : `${seconds} 秒`),
+            reference === null ? "自动" : `${reference} 秒`,
+            "duration",
+          ) +
+          choice(
+            "出镜形象",
+            ["无人物", "药师出镜"],
+            w.avatar === pharmacistAvatar ? "药师出镜" : "无人物",
+            "avatar",
+          )) +
       "</div>";
   } else {
     left +=
@@ -1029,25 +1060,25 @@ function setup(w) {
   const ctaArea = hasBlocks
     ? '<div class="stack-actions">' +
       btn(
-        video ? "返回继续编辑分镜" : "返回继续编辑图文",
+        video ? (isTpl ? "返回继续编辑模板页" : "返回继续编辑分镜") : "返回继续编辑图文",
         "resume-edit",
         "primary widebtn",
       ) +
       btn(
-        video ? "重新生成分镜脚本" : "重新生成图文草稿",
+        video ? (isTpl ? "重新生成 5 页模板脚本" : "重新生成分镜脚本") : "重新生成图文草稿",
         "regenerate-all",
         "secondary widebtn",
       ) +
       "</div>"
     : btn(
-        video ? "生成分镜脚本" : "生成图文草稿",
+        video ? (isTpl ? "生成 5 页模板脚本" : "生成分镜脚本") : "生成图文草稿",
         "generate",
         "primary widebtn",
       );
 
   const right =
     '<div class="sheet"><div class="card-head"><h2>生成配置</h2></div>' +
-    settingsFields(w.settings, w.type, "set-mode") +
+    settingsFields(w.settings, isTpl ? "template-video" : w.type, "set-mode") +
     '<div class="dividerline"></div><div id="initial-generation">' +
     ctaArea +
     "</div></div>";
@@ -1535,6 +1566,21 @@ function articlePaper(w, editable) {
 
 function editor(w) {
   const vid = w.type === "video";
+  if (TemplateStudio.isTemplateVideo(w)) {
+    shell(
+      w,
+      "编辑模板科普页",
+      1,
+      '<div class="layout"><div>' +
+        TemplateStudio.templateEditorBodyHtml(w, data, esc) +
+        '</div><aside class="aside">' +
+        TemplateStudio.templateEditorAsideHtml(w, data, esc, btn, savedLabel) +
+        "</aside></div>",
+      btn(ico("trash") + " 删除作品", "ask-delete", "textbtn danger", w.id),
+    );
+    requestAnimationFrame(() => TemplateStudio.fitTemplatePreviews());
+    return;
+  }
   const s = w.settings;
   const music = s.music ?? defaults.music;
   const ranges = vid ? shotRanges(w.blocks) : [];
@@ -1686,11 +1732,12 @@ function checklist(w) {
 
 function detail(w) {
   const vid = w.type === "video",
+    isTpl = TemplateStudio.isTemplateVideo(w),
     reviewing = w.stage === "review";
   const ranges = vid ? shotRanges(w.blocks) : [];
 
   const metaPills = [
-    vid ? "视频科普" : "图文科普 · " + w.layout,
+    vid ? (isTpl ? "信息图模板视频" : "视频科普") : "图文科普 · " + w.layout,
     ...(w.drug ? ["关联药品：" + w.drug] : []),
     ...(vid
       ? []
@@ -1706,7 +1753,7 @@ function detail(w) {
           videoTotalSeconds(w) + " 秒",
           w.settings.voice,
           ...(musicLabels[w.video.music] ? [musicLabels[w.video.music]] : []),
-          w.renderMode === "demo" ? "本地演示成片" : "方舟动态成片",
+          isTpl ? "1280×720 模板成片" : (w.renderMode === "demo" ? "本地演示成片" : "方舟动态成片"),
         ]
       : []),
   ];
@@ -1718,18 +1765,23 @@ function detail(w) {
       esc(w.video.url) +
       '" poster="' +
       esc(w.blocks[0]?.image || "") +
-      '"><track default kind="subtitles" srclang="zh" label="中文" src="' +
-      esc(w.video.captions) +
-      '"></video></div>' +
-      '<div id="video-stale" class="banner warn" hidden>分镜或背景音乐已修改。返回分镜编辑并重新合成后，成片会同步更新。</div>' +
+      '">' +
+      (isTpl
+        ? ""
+        : '<track default kind="subtitles" srclang="zh" label="中文" src="' +
+          esc(w.video.captions) +
+          '">') +
+      "</video></div>" +
+      '<div id="video-stale" class="banner warn" hidden>内容或背景音乐已修改。返回编辑并重新合成后，成片会同步更新。</div>' +
       '<div class="dividerline"></div><details class="transcript" open><summary>' +
       w.blocks.length +
-      " 幕分镜与口播台词</summary>" +
+      (isTpl ? " 页模板与口播台词" : " 幕分镜与口播台词") +
+      "</summary>" +
       w.blocks
         .map(
           (b, i) =>
-            '<section class="shot"><div class="shothead"><div class="shot-title-group"><span class="shot-badge">分镜 ' +
-            (i + 1) +
+            '<section class="shot"><div class="shothead"><div class="shot-title-group"><span class="shot-badge">' +
+            (isTpl ? "第 " + (i + 1) + " 页" : "分镜 " + (i + 1)) +
             "</span><h3>" +
             esc(b.name) +
             '</h3></div><span class="time-range">' +
@@ -1737,7 +1789,7 @@ function detail(w) {
             "</span></div><p>" +
             esc(b.line) +
             "</p>" +
-            pictureControls(w, b, i, true) +
+            (isTpl ? "" : pictureControls(w, b, i, true)) +
             "</section>",
         )
         .join("") +
@@ -1792,7 +1844,7 @@ function detail(w) {
         btn("撤回至草稿继续修改", "withdraw", "secondary widebtn")
       : btn("提交审核", "submit", "primary widebtn") +
         btn(
-          vid ? "返回分镜编辑" : "编辑正文与配图",
+          vid ? (isTpl ? "返回模板编辑" : "返回分镜编辑") : "编辑正文与配图",
           "edit",
           "secondary widebtn",
         )) +
@@ -2146,12 +2198,56 @@ function topicMissing() {
   el.focus();
 }
 
+function authorizeSpeechOnly(w, count, fn) {
+  retryPayload = fn;
+  openModal(
+    "确认合成模板视频并生成配音",
+    "<p>模板画面由本地直接渲染（1280×720，<b>0 视频模型费用</b>），将为 <b>" +
+      count +
+      "</b> 页口播调用火山语音（" +
+      esc(w.settings.voice) +
+      "），仅按口播字符数计费。</p>" +
+      '<div class="actions dialog-actions">' +
+      btn("取消", "close", "secondary") +
+      btn("确认合成 MP4", "confirm-paid", "primary") +
+      "</div>",
+    "confirm",
+  );
+}
+
 function generate(w) {
   if (!w.topic.trim()) {
     topicMissing();
     return;
   }
   if (w.job || w.blocks.some((b) => b.job && !b.job.error)) return;
+  if (TemplateStudio.isTemplateVideo(w)) {
+    const matchedIdx = TemplateVideo.EXAMPLES.findIndex((ex) => ex.topic === w.topic.trim());
+    if (matchedIdx >= 0 && (w.settings.mode === "demo" || !config.keyPresent)) {
+      const sample = TemplateVideo.cloneExample(matchedIdx);
+      TemplateStudio.installTemplateDeck(w, {
+        ...sample,
+        theme: w.templateTheme || sample.theme,
+        presenter: w.templatePresenter || sample.presenter,
+      }, data);
+      changed(w);
+      render();
+      app.focus({ preventScroll: true });
+      return;
+    }
+    return authorize(w, 1, "draft", () => {
+      const settings = { ...w.settings, mode: "ark", ratio: "16:9" };
+      const job = createJob(w, "write-draft", [], settings);
+      job.payload.draft = {
+        type: "video",
+        videoMode: "template",
+        topic: w.topic.trim(),
+        drug: w.drug,
+      };
+      w.job = job;
+      return sendJob(w);
+    });
+  }
   const localExample = w.settings.mode === "demo" && examples.includes(w.topic.trim());
   if (!localExample) {
     return authorize(w, w.type === "article" ? 2 : 1, "draft", () => {
@@ -2200,6 +2296,10 @@ function installDraft(w, plan) {
 function applyWrittenDraft(w, output) {
   const { title } = output;
   if (w.type === "video") {
+    if (TemplateStudio.isTemplateVideo(w) && Array.isArray(output.slides)) {
+      TemplateStudio.installTemplateDeck(w, output, data);
+      return;
+    }
     installDraft(w, { title, setting: output.setting || "", blocks: videoBlocks(output.shots) });
   } else {
     const visuals = new Map((output.images || []).map(({ section, scene }) => [section, scene]));
@@ -2502,7 +2602,83 @@ document.addEventListener("input", (e) => {
     return;
   }
   if (el.classList.contains("autogrow")) autoGrow(el);
+  if (el.dataset.pharm) {
+    const p = TemplateStudio.ensurePharmacist(data);
+    p[el.dataset.pharm] = el.value;
+    if (w?.templateDeck) {
+      w.templateDeck.pharmacist = { ...p };
+      if (w.video) w.videoDirty = true;
+      TemplateStudio.refreshLivePreview(w, data);
+    }
+    if (w) changed(w);
+    else save();
+    return;
+  }
   if (!w) return;
+  if (TemplateStudio.isTemplateVideo(w) && w.templateDeck) {
+    const deck = w.templateDeck;
+    if (el.dataset.tplGlobal === "title") {
+      deck.title = el.value;
+      w.title = el.value;
+      if (w.video) w.videoDirty = true;
+      changed(w);
+      TemplateStudio.refreshLivePreview(w, data);
+      return;
+    }
+    if (el.dataset.tplChap !== undefined) {
+      deck.chapters[Number(el.dataset.tplChap)] = el.value;
+      if (w.video) w.videoDirty = true;
+      changed(w);
+      TemplateStudio.refreshLivePreview(w, data);
+      return;
+    }
+    if (el.dataset.tplSlide !== undefined) {
+      const si = Number(el.dataset.tplSlide);
+      const slide = deck.slides[si];
+      if (!slide) return;
+      if (el.dataset.tplField) {
+        slide[el.dataset.tplField] = el.value;
+        if (el.dataset.tplField === "line") {
+          slide.seconds = Math.max(4, recommendedShotSeconds(spokenChars(el.value)));
+        }
+      } else if (el.dataset.tplArr) {
+        slide[el.dataset.tplArr] ||= [];
+        slide[el.dataset.tplArr][Number(el.dataset.tplI)] = el.value;
+      } else if (el.dataset.tplJoined) {
+        slide[el.dataset.tplJoined] = el.value
+          .split(/[、,，\s]+/)
+          .map((x) => x.trim())
+          .filter(Boolean);
+      } else if (el.dataset.tplCol !== undefined) {
+        const ci = Number(el.dataset.tplCol);
+        slide.columns ||= [{}, {}];
+        slide.columns[ci] ||= {};
+        slide.columns[ci][el.dataset.tplSub] = el.dataset.tplSub === "points"
+          ? el.value.split(/\n+/).map((x) => x.trim()).filter(Boolean)
+          : el.value;
+      } else if (el.dataset.tplStep !== undefined) {
+        const sti = Number(el.dataset.tplStep);
+        slide.steps ||= [];
+        slide.steps[sti] ||= {};
+        slide.steps[sti][el.dataset.tplSub] = el.value;
+      } else if (el.dataset.tplWarn !== undefined) {
+        const wi = Number(el.dataset.tplWarn);
+        slide.warnings ||= [];
+        slide.warnings[wi] ||= {};
+        slide.warnings[wi][el.dataset.tplSub] = el.value;
+      } else if (el.dataset.tplPoint !== undefined) {
+        const pi = Number(el.dataset.tplPoint);
+        slide.points ||= [];
+        slide.points[pi] ||= {};
+        slide.points[pi][el.dataset.tplSub] = el.value;
+      }
+      TemplateStudio.syncBlocksFromDeck(w);
+      if (w.video) w.videoDirty = true;
+      changed(w);
+      TemplateStudio.refreshLivePreview(w, data);
+      return;
+    }
+  }
   if (el.dataset.bind) {
     w[el.dataset.bind] = el.value;
     if (el.id === "topic") {
@@ -2580,6 +2756,25 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("change", (e) => {
   const el = e.target,
     w = current();
+  if (el.dataset.tplUpload) {
+    const file = el.files?.[0];
+    el.value = "";
+    if (file) {
+      TemplateStudio.handleFileUpload(file, el.dataset.tplUpload, w, data, changed, render, notify)
+        .catch((err) => notify(err.message || "上传图片失败", "warn"));
+    }
+    return;
+  }
+  if (el.dataset.tplChapterIdx && w?.templateDeck) {
+    const slide = w.templateDeck.slides[Number(el.dataset.tplSlide)];
+    if (slide) {
+      slide.chapterIndex = Number(el.value);
+      if (w.video) w.videoDirty = true;
+      changed(w);
+      TemplateStudio.refreshLivePreview(w, data);
+    }
+    return;
+  }
   if (el.id === "picture-model" && regenModal) {
     regenModal.imageModel = el.value;
     const choices = config.imageModels[el.value][1];
@@ -2675,7 +2870,82 @@ document.addEventListener("click", async (e) => {
         newWork(v);
         break;
       case "sample":
-        newWork("video", Number(v));
+        newWork("video", Number(v), "storyboard");
+        break;
+      case "tpl-sample":
+        newWork("video", null, "template", Number(v));
+        break;
+      case "tpl-video-mode":
+        if (w && w.type === "video") {
+          w.videoMode = v;
+          if (v === "template") {
+            w.settings.ratio = "16:9";
+            w.templateTheme ||= "medical";
+            w.templatePresenter ||= "digital";
+          }
+          changed(w);
+          render(true);
+        }
+        break;
+      case "tpl-theme":
+        if (w) {
+          w.templateTheme = v;
+          if (w.templateDeck) {
+            w.templateDeck.theme = v;
+            if (w.video) w.videoDirty = true;
+          }
+          changed(w);
+          render(true);
+        }
+        break;
+      case "tpl-presenter":
+        if (w) {
+          w.templatePresenter = v;
+          if (w.templateDeck) {
+            w.templateDeck.presenter = v;
+            if (w.video) w.videoDirty = true;
+          }
+          changed(w);
+          render(true);
+        }
+        break;
+      case "tpl-slide":
+        if (w) {
+          TemplateStudio.setSlideIndex(w, Number(v));
+          render(true);
+        }
+        break;
+      case "tpl-cue":
+        if (w) {
+          TemplateStudio.setCueIndex(w, Number(v));
+          render(true);
+        }
+        break;
+      case "tpl-reset-avatar": {
+        const p = TemplateStudio.ensurePharmacist(data);
+        p.avatarImage = "";
+        if (w?.templateDeck) {
+          w.templateDeck.pharmacist.avatarImage = "";
+          if (w.video) w.videoDirty = true;
+        }
+        if (w) changed(w);
+        else save();
+        render(true);
+        break;
+      }
+      case "tpl-compose":
+        if (w && TemplateStudio.isTemplateVideo(w)) {
+          await TemplateStudio.composeTemplateVideo(w, data, {
+            notify,
+            render,
+            videoMusic,
+            sendJob,
+            openApiKeys,
+            authorizeSpeechOnly,
+            speechKeyPresent: config.speechKeyPresent,
+            workCostsEnabled: !!config.workCosts,
+          });
+        }
         break;
       case "open":
         navigate("work/" + v);
@@ -2756,12 +3026,15 @@ document.addEventListener("click", async (e) => {
         generate(w);
         break;
       case "fill": {
-        const currentIdx = examples.indexOf(w.topic.trim());
+        const pool = TemplateStudio.isTemplateVideo(w)
+          ? TemplateVideo.EXAMPLES.map((ex) => ex.topic)
+          : examples;
+        const currentIdx = pool.indexOf(w.topic.trim());
         const nextIdx =
           currentIdx >= 0
-            ? (currentIdx + 1) % examples.length
-            : exampleCursor++ % examples.length;
-        w.topic = examples[nextIdx];
+            ? (currentIdx + 1) % pool.length
+            : exampleCursor++ % pool.length;
+        w.topic = pool[nextIdx];
         changed(w);
         render(true);
         break;

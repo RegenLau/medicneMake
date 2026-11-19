@@ -82,12 +82,15 @@ def validate_request(item, settings, video_models):
         if item.get("layout") not in ARTICLE_STYLES:
             raise ValueError("请选择一种有效的文章排版。")
     elif item.get("type") == "video":
+        video_mode = item.get("videoMode", "storyboard")
+        if video_mode not in ("storyboard", "template"):
+            raise ValueError("请选择有效的视频制作方式。")
         duration = settings.get("duration")
         if duration is not None and (type(duration) is not int or duration not in DURATIONS):
             raise ValueError("请重新选择视频参考时长（自动、30、45、60、90 或 120 秒）。")
         if settings.get("ratio", "9:16") not in RATIO_LABELS:
             raise ValueError("请重新选择视频画幅。")
-        if settings.get("videoModel") not in video_models:
+        if video_mode == "storyboard" and settings.get("videoModel") not in video_models:
             raise ValueError("请选择有效的视频模型。")
     else:
         raise ValueError("未知的文字生成类型。")
@@ -312,3 +315,120 @@ def video_draft(ark, model, item, reference_seconds, max_seconds, ratio="9:16"):
     except (KeyError, ValueError):
         raise ValueError("方舟未返回完整口播。可确认后重试文字生成。") from None
     return {"title": title, "setting": setting, "shots": time_video(beats, max_seconds)}
+
+
+def template_video_draft(ark, model, item):
+    instruction = EDITORIAL_RULES + drug_rule(item.get("drug", "")) + (
+        "【任务】写一条 16:9 信息图模板讲解形式的用药科普视频脚本，固定输出 5 页结构化卡片与配套口播。\n"
+        "【5 页固定顺序】\n"
+        "1. 第 1 页 type=\"cover\"（封面破题页，chapterIndex=0）：点明患者最关心的问题，给出 3 个简短要点标签（每条不超过 10 字）与一句温和提示 footerNote，并写一句纯白底无字局部医学插图描述 spotPrompt（不超过 60 字，不含任何文字数字和红十字）。\n"
+        "2. 第 2 页 type=\"compare\"（双栏对比页，chapterIndex=1）：用 2 栏对比讲清核心区分（如两种常见做法、误区与正确做法、两种常见成分或剂型区别），每栏含 title、badge（2–8字）、3 条要点 points、footLabel 与 footValue，底部写一句说明书或医嘱提醒 footerNote。\n"
+        "3. 第 3 页 type=\"steps\"（步骤清单页，chapterIndex=2）：拆成 3 个实操步骤 steps（每步含 title、desc、key 一句核心原则），底部配 4 条简短自查标签 checks（每条不超过 8 字）。\n"
+        "4. 第 4 页 type=\"warning\"（风险警示页，chapterIndex=3）：列出 4 条需要及时就医或咨询药师的信号 warnings（每条含 title、desc），底部写一句护理或避坑提醒 footerNote。\n"
+        "5. 第 5 页 type=\"summary\"（结尾收口页，chapterIndex=3）：用 3 句口诀 points（每条含 title、desc）总结全片，footerNote 固定写「科普内容仅供参考，具体诊疗与用药请遵医嘱或查阅药品说明书」。\n"
+        "【口播与字段要求】\n"
+        "- chapters：4 个顶部章节胶囊名，每个 2 到 5 字。\n"
+        "- 每页必含 leftTop（不超过 7 字的左侧强调短词）、leftBottom（不超过 14 字的补充提示）、headline（不超过 22 字的卡片主标题）、accentPhrase（headline 中需要变色强调的一个短语）、line（35 到 75 字的完整口语口播，数字写成中文读法，无括号斜杠表情）、highlightWords（1 到 3 个出现在 line 中的关键词数组，用于字幕变色高亮）。\n"
+        "【输出】只返回 JSON："
+        '{"title":"不超过20字主标题","chapters":["章1","章2","章3","章4"],"slides":[...]}'
+    )
+    data = {"主题与要求": item["topic"], "关联药品": item.get("drug", "")}
+    result = ask_json(ark, model, instruction, data, 4096)
+    try:
+        title = string_field(result, "title", 80)
+        chapters_raw = result["chapters"]
+        if not isinstance(chapters_raw, list) or not 2 <= len(chapters_raw) <= 4:
+            raise ValueError
+        chapters = [str(c).strip()[:10] for c in chapters_raw if str(c).strip()]
+        if len(chapters) < 2:
+            raise ValueError
+        slides_raw = result["slides"]
+        if not isinstance(slides_raw, list) or not 3 <= len(slides_raw) <= 6:
+            raise ValueError
+        slides = []
+        for idx, raw in enumerate(slides_raw):
+            if not isinstance(raw, dict):
+                raise ValueError
+            stype = raw.get("type")
+            if stype not in ("cover", "compare", "steps", "warning", "summary"):
+                raise ValueError
+            line = string_field(raw, "line", 300)
+            hl = raw.get("highlightWords") or []
+            if not isinstance(hl, list):
+                hl = []
+            slide = {
+                "type": stype,
+                "chapterIndex": min(len(chapters) - 1, max(0, int(raw.get("chapterIndex", min(idx, len(chapters) - 1))))),
+                "leftTop": string_field(raw, "leftTop", 24),
+                "leftBottom": string_field(raw, "leftBottom", 48, optional=True),
+                "headline": string_field(raw, "headline", 60),
+                "accentPhrase": string_field(raw, "accentPhrase", 24, optional=True),
+                "highlightWords": [str(w).strip()[:16] for w in hl if str(w).strip()][:3],
+                "line": line,
+                "seconds": max(5, math.ceil(spoken_length(line) / SPEECH_RATE + SHOT_PAUSE)),
+            }
+            if stype == "cover":
+                slide["lead"] = string_field(raw, "lead", 90, optional=True)
+                pills = raw.get("pills") or []
+                slide["pills"] = [str(p).strip()[:20] for p in pills if str(p).strip()][:3]
+                slide["spotPrompt"] = string_field(raw, "spotPrompt", 180, optional=True)
+                slide["footerNote"] = string_field(raw, "footerNote", 120, optional=True)
+            elif stype == "compare":
+                cols = raw.get("columns") or []
+                if not isinstance(cols, list) or len(cols) < 2:
+                    raise ValueError
+                slide["columns"] = [
+                    {
+                        "title": string_field(c, "title", 24),
+                        "badge": string_field(c, "badge", 20, optional=True),
+                        "points": [str(pt).strip()[:60] for pt in (c.get("points") or []) if str(pt).strip()][:4],
+                        "footLabel": string_field(c, "footLabel", 16, optional=True),
+                        "footValue": string_field(c, "footValue", 36, optional=True),
+                    }
+                    for c in cols[:2] if isinstance(c, dict)
+                ]
+                if len(slide["columns"]) < 2:
+                    raise ValueError
+                slide["footerNote"] = string_field(raw, "footerNote", 120, optional=True)
+            elif stype == "steps":
+                steps = raw.get("steps") or []
+                if not isinstance(steps, list) or len(steps) < 2:
+                    raise ValueError
+                slide["steps"] = [
+                    {
+                        "title": string_field(st, "title", 24),
+                        "desc": string_field(st, "desc", 90),
+                        "key": string_field(st, "key", 40, optional=True),
+                    }
+                    for st in steps[:3] if isinstance(st, dict)
+                ]
+                checks = raw.get("checks") or []
+                slide["checks"] = [str(c).strip()[:16] for c in checks if str(c).strip()][:4]
+            elif stype == "warning":
+                warns = raw.get("warnings") or []
+                if not isinstance(warns, list) or len(warns) < 2:
+                    raise ValueError
+                slide["warnings"] = [
+                    {
+                        "title": string_field(w, "title", 28),
+                        "desc": string_field(w, "desc", 90),
+                    }
+                    for w in warns[:4] if isinstance(w, dict)
+                ]
+                slide["footerNote"] = string_field(raw, "footerNote", 120, optional=True)
+            else:
+                pts = raw.get("points") or []
+                if not isinstance(pts, list) or len(pts) < 2:
+                    raise ValueError
+                slide["points"] = [
+                    {
+                        "title": string_field(pt, "title", 32),
+                        "desc": string_field(pt, "desc", 90),
+                    }
+                    for pt in pts[:3] if isinstance(pt, dict)
+                ]
+                slide["footerNote"] = string_field(raw, "footerNote", 120, optional=True) or "科普内容仅供参考，具体诊疗与用药请遵医嘱或查阅药品说明书"
+            slides.append(slide)
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("方舟未返回完整的模板分镜数据，可确认后重试生成。") from None
+    return {"title": title, "chapters": chapters, "slides": slides}

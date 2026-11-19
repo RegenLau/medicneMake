@@ -1,0 +1,1613 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>希息药事 · 科普视频参数模板（定稿版）</title>
+<style>
+  :root {
+    --bg: #eef2f7;
+    --surface: #ffffff;
+    --soft: #f5f8fc;
+    --line: #dce4ef;
+    --line-strong: #c2d1e4;
+    --ink: #152538;
+    --muted: #52667c;
+    --accent: #1466cc;
+    --accent-soft: #e7f2ff;
+    --ring: 0 0 0 3px rgba(20, 102, 204, 0.24);
+    --font: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", system-ui, -apple-system, sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  ::selection {
+    background: rgba(20, 102, 204, 0.18);
+    color: #0e243d;
+  }
+
+  html, body {
+    height: 100%;
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::-webkit-scrollbar { width: 7px; height: 7px; }
+  ::-webkit-scrollbar-thumb { background: #c5d1df; border-radius: 99px; }
+
+  /* ===== Top Header ===== */
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--line);
+    padding: 10px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--ink);
+  }
+
+  .brand-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #fff;
+    display: grid;
+    place-items: center;
+  }
+
+  .bar-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .seg {
+    display: inline-flex;
+    background: #edf2f8;
+    border: 1px solid #dfe7f1;
+    border-radius: 9px;
+    padding: 3px;
+    gap: 2px;
+  }
+
+  .seg-btn {
+    border: none;
+    background: transparent;
+    color: #4b5e74;
+    font-family: inherit;
+    font-size: 12.5px;
+    font-weight: 600;
+    padding: 6px 11px;
+    border-radius: 7px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .seg-btn.active {
+    background: #fff;
+    color: #1055ad;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--line);
+    background: #fff;
+    color: #24384f;
+    font-family: inherit;
+    font-size: 12.5px;
+    font-weight: 600;
+    padding: 7px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
+  }
+
+  .btn:hover { background: #f6f9fd; border-color: var(--line-strong); }
+  .btn.active { background: var(--accent-soft); border-color: #8bc0fa; color: #1055ad; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { background: #0f56b0; }
+
+  .btn:focus-visible, .seg-btn:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+    outline: none;
+    box-shadow: var(--ring);
+  }
+
+  /* ===== Main Layout ===== */
+  .workspace {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 400px;
+    gap: 20px;
+    max-width: 1540px;
+    margin: 0 auto;
+    padding: 20px;
+    align-items: start;
+  }
+
+  .canvas-col {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    position: sticky;
+    top: 72px;
+  }
+
+  .stage-viewport {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    position: relative;
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.11), 0 4px 12px rgba(0, 0, 0, 0.05);
+    background: #eaf3fd;
+  }
+
+  .stage-scaler {
+    width: 1280px;
+    height: 720px;
+    transform-origin: top left;
+    position: absolute;
+    top: 0;
+    left: 0;
+  }
+
+  /* Two-Tier Schema Strip under Canvas */
+  .schema-bar {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 12px 16px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    font-size: 12px;
+  }
+
+  .schema-group strong {
+    display: block;
+    font-size: 12.5px;
+    color: var(--ink);
+    margin-bottom: 6px;
+  }
+
+  .legend-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+
+  .legend-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 99px;
+    background: var(--soft);
+    border: 1px solid var(--line);
+    font-size: 12px;
+    font-weight: 600;
+    color: #29415c;
+  }
+
+  .legend-pill code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: #1055ad;
+  }
+
+  /* ===== Right Parameter Panel ===== */
+  .inspector {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    max-height: calc(100vh - 92px);
+    overflow-y: auto;
+  }
+
+  .tier-heading {
+    font-size: 12px;
+    font-weight: 800;
+    color: #1055ad;
+    background: var(--accent-soft);
+    padding: 6px 10px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .tier-heading.slide-tier {
+    color: #126b41;
+    background: #eaf8f0;
+  }
+
+  .panel-sec {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #edf2f7;
+  }
+
+  .panel-sec:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+
+  .sec-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .sec-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--ink);
+  }
+
+  .sec-key {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    font-weight: 600;
+    color: #3a526c;
+    background: var(--soft);
+    border: 1px solid var(--line);
+    padding: 1px 6px;
+    border-radius: 5px;
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #3b5169;
+  }
+
+  .field input[type="text"],
+  .field textarea,
+  .field select {
+    width: 100%;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 7px 10px;
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--ink);
+    background: #fff;
+  }
+
+  .field textarea { resize: vertical; line-height: 1.45; }
+
+  .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+
+  .chap-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px;
+  }
+
+  .chap-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--soft);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 5px 7px;
+  }
+
+  .chap-item.active {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+
+  .chap-item input[type="radio"] { accent-color: var(--accent); cursor: pointer; }
+  .chap-item input[type="text"] {
+    border: none;
+    background: transparent;
+    padding: 2px 4px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ink);
+    width: 100%;
+  }
+
+  .upload-drop {
+    border: 1.5px dashed #b7cae0;
+    border-radius: 10px;
+    background: #f8fbff;
+    padding: 11px;
+    text-align: center;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #254569;
+  }
+
+  .upload-drop:hover, .upload-drop.dragover {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+
+  .upload-drop small { font-weight: 500; color: var(--muted); font-size: 11.5px; }
+
+  .sample-thumbs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .thumb-btn {
+    border: 1.5px solid var(--line);
+    border-radius: 8px;
+    padding: 5px;
+    background: #fff;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    font-family: inherit;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: #415770;
+    text-align: center;
+  }
+
+  .thumb-btn.active {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: #1055ad;
+  }
+
+  .thumb-btn img {
+    width: 100%;
+    height: 76px;
+    object-fit: cover;
+    border-radius: 5px;
+    display: block;
+  }
+
+  .cue-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .cue-chip {
+    border: 1px solid var(--line);
+    background: var(--soft);
+    color: #364f69;
+    font-family: inherit;
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 4px 9px;
+    border-radius: 99px;
+    cursor: pointer;
+  }
+
+  .cue-chip.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+
+  /* JSON Dialog */
+  dialog {
+    margin: auto;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 0;
+    width: min(700px, 92vw);
+    box-shadow: 0 24px 56px rgba(0, 0, 0, 0.2);
+  }
+  dialog::backdrop { background: rgba(15, 32, 54, 0.45); backdrop-filter: blur(2px); }
+  .dlg-head {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 14.5px;
+    font-weight: 700;
+  }
+  .dlg-body { padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
+  .json-area {
+    width: 100%;
+    height: 360px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12.5px;
+    line-height: 1.5;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: #f7faff;
+    color: #162b44;
+    resize: vertical;
+  }
+  .dlg-foot { display: flex; justify-content: flex-end; gap: 8px; }
+
+  .toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: #142a44;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 9px 18px;
+    border-radius: 99px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 200ms ease, transform 200ms ease;
+    z-index: 50;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  @media (max-width: 1120px) {
+    .workspace { grid-template-columns: 1fr; }
+    .canvas-col { position: static; }
+    .inspector { max-height: none; }
+    .schema-bar { grid-template-columns: 1fr; }
+  }
+</style>
+
+<!-- ===== Standalone 1280x720 Template Core Styles (exported 1:1 into PNG / FC) ===== -->
+<style id="template-core-css">
+  .pt-frame,
+  .pt-frame * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  .pt-frame {
+    width: 1280px;
+    height: 720px;
+    position: relative;
+    overflow: hidden;
+    font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", system-ui, -apple-system, sans-serif;
+    display: flex;
+    flex-direction: column;
+    user-select: none;
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .pt-frame.theme-medical {
+    --v-bg: linear-gradient(155deg, #f2f8ff 0%, #e4f0fc 54%, #eef6fe 100%);
+    --v-ink: #122d4c;
+    --v-ink-soft: #44607d;
+    --v-primary: #1466cc;
+    --v-primary-deep: #0d4fa3;
+    --v-primary-soft: #dfeeff;
+    --v-card-bg: #ffffff;
+    --v-card-border: #d2e4f6;
+    --v-card-shadow: 0 12px 28px rgba(0, 0, 0, 0.08);
+    --v-card-radius: 22px;
+    --v-ring-outer: #e67835;
+    --v-ring-inner: #ffffff;
+    --v-sub-hl: #ffe14d;
+    background: var(--v-bg);
+    color: var(--v-ink);
+  }
+
+  .pt-frame.theme-warm {
+    --v-bg: #fdf5e7;
+    --v-ink: #263544;
+    --v-ink-soft: #59636d;
+    --v-primary: #cf5228;
+    --v-primary-deep: #a83c18;
+    --v-primary-soft: #fceae1;
+    --v-card-bg: #fffdf9;
+    --v-card-border: #2c3e50;
+    --v-card-shadow: 0 10px 24px rgba(0, 0, 0, 0.08);
+    --v-card-radius: 18px;
+    --v-ring-outer: #2c3e50;
+    --v-ring-inner: #fdf5e7;
+    --v-sub-hl: #ffe14d;
+    background: var(--v-bg);
+    color: var(--v-ink);
+  }
+
+  .pt-glow-1, .pt-glow-2 {
+    display: none;
+    position: absolute;
+    border-radius: 50%;
+    pointer-events: none;
+  }
+
+  .theme-medical .pt-glow-1 {
+    display: block;
+    width: 520px;
+    height: 520px;
+    background: radial-gradient(circle, rgba(133, 195, 255, 0.22) 0%, rgba(133, 195, 255, 0) 70%);
+    top: -180px;
+    right: -100px;
+  }
+
+  .theme-medical .pt-glow-2 {
+    display: block;
+    width: 400px;
+    height: 400px;
+    background: radial-gradient(circle, rgba(154, 212, 255, 0.18) 0%, rgba(154, 212, 255, 0) 72%);
+    bottom: -150px;
+    left: -80px;
+  }
+
+  /* 1. Top Header Bar (Larger typography for mobile legibility) */
+  .pt-header {
+    position: relative;
+    z-index: 5;
+    height: 82px;
+    padding: 18px 34px 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+  }
+
+  .pt-title-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 11px;
+    padding: 10px 22px;
+    border-radius: 13px;
+    background: rgba(255, 255, 255, 0.9);
+    border: 1.5px solid var(--v-card-border);
+    font-size: 24px;
+    font-weight: 800;
+    color: var(--v-ink);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+    max-width: 600px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .theme-warm .pt-title-pill { background: #fffdf9; border-width: 2px; }
+
+  .pt-title-dot {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: var(--v-primary);
+    flex-shrink: 0;
+  }
+
+  .pt-chapters {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+
+  .pt-chap {
+    padding: 9px 19px;
+    border-radius: 11px;
+    font-size: 18px;
+    font-weight: 800;
+    color: var(--v-ink-soft);
+    background: rgba(255, 255, 255, 0.68);
+    border: 1px solid rgba(185, 208, 232, 0.78);
+    white-space: nowrap;
+  }
+
+  .theme-warm .pt-chap {
+    background: rgba(255, 253, 249, 0.85);
+    border: 1.5px solid rgba(44, 62, 80, 0.3);
+  }
+
+  .pt-chap.active {
+    background: var(--v-primary);
+    color: #ffffff;
+    border-color: var(--v-primary);
+    box-shadow: 0 5px 12px rgba(0, 0, 0, 0.14);
+  }
+
+  .theme-warm .pt-chap.active { background: #cf5228; border-color: #2c3e50; }
+
+  .pt-chap.done {
+    background: var(--v-primary-soft);
+    color: var(--v-primary-deep);
+    border-color: transparent;
+  }
+
+  /* 2. Body: Constant-Ratio Left Column (300px) + Constant-Ratio Right AI Slot (884x526) */
+  .pt-body {
+    position: relative;
+    z-index: 4;
+    flex: 1;
+    padding: 10px 34px 6px;
+    display: flex;
+    align-items: stretch;
+    gap: 28px;
+    min-height: 0;
+  }
+
+  .pt-left {
+    width: 300px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+  }
+
+  .theme-warm .pt-media-slot,
+  .theme-warm .pt-author-card {
+    border-width: 2px;
+  }
+
+  /* Digital Human / Cartoon Circle (enlarged cleanly after removing leftTop) */
+  .pt-avatar-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 18px;
+    width: 100%;
+  }
+
+  .pt-avatar-ring {
+    width: 278px;
+    height: 278px;
+    border-radius: 50%;
+    padding: 7px;
+    background: var(--v-ring-outer);
+    box-shadow: 0 12px 26px rgba(0, 0, 0, 0.14);
+  }
+
+  .pt-avatar-inner {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    overflow: hidden;
+    background: #e6f1fc;
+    border: 4px solid var(--v-ring-inner);
+  }
+
+  .pt-avatar-inner img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center top;
+    display: block;
+  }
+
+  /* Clean Authority Plaque (Name + Role + Hospital, zero internal jargon) */
+  .pt-plaque {
+    width: 100%;
+    background: var(--v-card-bg);
+    border: 1.5px solid var(--v-card-border);
+    border-radius: 14px;
+    padding: 11px 16px;
+    text-align: center;
+    box-shadow: var(--v-card-shadow);
+  }
+
+  .theme-warm .pt-plaque { border-width: 2px; }
+
+  .pt-plaque-top {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+
+  .pt-plaque-name {
+    font-size: 20px;
+    font-weight: 800;
+    color: var(--v-ink);
+  }
+
+  .pt-plaque-role {
+    font-size: 13.5px;
+    font-weight: 700;
+    color: #ffffff;
+    background: var(--v-primary);
+    padding: 2px 9px;
+    border-radius: 6px;
+  }
+
+  .theme-warm .pt-plaque-role { background: #5c9145; }
+
+  .pt-plaque-hosp {
+    margin-top: 4px;
+    font-size: 14.5px;
+    font-weight: 600;
+    color: var(--v-ink-soft);
+  }
+
+  /* No-Avatar Mode: Keeps Left Column as Clean Pharmacist Credential Card so Right AI Slot Never Stretches */
+  .pt-author-card {
+    width: 100%;
+    background: var(--v-card-bg);
+    border: 1.5px solid var(--v-card-border);
+    border-radius: 18px;
+    padding: 26px 22px;
+    box-shadow: var(--v-card-shadow);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 12px;
+    position: relative;
+  }
+
+  .theme-warm .pt-author-card {
+    transform: rotate(-1deg);
+    border-radius: 12px;
+  }
+
+  .pt-tape { display: none; }
+  .theme-warm .pt-tape {
+    display: block;
+    position: absolute;
+    top: -11px;
+    left: 50%;
+    transform: translateX(-50%) rotate(-1.5deg);
+    width: 80px;
+    height: 20px;
+    background: rgba(232, 174, 128, 0.72);
+    border-radius: 2px;
+  }
+
+  .pt-author-emblem {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: var(--v-primary-soft);
+    color: var(--v-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .pt-author-trust {
+    width: 100%;
+    margin-top: 6px;
+    padding-top: 12px;
+    border-top: 1px dashed var(--v-card-border);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--v-ink-soft);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+
+  /* Right Constant-Size AI Infographic Slot (884 x 526, clean edge-to-edge card) */
+  .pt-media-slot {
+    flex: 1;
+    background: var(--v-card-bg);
+    border: 1.5px solid var(--v-card-border);
+    border-radius: var(--v-card-radius);
+    box-shadow: var(--v-card-shadow);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .pt-media-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  /* 3. Bottom Safe Subtitle Only */
+  .pt-footer {
+    position: relative;
+    z-index: 6;
+    height: 74px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 44px 12px;
+  }
+
+  .pt-subtitle {
+    font-size: 31px;
+    font-weight: 900;
+    color: #ffffff;
+    letter-spacing: 0.02em;
+    line-height: 1.24;
+    text-align: center;
+    -webkit-text-stroke: 3.8px #132b47;
+    paint-order: stroke fill;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
+  }
+
+  .pt-subtitle .pt-sub-hl {
+    color: var(--v-sub-hl);
+  }
+
+  .pt-disclaimer {
+    width: 100%;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.5;
+    color: var(--v-ink-soft);
+    opacity: 0.88;
+    padding: 0 8px;
+  }
+
+  /* 4. Parameter Spec Overlay */
+  .pt-spec-layer {
+    display: none;
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    pointer-events: none;
+  }
+  .show-spec .pt-spec-layer { display: block; }
+
+  .pt-spec-box {
+    position: absolute;
+    border: 2px dashed;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .pt-spec-tag {
+    position: absolute;
+    top: -12px;
+    left: 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11.5px;
+    font-weight: 700;
+    color: #fff;
+    padding: 2px 9px;
+    border-radius: 99px;
+    white-space: nowrap;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+  }
+
+  .spec-title { top: 14px; left: 30px; width: 420px; height: 58px; border-color: #e11d48; }
+  .spec-title .pt-spec-tag { background: #e11d48; }
+
+  .spec-chapters { top: 14px; right: 30px; width: 452px; height: 58px; border-color: #1466cc; }
+  .spec-chapters .pt-spec-tag { background: #1466cc; }
+
+  .spec-left { top: 88px; left: 28px; width: 312px; bottom: 78px; border-color: #d97706; }
+  .spec-left .pt-spec-tag { background: #d97706; }
+
+  .spec-image { top: 88px; left: 356px; right: 28px; bottom: 78px; border-color: #16a34a; }
+  .spec-image .pt-spec-tag { background: #16a34a; }
+
+  .spec-footer { left: 28px; right: 28px; bottom: 8px; height: 62px; border-color: #7c3aed; }
+  .spec-footer .pt-spec-tag { background: #7c3aed; top: 50%; left: 12px; transform: translateY(-50%); }
+</style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-icon" aria-hidden="true">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v16M4 12h16"/></svg>
+      </span>
+      希息药事 · 科普视频参数模板（定稿版）
+    </div>
+
+    <div class="bar-actions">
+      <div class="seg" role="group" aria-label="切换示例主题">
+        <button type="button" class="seg-btn active" data-preset="0">示例 1 · 腿抽筋（数字人）</button>
+        <button type="button" class="seg-btn" data-preset="1">示例 2 · 儿童退烧（卡通）</button>
+        <button type="button" class="seg-btn" data-preset="2">示例 3 · 无形象名片</button>
+      </div>
+
+      <button type="button" class="btn" id="btnSpec">参数坐标标注</button>
+      <button type="button" class="btn" id="btnJson">查看 / 导入 JSON</button>
+      <button type="button" class="btn primary" id="btnExportPng">导出 1280×720 PNG</button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <section class="canvas-col">
+      <div class="stage-viewport" id="stageViewport">
+        <div class="stage-scaler" id="stageScaler"></div>
+      </div>
+
+      <div class="schema-bar">
+        <div class="schema-group">
+          <strong>全片级参数（整条视频填一次）</strong>
+          <div class="legend-pills">
+            <span class="legend-pill"><code>theme</code> 风格</span>
+            <span class="legend-pill"><code>title</code> 主标题</span>
+            <span class="legend-pill"><code>chapters</code> 章节条</span>
+            <span class="legend-pill"><code>presenter</code> 形象模式</span>
+            <span class="legend-pill"><code>author</code> 医生/医院</span>
+            <span class="legend-pill"><code>voice / bgm</code> 音色配乐</span>
+            <span class="legend-pill"><code>disclaimer</code> 免责声明</span>
+          </div>
+        </div>
+        <div class="schema-group">
+          <strong>单页级参数（每页仅换这 3 项 · 右图尺寸恒定 884×544）</strong>
+          <div class="legend-pills">
+            <span class="legend-pill"><code>activeChapter</code> 当前章节</span>
+            <span class="legend-pill"><code>contentImage</code> 右侧带字 AI 整图</span>
+            <span class="legend-pill"><code>narration + highlightWords</code> 口播自动切字幕</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <aside class="inspector" aria-label="模板参数编辑器">
+      <div class="tier-heading">
+        <span>全片级参数（全局复用）</span>
+        <span>global</span>
+      </div>
+
+      <div class="panel-sec">
+        <div class="sec-head">
+          <span class="sec-title">风格与形象模式</span>
+          <span class="sec-key">theme / presenter</span>
+        </div>
+        <div class="row-2">
+          <label class="field">
+            视觉风格
+            <select id="g-theme">
+              <option value="medical">医疗白蓝风</option>
+              <option value="warm">暖色手绘风</option>
+            </select>
+          </label>
+          <label class="field">
+            主讲人槽位
+            <select id="g-presenter">
+              <option value="digital">数字人（圆框）</option>
+              <option value="cartoon">卡通形象</option>
+              <option value="none">无形象（名片卡）</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div class="panel-sec">
+        <div class="sec-head">
+          <span class="sec-title">医生权威背书（自动去技术词）</span>
+          <span class="sec-key">author</span>
+        </div>
+        <div class="row-3">
+          <label class="field">姓名<input type="text" id="g-name" maxlength="12" /></label>
+          <label class="field">职称<input type="text" id="g-role" maxlength="12" /></label>
+          <label class="field">医院/科室<input type="text" id="g-hosp" maxlength="20" /></label>
+        </div>
+        <div id="avatarUploadRow" style="display:flex;align-items:center;gap:8px;">
+          <label class="btn" style="flex:1;justify-content:center;">
+            上传医生肖像替换圆框
+            <input type="file" id="g-avatar-file" accept="image/png,image/jpeg,image/webp" hidden />
+          </label>
+          <button type="button" class="btn" id="btnResetAvatar">恢复默认</button>
+        </div>
+      </div>
+
+      <div class="panel-sec">
+        <div class="sec-head">
+          <span class="sec-title">内容主标题与章节条</span>
+          <span class="sec-key">title / chapters</span>
+        </div>
+        <label class="field">
+          左上内容标题
+          <input type="text" id="g-title" maxlength="28" />
+        </label>
+        <div class="chap-grid" id="chapGrid"></div>
+      </div>
+
+      <div class="panel-sec">
+        <div class="sec-head">
+          <span class="sec-title">配音、配乐与合规免责</span>
+          <span class="sec-key">voice / bgm / disclaimer</span>
+        </div>
+        <div class="row-2">
+          <label class="field">
+            配音音色
+            <select id="g-voice">
+              <option value="医生克隆音色">医生克隆音色（希息药事）</option>
+              <option value="流畅女声 2.0">豆包 · 流畅女声 2.0</option>
+              <option value="云舟 2.0">豆包 · 云舟男声 2.0</option>
+            </select>
+          </label>
+          <label class="field">
+            背景音乐
+            <select id="g-bgm">
+              <option value="舒缓钢琴">舒缓钢琴</option>
+              <option value="轻快木琴">轻快木琴</option>
+              <option value="无背景音乐">无背景音乐</option>
+            </select>
+          </label>
+        </div>
+        <label class="field">
+          免责声明（人物卡片下方）
+          <input type="text" id="g-disclaimer" maxlength="48" />
+        </label>
+      </div>
+
+      <div class="tier-heading slide-tier">
+        <span>单页级参数（每页仅换 3 项）</span>
+        <span>slide</span>
+      </div>
+
+      <div class="panel-sec">
+        <div class="sec-head">
+          <span class="sec-title">右侧 AI 带字科普整图（恒定 884×544）</span>
+          <span class="sec-key">contentImage</span>
+        </div>
+        <div class="sample-thumbs" id="sampleThumbs"></div>
+        <label class="upload-drop" id="dropZone">
+          <span>点击或拖入 AI 生成的带字科普信息图</span>
+          <small>推荐 3:2 或 16:10 横图 · 切换数字人/卡通/无形象均不变形</small>
+          <input type="file" id="s-content-file" accept="image/png,image/jpeg,image/webp" hidden />
+        </label>
+      </div>
+
+      <div class="panel-sec">
+        <div class="sec-head">
+          <span class="sec-title">本页口播全文（自动切字幕，无需手写两份）</span>
+          <span class="sec-key">narration</span>
+        </div>
+        <label class="field">
+          <textarea id="s-narration" rows="3" maxlength="180"></textarea>
+        </label>
+        <label class="field">
+          明黄高亮关键词（顿号或空格分隔）
+          <input type="text" id="s-hl" maxlength="40" />
+        </label>
+        <div class="cue-bar" id="cueBar"></div>
+      </div>
+    </aside>
+  </main>
+
+  <dialog id="jsonDialog">
+    <div class="dlg-head">
+      <span>标准两层参数 JSON（可直接作为后台渲染 / 阿里云 FC 入参契约）</span>
+      <button type="button" class="btn" id="btnCloseJson">关闭</button>
+    </div>
+    <div class="dlg-body">
+      <textarea class="json-area" id="jsonArea" spellcheck="false"></textarea>
+      <div class="dlg-foot">
+        <button type="button" class="btn" id="btnApplyJson">应用 JSON</button>
+        <button type="button" class="btn primary" id="btnCopyJson">复制 JSON</button>
+      </div>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(() => {
+  const SAMPLE_IMAGES = [
+    { label: "腿抽筋 · AI带字信息图", src: "./assets/ai-info-cramp.jpg" },
+    { label: "儿童退烧 · AI带字信息图", src: "./assets/ai-info-fever.jpg" },
+  ];
+
+  const PRESETS = [
+    {
+      global: {
+        theme: "medical",
+        title: "腿抽筋，先别急着补钙",
+        chapters: ["找原因", "辨差异", "怎么做", "何时就医"],
+        presenter: "digital",
+        author: {
+          name: "李明远",
+          role: "主任药师",
+          hospital: "北京协和医院",
+          avatarUrl: "./assets/doctor-digital-human.jpg",
+        },
+        voice: "医生克隆音色",
+        bgm: "舒缓钢琴",
+        disclaimer: "科普内容仅供参考，具体诊疗与用药请遵医嘱",
+      },
+      slide: {
+        activeChapter: 0,
+        contentImage: "./assets/ai-info-cramp.jpg",
+        narration: "先别急着补钙，抽筋不一定只怪缺钙，也可能和缺钾有一定关系。大量出汗或吃某些利尿剂都可能引起低钾。",
+        highlightWords: ["缺钙", "缺钾", "低钾"],
+      },
+    },
+    {
+      global: {
+        theme: "medical",
+        title: "孩子发烧，退烧药怎么吃才安全",
+        chapters: ["看温度", "选对药", "算剂量", "何时就医"],
+        presenter: "cartoon",
+        author: {
+          name: "李明远",
+          role: "主任药师",
+          hospital: "北京协和医院",
+          avatarUrl: "./assets/doctor-digital-human.jpg",
+        },
+        voice: "医生克隆音色",
+        bgm: "舒缓钢琴",
+        disclaimer: "科普内容仅供参考，具体诊疗与用药请遵医嘱",
+      },
+      slide: {
+        activeChapter: 1,
+        contentImage: "./assets/ai-info-fever.jpg",
+        narration: "儿童安全退烧药，优先认准对乙酰氨基酚或布洛芬。通常不建议两种药常规交替混吃，容易算错剂量。",
+        highlightWords: ["对乙酰氨基酚", "布洛芬", "交替"],
+      },
+    },
+    {
+      global: {
+        theme: "warm",
+        title: "孩子发烧，退烧药怎么吃才安全",
+        chapters: ["看温度", "选对药", "算剂量", "何时就医"],
+        presenter: "none",
+        author: {
+          name: "李明远",
+          role: "主任药师",
+          hospital: "北京协和医院",
+          avatarUrl: "./assets/doctor-digital-human.jpg",
+        },
+        voice: "流畅女声 2.0",
+        bgm: "轻快木琴",
+        disclaimer: "科普内容仅供参考，具体诊疗与用药请遵医嘱",
+      },
+      slide: {
+        activeChapter: 1,
+        contentImage: "./assets/ai-info-fever.jpg",
+        narration: "选对单一成分后，务必按孩子当前体重对照说明书核对剂量，不要按年龄估算。",
+        highlightWords: ["单一成分", "当前体重", "说明书"],
+      },
+    },
+  ];
+
+  let data = JSON.parse(JSON.stringify(PRESETS[0]));
+  let activeCue = 0;
+  let showSpec = false;
+
+  const $ = (id) => document.getElementById(id);
+
+  function xmlEsc(str) {
+    return String(str ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function splitNarrationToCues(text, limit = 22) {
+    let s = String(text || "").replace(/\s+/g, " ").trim();
+    if (!s) return [""];
+    const stops = "，。！？；、：,.!?;:";
+    const out = [];
+    while (s.length > limit) {
+      let cut = limit;
+      for (let i = limit; i > Math.floor(limit / 2); i--) {
+        if (stops.includes(s[i - 1]) || s[i - 1] === " ") { cut = i; break; }
+      }
+      while (cut < Math.min(s.length, limit + 1) && stops.includes(s[cut])) cut++;
+      out.push(s.slice(0, cut).trim());
+      s = s.slice(cut).trim();
+    }
+    if (s) out.push(s);
+    return out;
+  }
+
+  function highlightSubtitle(text, words) {
+    const raw = String(text || "");
+    const list = (Array.isArray(words) ? words : [])
+      .map((w) => String(w || "").trim())
+      .filter((w) => w.length >= 2)
+      .sort((a, b) => b.length - a.length);
+    if (!list.length) return xmlEsc(raw);
+    const re = new RegExp("(" + list.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")", "g");
+    return raw.split(re).map((part) => (
+      list.includes(part) ? `<span class="pt-sub-hl">${xmlEsc(part)}</span>` : xmlEsc(part)
+    )).join("");
+  }
+
+  function resolveAvatarSrc(g) {
+    if (g.presenter === "cartoon") return "./assets/doctor-cartoon.jpg";
+    return (g.author && g.author.avatarUrl) || "./assets/doctor-digital-human.jpg";
+  }
+
+  function renderLeftBlock(g, mapSrc) {
+    const a = g.author || {};
+    const disclaimerHtml = g.disclaimer
+      ? `<div class="pt-disclaimer">${xmlEsc(g.disclaimer)}</div>`
+      : "";
+
+    if (g.presenter === "none") {
+      return `
+        <aside class="pt-left">
+          <div class="pt-author-card">
+            <span class="pt-tape"></span>
+            <div class="pt-author-emblem">
+              <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v16M4 12h16"/></svg>
+            </div>
+            <div class="pt-plaque-top">
+              <span class="pt-plaque-name">${xmlEsc(a.name || "药师")}</span>
+              ${a.role ? `<span class="pt-plaque-role">${xmlEsc(a.role)}</span>` : ""}
+            </div>
+            <div class="pt-plaque-hosp">${xmlEsc(a.hospital || "")}</div>
+            <div class="pt-author-trust">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+              <span>药师专业核稿讲解</span>
+            </div>
+          </div>
+          ${disclaimerHtml}
+        </aside>
+      `;
+    }
+
+    const avatarSrc = mapSrc(resolveAvatarSrc(g));
+    return `
+      <aside class="pt-left">
+        <div class="pt-avatar-wrap">
+          <div class="pt-avatar-ring">
+            <div class="pt-avatar-inner">
+              <img src="${xmlEsc(avatarSrc)}" alt="" />
+            </div>
+          </div>
+          <div class="pt-plaque">
+            <div class="pt-plaque-top">
+              <span class="pt-plaque-name">${xmlEsc(a.name || "药师")}</span>
+              ${a.role ? `<span class="pt-plaque-role">${xmlEsc(a.role)}</span>` : ""}
+            </div>
+            ${a.hospital ? `<div class="pt-plaque-hosp">${xmlEsc(a.hospital)}</div>` : ""}
+          </div>
+        </div>
+        ${disclaimerHtml}
+      </aside>
+    `;
+  }
+
+  function renderTemplateHtml(d, opts = {}) {
+    const g = d.global;
+    const s = d.slide;
+    const imgMap = opts.imgMap || null;
+    const mapSrc = (src) => (imgMap && src && imgMap.get(src)) ? imgMap.get(src) : (src || "");
+    const activeChap = Math.max(0, Math.min(g.chapters.length - 1, Number(s.activeChapter) || 0));
+    const chaptersHtml = g.chapters.map((name, i) => {
+      let cls = "pt-chap";
+      if (i === activeChap) cls += " active";
+      else if (i < activeChap) cls += " done";
+      return `<span class="${cls}">${xmlEsc(name || "章节" + (i + 1))}</span>`;
+    }).join("");
+
+    const cues = splitNarrationToCues(s.narration, 22);
+    const cueText = cues[Math.min(activeCue, cues.length - 1)] || "";
+    const contentSrc = mapSrc(s.contentImage);
+
+    return `
+      <div class="pt-frame theme-${g.theme} ${opts.includeSpec && showSpec ? "show-spec" : ""}">
+        <div class="pt-glow-1"></div>
+        <div class="pt-glow-2"></div>
+
+        <header class="pt-header">
+          <div class="pt-title-pill">
+            <span class="pt-title-dot"></span>
+            <span>${xmlEsc(g.title)}</span>
+          </div>
+          <div class="pt-chapters">${chaptersHtml}</div>
+        </header>
+
+        <div class="pt-body">
+          ${renderLeftBlock(g, mapSrc)}
+          <section class="pt-media-slot">
+            <img class="pt-media-img" src="${xmlEsc(contentSrc)}" alt="" />
+          </section>
+        </div>
+
+        <footer class="pt-footer">
+          ${cueText ? `<div class="pt-subtitle">${highlightSubtitle(cueText, s.highlightWords)}</div>` : ""}
+        </footer>
+
+        ${opts.includeSpec ? `
+          <div class="pt-spec-layer">
+            <div class="pt-spec-box spec-title"><span class="pt-spec-tag">global.title（24px）</span></div>
+            <div class="pt-spec-box spec-chapters"><span class="pt-spec-tag">global.chapters[slide.activeChapter]（18px）</span></div>
+            <div class="pt-spec-box spec-left"><span class="pt-spec-tag">presenter(278×278) + author + disclaimer</span></div>
+            <div class="pt-spec-box spec-image"><span class="pt-spec-tag">slide.contentImage · AI带字整图（恒定 884×544）</span></div>
+            <div class="pt-spec-box spec-footer"><span class="pt-spec-tag">slide.narration 自动切字幕（31px明黄高亮）</span></div>
+          </div>
+        ` : ""}
+      </div>
+    `;
+  }
+
+  function fitStage() {
+    const vp = $("stageViewport");
+    const sc = $("stageScaler");
+    if (vp && sc && vp.offsetWidth > 0) {
+      sc.style.transform = `scale(${vp.offsetWidth / 1280})`;
+    }
+  }
+
+  function renderCanvas() {
+    $("stageScaler").innerHTML = renderTemplateHtml(data, { includeSpec: true });
+    fitStage();
+  }
+
+  function renderCueBar() {
+    const cues = splitNarrationToCues(data.slide.narration, 22);
+    if (activeCue >= cues.length) activeCue = 0;
+    const bar = $("cueBar");
+    bar.innerHTML = `<span style="font-size:11.5px;color:#52667c;font-weight:600;">自动切分字幕预览（${cues.length}句）：</span>` +
+      cues.map((_, i) => `<button type="button" class="cue-chip ${i === activeCue ? "active" : ""}" data-cue="${i}">第 ${i + 1} 句</button>`).join("");
+    bar.querySelectorAll("[data-cue]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        activeCue = Number(btn.dataset.cue);
+        renderCueBar();
+        renderCanvas();
+      });
+    });
+  }
+
+  function renderInspector() {
+    const g = data.global;
+    const s = data.slide;
+    $("g-theme").value = g.theme;
+    $("g-presenter").value = g.presenter;
+    $("g-name").value = g.author.name || "";
+    $("g-role").value = g.author.role || "";
+    $("g-hosp").value = g.author.hospital || "";
+    $("g-title").value = g.title || "";
+    $("g-voice").value = g.voice || "医生克隆音色";
+    $("g-bgm").value = g.bgm || "舒缓钢琴";
+    $("g-disclaimer").value = g.disclaimer || "";
+    $("s-narration").value = s.narration || "";
+    $("s-hl").value = (s.highlightWords || []).join("、");
+    $("avatarUploadRow").style.display = g.presenter === "digital" ? "flex" : "none";
+
+    // Chapters grid
+    const cg = $("chapGrid");
+    cg.innerHTML = g.chapters.map((name, i) => `
+      <div class="chap-item ${Number(s.activeChapter) === i ? "active" : ""}">
+        <input type="radio" name="activeChap" value="${i}" ${Number(s.activeChapter) === i ? "checked" : ""} aria-label="高亮章节 ${i + 1}" />
+        <input type="text" data-chap="${i}" maxlength="6" value="${xmlEsc(name)}" />
+      </div>
+    `).join("");
+
+    cg.querySelectorAll('input[type="radio"]').forEach((r) => {
+      r.addEventListener("change", () => {
+        data.slide.activeChapter = Number(r.value);
+        renderInspector();
+        renderCanvas();
+      });
+    });
+    cg.querySelectorAll("input[data-chap]").forEach((inp) => {
+      inp.addEventListener("input", () => {
+        data.global.chapters[Number(inp.dataset.chap)] = inp.value;
+        renderCanvas();
+      });
+    });
+
+    // Sample AI infographics with Chinese text
+    const st = $("sampleThumbs");
+    st.innerHTML = SAMPLE_IMAGES.map((img) => `
+      <button type="button" class="thumb-btn ${s.contentImage === img.src ? "active" : ""}" data-sample-img="${img.src}">
+        <img src="${img.src}" alt="" />
+        <span>${img.label}</span>
+      </button>
+    `).join("");
+    st.querySelectorAll("[data-sample-img]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        data.slide.contentImage = btn.dataset.sampleImg;
+        renderInspector();
+        renderCanvas();
+      });
+    });
+
+    renderCueBar();
+  }
+
+  function showToast(msg) {
+    const t = $("toast");
+    t.textContent = msg;
+    t.classList.add("show");
+    clearTimeout(showToast._timer);
+    showToast._timer = setTimeout(() => t.classList.remove("show"), 2200);
+  }
+
+  function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(new Error("读取图片失败"));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // Bind controls
+  $("g-theme").addEventListener("change", (e) => { data.global.theme = e.target.value; renderCanvas(); });
+  $("g-presenter").addEventListener("change", (e) => { data.global.presenter = e.target.value; renderInspector(); renderCanvas(); });
+  $("g-name").addEventListener("input", (e) => { data.global.author.name = e.target.value; renderCanvas(); });
+  $("g-role").addEventListener("input", (e) => { data.global.author.role = e.target.value; renderCanvas(); });
+  $("g-hosp").addEventListener("input", (e) => { data.global.author.hospital = e.target.value; renderCanvas(); });
+  $("g-title").addEventListener("input", (e) => { data.global.title = e.target.value; renderCanvas(); });
+  $("g-voice").addEventListener("change", (e) => { data.global.voice = e.target.value; });
+  $("g-bgm").addEventListener("change", (e) => { data.global.bgm = e.target.value; });
+  $("g-disclaimer").addEventListener("input", (e) => { data.global.disclaimer = e.target.value; renderCanvas(); });
+  $("s-narration").addEventListener("input", (e) => { data.slide.narration = e.target.value; renderCueBar(); renderCanvas(); });
+  $("s-hl").addEventListener("input", (e) => {
+    data.slide.highlightWords = e.target.value.split(/[、,，\s]+/).map((x) => x.trim()).filter(Boolean);
+    renderCanvas();
+  });
+
+  $("g-avatar-file").addEventListener("change", async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    data.global.author.avatarUrl = await readFileAsDataUrl(file);
+    renderCanvas();
+    showToast("已替换医生肖像");
+  });
+
+  $("btnResetAvatar").addEventListener("click", () => {
+    data.global.author.avatarUrl = "./assets/doctor-digital-human.jpg";
+    renderCanvas();
+    showToast("已恢复默认医生肖像");
+  });
+
+  async function applyContentFile(file) {
+    if (!file || !file.type.startsWith("image/")) return;
+    data.slide.contentImage = await readFileAsDataUrl(file);
+    renderInspector();
+    renderCanvas();
+    showToast("已替换右侧 AI 带字信息图");
+  }
+
+  $("s-content-file").addEventListener("change", (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    applyContentFile(file);
+  });
+
+  const dropZone = $("dropZone");
+  dropZone.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.classList.add("dragover"); });
+  dropZone.addEventListener("dragleave", () => dropZone.classList.remove("dragover"));
+  dropZone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dropZone.classList.remove("dragover");
+    applyContentFile(e.dataTransfer.files?.[0]);
+  });
+
+  document.querySelectorAll("[data-preset]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("[data-preset]").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      data = JSON.parse(JSON.stringify(PRESETS[Number(btn.dataset.preset)]));
+      activeCue = 0;
+      renderInspector();
+      renderCanvas();
+    });
+  });
+
+  $("btnSpec").addEventListener("click", () => {
+    showSpec = !showSpec;
+    $("btnSpec").classList.toggle("active", showSpec);
+    renderCanvas();
+  });
+
+  // JSON Dialog
+  const dlg = $("jsonDialog");
+  $("btnJson").addEventListener("click", () => {
+    const copy = JSON.parse(JSON.stringify(data));
+    if (String(copy.slide.contentImage).startsWith("data:")) copy.slide.contentImage = "<uploaded-local-image>";
+    if (String(copy.global.author.avatarUrl).startsWith("data:")) copy.global.author.avatarUrl = "<uploaded-local-avatar>";
+    $("jsonArea").value = JSON.stringify(copy, null, 2);
+    dlg.showModal();
+  });
+  $("btnCloseJson").addEventListener("click", () => dlg.close());
+  $("btnCopyJson").addEventListener("click", async () => {
+    await navigator.clipboard.writeText($("jsonArea").value);
+    showToast("已复制标准参数 JSON");
+  });
+  $("btnApplyJson").addEventListener("click", () => {
+    try {
+      const parsed = JSON.parse($("jsonArea").value);
+      if (!parsed?.global || !parsed?.slide) throw new Error();
+      if (parsed.slide.contentImage === "<uploaded-local-image>") parsed.slide.contentImage = data.slide.contentImage;
+      if (parsed.global.author?.avatarUrl === "<uploaded-local-avatar>") parsed.global.author.avatarUrl = data.global.author.avatarUrl;
+      data = parsed;
+      activeCue = 0;
+      dlg.close();
+      renderInspector();
+      renderCanvas();
+      showToast("已按 JSON 刷新模板画面");
+    } catch {
+      showToast("JSON 格式需包含 global 和 slide 字段");
+    }
+  });
+
+  // Export 1280x720 PNG
+  async function toDataUrl(url) {
+    if (!url) return "";
+    if (url.startsWith("data:")) return url;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("本地 file:// 直接打开时浏览器可能限制读取同目录图片，拖入本地图片即可直接导出。");
+    return readFileAsDataUrl(await res.blob());
+  }
+
+  $("btnExportPng").addEventListener("click", async () => {
+    try {
+      const imgMap = new Map();
+      if (data.global.presenter !== "none") {
+        const av = resolveAvatarSrc(data.global);
+        imgMap.set(av, await toDataUrl(av));
+      }
+      if (data.slide.contentImage) {
+        imgMap.set(data.slide.contentImage, await toDataUrl(data.slide.contentImage));
+      }
+      const css = $("template-core-css").textContent.replace(/]]>/g, "]]&gt;");
+      const frameHtml = renderTemplateHtml(data, { includeSpec: false, imgMap });
+      const svg =
+        `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">` +
+        `<defs><style type="text/css"><![CDATA[${css}]]></style></defs>` +
+        `<foreignObject x="0" y="0" width="1280" height="720">` +
+        `<div xmlns="http://www.w3.org/1999/xhtml" style="width:1280px;height:720px;overflow:hidden;">${frameHtml}</div>` +
+        `</foreignObject></svg>`;
+
+      const img = new Image();
+      img.decoding = "sync";
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = () => reject(new Error("生成 PNG 失败"));
+        img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+      });
+      const canvas = document.createElement("canvas");
+      canvas.width = 1280;
+      canvas.height = 720;
+      canvas.getContext("2d").drawImage(img, 0, 0, 1280, 720);
+      const a = document.createElement("a");
+      a.download = (data.global.title || "科普视频模板").replace(/[\\/:*?"<>|]/g, "_") + ".png";
+      a.href = canvas.toDataURL("image/png");
+      a.click();
+      showToast("已导出 1280×720 高清 PNG");
+    } catch (err) {
+      showToast(err.message || "导出失败");
+    }
+  });
+
+  new ResizeObserver(fitStage).observe(document.body);
+  window.addEventListener("resize", fitStage);
+
+  renderInspector();
+  renderCanvas();
+})();
+</script>
+</body>
+</html>

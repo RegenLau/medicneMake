@@ -307,6 +307,33 @@ def run_ffmpeg(*args):
         )
 
 
+def save_uploaded_frame(p):
+    data_url = p.get("dataUrl")
+    if not isinstance(data_url, str) or not data_url.startswith("data:image/"):
+        raise ValueError("请提供有效的图片数据。")
+    match = re.fullmatch(r"data:image/(png|jpeg|jpg|webp);base64,([A-Za-z0-9+/=\s]+)", data_url)
+    if not match:
+        raise ValueError("仅支持 PNG、JPEG 或 WebP 图片。")
+    raw = base64.b64decode(match[2], validate=True)
+    if not 0 < len(raw) <= 6_000_000:
+        raise ValueError("图片大小超出限制。")
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        ext = ".png"
+    elif raw.startswith(b"\xff\xd8\xff"):
+        ext = ".jpg"
+    elif raw.startswith(b"RIFF") and raw[8:12] == b"WEBP":
+        ext = ".webp"
+    else:
+        raise ValueError("图片内容格式无法识别。")
+    digest = hashlib.sha256(raw).hexdigest()[:32]
+    target = MEDIA / f"{digest}{ext}"
+    if not target.is_file():
+        temp = target.with_suffix(".tmp")
+        temp.write_bytes(raw)
+        temp.replace(target)
+    return {"url": f"/media/{target.name}"}
+
+
 def setting_valid(p):
     if p.get("mode") not in ("demo", "ark") or p.get("kind") not in ("images", "video", "draft"):
         raise ValueError("未知的生成方式")
@@ -314,6 +341,37 @@ def setting_valid(p):
         if p["mode"] != "ark" or not current_ark_key():
             raise ValueError("请先连接火山方舟，再生成自定义内容。")
         draft_content.validate_request(p["draft"], p["settings"], VIDEO_MODELS)
+        return
+    if p["kind"] == "video" and p.get("template") is True:
+        s = p["settings"]
+        if s.get("voice") != "无配音" and s.get("voice") not in SPEAKERS:
+            raise ValueError("未知配音")
+        music_path(s.get("music", "off"))
+        items = p.get("items")
+        if not isinstance(items, list) or not 1 <= len(items) <= 12:
+            raise ValueError("模板页数应在 1–12 之间")
+        for item in items:
+            if not isinstance(item, dict):
+                raise ValueError("模板页数据无效")
+            if type(item.get("seconds")) not in (int, float) or not 2 <= float(item["seconds"]) <= 60:
+                raise ValueError("单页时长应在 2–60 秒之间")
+            if not isinstance(item.get("line", ""), str) or len(item.get("line", "")) > 450:
+                raise ValueError("每页口播最多 450 字")
+            cues = item.get("cues")
+            if not isinstance(cues, list) or not 1 <= len(cues) <= 16:
+                raise ValueError("每页至少需要 1 张渲染帧")
+            for cue in cues:
+                if not isinstance(cue, dict):
+                    raise ValueError("渲染帧数据无效")
+                media_path(cue.get("image", ""))
+                if type(cue.get("weight", 1)) not in (int, float) or float(cue.get("weight", 1)) <= 0:
+                    raise ValueError("字幕权重无效")
+        if (
+            s.get("voice") in SPEAKERS
+            and any(item.get("line", "").strip() for item in items)
+            and not current_speech_key()
+        ):
+            raise ValueError("请先配置火山语音，再继续合成带配音的模板视频。")
         return
     if p["mode"] == "ark" and not current_ark_key():
         raise ValueError("请先连接火山方舟")
@@ -690,10 +748,10 @@ def music_path(track):
     return path
 
 
-def music_mix(duration, voiced):
+def music_mix(duration, voiced, music_index=2):
     gain = -12 if voiced else -6
     bed = (
-        f"[2:a]atrim=duration={duration},asetpts=PTS-STARTPTS,"
+        f"[{music_index}:a]atrim=duration={duration},asetpts=PTS-STARTPTS,"
         f"volume={gain}dB,afade=t=in:d=0.7,afade=t=out:st={duration - 1.4:.3f}:d=1.4"
     )
     if not voiced:
@@ -708,7 +766,128 @@ def music_mix(duration, voiced):
     )
 
 
+def render_template_video(p, job, save, speech_key, record=None):
+    settings = p["settings"]
+    track = settings.get("music", "off")
+    music = music_path(track)
+    segments = []
+    vtt_cues = ["WEBVTT\n"]
+    start = 0.0
+    shot_seconds = []
+    items = p["items"]
+    for i, item in enumerate(items):
+        folder = JOBS / job["id"] / str(i)
+        folder.mkdir(parents=True, exist_ok=True)
+        line = item.get("line", "").strip()
+        job["progress"] = f"准备第 {i + 1} / {len(items)} 页配音"
+        save()
+        audio, spoken = shot_audio(settings, line, folder, speech_key, i, record)
+        seconds = max(3.5, round(spoken + 0.55, 2)) if spoken else float(item["seconds"])
+        job["progress"] = f"合成第 {i + 1} / {len(items)} 页模板画面"
+        save()
+        cues = item["cues"]
+        total_weight = sum(float(c.get("weight", 1)) for c in cues)
+        audible = max(1.0, spoken) if spoken else seconds
+        lines = []
+        elapsed = 0.0
+        for ci, cue in enumerate(cues):
+            img_file = media_path(cue["image"]).resolve()
+            escaped = str(img_file).replace("\\", "/").replace("'", "'\\''")
+            if ci == len(cues) - 1:
+                dur = max(0.4, round(seconds - elapsed, 3))
+            else:
+                dur = max(0.4, round(audible * float(cue.get("weight", 1)) / total_weight, 3))
+                elapsed += dur
+            lines.append(f"file '{escaped}'")
+            lines.append(f"duration {dur:.3f}")
+        last_img = str(media_path(cues[-1]["image"]).resolve()).replace("\\", "/").replace("'", "'\\''")
+        lines.append(f"file '{last_img}'")
+        cue_list = folder / "cues.txt"
+        cue_list.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        audio_in = ["-i", audio] if audio else ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono"]
+        clip = folder / "clip.mp4"
+        run_ffmpeg(
+            "-f",
+            "concat",
+            "-safe",
+            0,
+            "-i",
+            cue_list,
+            *audio_in,
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-t",
+            f"{seconds:.3f}",
+            "-vf",
+            "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24",
+            "-af",
+            "apad",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            19,
+            "-threads",
+            2,
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-ar",
+            44100,
+            "-ac",
+            1,
+            clip,
+        )
+        segments.append(clip)
+        if line:
+            vtt_cues.extend(shot_captions(line, start, min(spoken, seconds - 0.15) if spoken else seconds, "16:9"))
+        shot_seconds.append(round(seconds))
+        start += seconds
+
+    job["progress"] = "合并模板画面、配音与背景音乐" if music else "封装模板科普视频"
+    save()
+    base = job["id"]
+    captions = MEDIA / (base + ".vtt")
+    captions.write_text("\n".join(vtt_cues), encoding="utf-8")
+    listing = JOBS / base / "clips.txt"
+    listing.write_text(
+        "\n".join(f"file '{i}/clip.mp4'" for i in range(len(segments))),
+        encoding="utf-8",
+    )
+    music_input = ["-stream_loop", -1, "-i", music] if music else []
+    voiced = settings.get("voice") in SPEAKERS and any(item.get("line", "").strip() for item in items)
+    audio_args = (
+        ["-filter_complex", music_mix(start, voiced, music_index=1), "-map", "[mix]", "-c:a", "aac", "-b:a", "160k"]
+        if music else ["-map", "0:a", "-c:a", "copy"]
+    )
+    run_ffmpeg(
+        "-f",
+        "concat",
+        "-safe",
+        1,
+        "-i",
+        listing,
+        *music_input,
+        "-map",
+        "0:v",
+        *audio_args,
+        "-c:v",
+        "copy",
+        "-movflags",
+        "+faststart",
+        MEDIA / (base + ".mp4"),
+    )
+    return {"url": f"/media/{base}.mp4", "captions": f"/media/{base}.vtt", "music": track, "shotSeconds": shot_seconds}
+
+
 def render_video(p, job, save, speech_key, record=None):
+    if p.get("template") is True:
+        return render_template_video(p, job, save, speech_key, record)
     settings = p["settings"]
     track = settings.get("music", "off")
     music = music_path(track)
@@ -836,6 +1015,13 @@ def write_draft(p, job, save, record=None):
     item = p["draft"]
     if item["type"] == "video":
         settings = p["settings"]
+        if item.get("videoMode") == "template":
+            job["progress"] = "生成 5 页模板结构与口播脚本"
+            save()
+            job["output"] = draft_content.template_video_draft(
+                tracked_ark("模板讲解脚本"), TEXT_MODEL, item,
+            )
+            return
         job["progress"] = "撰写完整口播并划分分镜"
         save()
         job["output"] = draft_content.video_draft(
@@ -917,7 +1103,7 @@ def job_costs(job):
         for index, item in enumerate(p["items"]):
             folder = JOBS / job["id"] / str(index)
             state = job.get("remote", {}).get(str(index), {})
-            if p["mode"] == "ark" and (state.get("remote") or state.get("submitting")) and not any(
+            if p["mode"] == "ark" and not p.get("template") and (state.get("remote") or state.get("submitting")) and not any(
                 k.startswith(f"video:{index}:") for k in recorded
             ):
                 # A completed clip proves the remote request succeeded. A submitted ID alone does not.
@@ -1065,7 +1251,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         if (
-            self.path not in ("/api/jobs", "/api/costs", "/api/ark-key", "/api/speech-key")
+            self.path not in ("/api/jobs", "/api/costs", "/api/ark-key", "/api/speech-key", "/api/upload-frame")
             or not self.allowed()
             or self.headers.get("Origin") not in (ORIGIN, f"http://localhost:{PORT}")
             or self.headers.get_content_type() != "application/json"
@@ -1073,11 +1259,14 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_error(403)
         try:
             n = int(self.headers.get("Content-Length", "0"))
-            if not 0 < n <= (100000 if self.path in ("/api/jobs", "/api/costs") else 4096):
+            max_bytes = 8_000_000 if self.path == "/api/upload-frame" else (100000 if self.path in ("/api/jobs", "/api/costs") else 4096)
+            if not 0 < n <= max_bytes:
                 raise ValueError("请求大小无效")
             p = json.loads(self.rfile.read(n))
             if not isinstance(p, dict):
                 raise ValueError("请求格式无效")
+            if self.path == "/api/upload-frame":
+                return self.send_json(200, save_uploaded_frame(p))
             if self.path == "/api/costs":
                 return self.send_json(200, cost_details(p))
             if self.path in ("/api/ark-key", "/api/speech-key"):
