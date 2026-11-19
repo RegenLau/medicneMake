@@ -205,6 +205,7 @@ const watching = new Set();
 const submitting = new Set();
 const selectedScenes = new WeakMap();
 const rejectedPortraitFrames = new WeakMap();
+const maxArticleImages = 16;
 
 // Resume image requests saved by previous sessions.
 for (const w of data.works) {
@@ -593,9 +594,9 @@ function settingsFields(s, which = "all", segAction = "set-mode") {
         : "合成 480p 演示视频。启用配音时，火山语音按字符计费") +
       "。内置主题可用本地稿件演示，自定义内容由方舟生成，确认后按量计费。</div>";
   }
-  if (which === "video") {
+  if (which === "video" && !config.speechKeyPresent) {
     h += '<div class="banner-actions">' +
-      btn(config.speechKeyPresent ? "更新火山语音 Key" : "配置火山语音", "configure-speech", "secondary") +
+      btn("配置火山语音", "configure-speech", "secondary") +
       "</div>";
   }
   return h;
@@ -1852,7 +1853,6 @@ function rememberRejectedFrame(w) {
 function jobView(w) {
   const failed = !!w.job.error;
   const writing = w.job.target === "write-draft";
-  const speechAuthFailed = failed && w.job.error.includes("火山语音鉴权失败");
   const rejected = portraitRejected(w.job);
   const rejectedIndex = rejected ? rejectedFrameIndex(w) : -1;
   const portraitMessage = rejected &&
@@ -1860,8 +1860,7 @@ function jobView(w) {
     "换成无人物画面后再合成。想保留现有图片，也可以返回编辑页切换到本地演示，合成静帧视频。";
   const recovery = rejected
     ? (rejectedIndex >= 0 ? btn(`重做第 ${rejectedIndex + 1} 幕无人物首帧`, "replace-portrait-frame", "primary") : "")
-    : (speechAuthFailed ? btn("更新火山语音 Key", "configure-speech", "primary") : "") +
-      btn(w.job.partial ? "重试配图规划" : "继续此任务", "retry", speechAuthFailed ? "secondary" : "primary");
+    : btn(w.job.partial ? "重试配图规划" : "继续此任务", "retry", "primary");
   shell(
     w,
     failed ? "生成任务需要处理" : writing ? (w.type === "article" ? "正在生成文章" : "正在生成分镜脚本") : "正在合成视频",
@@ -1993,7 +1992,11 @@ async function poll(w, owner = w) {
           }
           owner.job = null;
           w.updated = Date.now();
-          save();
+          if (job.articleImages && data.works.includes(w)) {
+            queueBlockImages(w, missingBlockImages(w), job.articleImages);
+          } else {
+            save();
+          }
           updateJobView(w, owner, true);
           for (const block of ready) sendJob(w, block);
           return;
@@ -2043,9 +2046,9 @@ async function sendJob(w, owner = w) {
   if (owner.job === j && !j.error) poll(w, owner);
 }
 
-function createJob(w, target, items, settings = w.settings) {
+function createJob(w, target, items, settings = w.settings, id = crypto.randomUUID()) {
   const payload = {
-    id: crypto.randomUUID(),
+    id,
     mode: settings.mode,
     kind: target === "compose" ? "video" : target === "write-draft" ? "draft" : "images",
     settings: { ...settings },
@@ -2084,12 +2087,18 @@ function authorize(w, count, kind, fn, voicedCount = count) {
   }
   retryPayload = fn;
   const reference = videoReferenceSeconds(w);
+  const articlePictures = writing && w.type === "article"
+    ? (w.job ? w.job.articleImages?.settings : w.settings)
+    : null;
+  const pictureSummary = articlePictures?.mode === "ark"
+    ? `<p>正文完成后自动生成建议配图，每段最多 1 张，全篇最多 ${maxArticleImages} 张，按实际生成张数计费。</p>`
+    : articlePictures ? "<p>正文完成后自动使用所选风格的本地样图。</p>" : "";
   const textSummary = writing ? "<p>将使用方舟" +
     (w.type === "video" ? (reference === null
       ? "按主题生成完整口播，再根据口播安排分镜时长。"
       : `参考 ${reference} 秒生成完整口播，再根据口播安排分镜时长。`) :
       w.job?.partial ? "根据已生成的正文规划配图。" : "生成完整文章，再按正文决定哪些段落需要配图。") +
-    "预计提交 " + count + " 次文本请求，按 token 计费。素材张数在草稿生成后确认。</p>" +
+    "预计提交 " + count + " 次文本请求，按 token 计费。</p>" + pictureSummary +
     '<span class="pill">' + esc(config.textModel) + "</span>" : "";
   const arkSummary = !isArk || writing ? "" : (
     "<p>将按当前参数提交最多 <b>" +
@@ -2151,6 +2160,13 @@ function generate(w) {
       const job = createJob(w, "write-draft", [], settings);
       job.payload.draft = { type: w.type, topic: w.topic.trim(), layout: w.layout, drug: w.drug };
       if (w.type === "video") job.payload.draft.pharmacist = w.avatar === pharmacistAvatar;
+      else {
+        // Keep the confirmed image settings and reuse the same request IDs when resuming this draft.
+        job.articleImages = {
+          settings: { ...w.settings },
+          jobIds: Array.from({ length: maxArticleImages }, () => crypto.randomUUID()),
+        };
+      }
       w.job = job;
       return sendJob(w);
     });
@@ -2254,23 +2270,30 @@ function restyleBlockImages(w) {
   if (w.job || w.blocks.some((block) => block.job)) return;
   const existing = w.blocks.filter((block) => block.image);
   if (existing.length < 2) return;
-  authorize(w, existing.length, "images", () => queueBlockImages(w, existing, true));
+  authorize(w, existing.length, "images", () => queueBlockImages(w, existing, { replacing: true }));
 }
 
-function queueBlockImages(w, blocks, replacing = false) {
+function queueBlockImages(w, blocks, { replacing = false, settings = w.settings, jobIds } = {}) {
   const reference = pictureReference(w, blocks);
-  const needsLeader = w.type === "video" && w.settings.mode === "ark" && config.imageStyleReference && !reference;
+  const needsLeader = w.type === "video" && settings.mode === "ark" && config.imageStyleReference && !reference;
   let leader = needsLeader ? w.blocks.find(({ job }) => job?.referenceLeader && !job.error &&
     job.payload.storyboard && job.payload.style === w.style)?.job : null;
   const queued = [];
   for (const block of blocks) {
     const index = w.blocks.indexOf(block);
     if (index < 0 || block.job || Boolean(block.image) !== replacing) continue;
+    if (jobIds && !jobIds[index]) continue;
     const prompt = sceneDescription(w, block.prompt);
     const variant = w.type === "video" ? index : queued.length;
     const objectOnly = w.type === "video" && prompt.startsWith(objectOnlyFrame);
     const referenceAfter = objectOnly ? undefined : leader?.payload.id;
-    block.job = createJob(w, replacing ? "regenerate" : "initial-image", [pictureItem(w, index, prompt, variant, reference, referenceAfter)]);
+    block.job = createJob(
+      w,
+      replacing ? "regenerate" : "initial-image",
+      [pictureItem(w, index, prompt, variant, reference, referenceAfter)],
+      settings,
+      jobIds?.[index],
+    );
     if (replacing) block.job.prompt = prompt;
     if (referenceAfter) {
       block.job.referenceAfter = referenceAfter;
@@ -2378,7 +2401,7 @@ function askRegenAllModal(w) {
   openModal(
     w.type === "video" ? "重新生成分镜脚本？" : "重新生成整篇内容？",
     "<p>重新生成将覆盖当前已编辑的" +
-      (w.type === "video" ? "分镜脚本、配图和已合成成片" : "标题、导读与各段正文") +
+      (w.type === "video" ? "分镜脚本、配图和已合成成片" : "标题、导读、各段正文和配图") +
       '。</p><div class="actions dialog-actions">' +
       btn("取消", "close", "secondary") +
       btn("确认覆盖并重做", "confirm-regen-all", "primary") +
