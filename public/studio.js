@@ -223,14 +223,18 @@ const defaults = {
   watermark: true,
   voice: defaultVoice,
   music: "auto",
-  musicModel: "music-2.6",
+  musicModel: "auto",
   avatarMode: "videoretalk",
   avatarResolution: "480P",
 };
 
 function musicModelMap() {
   if (config?.musicModels && Object.keys(config.musicModels).length) return config.musicModels;
-  return { "music-2.6": ["MiniMax Music 2.6（推荐 · 纯音乐）", "1.08"] };
+  return { auto: ["Mureka Auto（推荐 · 自动选最新模型）", null] };
+}
+
+function hasAutoMusicConfig() {
+  return Boolean(config?.murekaKeyPresent);
 }
 
 function resolveMusicModel(s) {
@@ -376,7 +380,7 @@ function renderWorkCosts(w, result) {
     '<a href="' + esc(result.arkPrice) + '" target="_blank" rel="noopener noreferrer">方舟价格</a>' +
     '<a href="' + esc(result.speechPrice) + '" target="_blank" rel="noopener noreferrer">语音价格</a>' +
     (result.dashscopePrice ? '<a href="' + esc(result.dashscopePrice) + '" target="_blank" rel="noopener noreferrer">百炼价格</a>' : '') +
-    (result.minimaxPrice ? '<a href="' + esc(result.minimaxPrice) + '" target="_blank" rel="noopener noreferrer">MiniMax 价格</a>' : '') + '</p>';
+    (result.murekaPrice ? '<a href="' + esc(result.murekaPrice) + '" target="_blank" rel="noopener noreferrer">Mureka 价格</a>' : '') + '</p>';
 }
 
 async function openWorkCosts(w) {
@@ -497,7 +501,7 @@ function musicSummaryLabel(w) {
     return track ? `配乐：${track.title}` : "配乐：项目已存配乐";
   }
   if (choice === "auto") {
-    return w?.customMusic?.title ? `配乐：${w.customMusic.title}` : "配乐：自动搭配（MiniMax AI）";
+    return w?.customMusic?.title ? `配乐：${w.customMusic.title}` : "配乐：自动搭配（Mureka AI）";
   }
   return `配乐：${musicLabels[choice] || choice}`;
 }
@@ -510,7 +514,7 @@ function videoMusicBadge(video) {
     return title ? `配乐：${title}` : "项目配乐";
   }
   if (video.music === "auto") {
-    return video.musicMeta?.title ? `配乐：${video.musicMeta.title}` : "MiniMax AI 配乐";
+    return video.musicMeta?.title ? `配乐：${video.musicMeta.title}` : "Mureka AI 配乐";
   }
   return musicLabels[video.music] || "";
 }
@@ -569,7 +573,7 @@ function renderMusicStudioCard(w, { compact = false, showModeChips = false } = {
   const cm = w.customMusic?.url ? w.customMusic : null;
   const stale = isCustomMusicStale(w);
   const hintVal = musicHintDrafts.get(w) ?? cm?.hint ?? "";
-  const hasMinimaxKey = !!config.minimaxKeyPresent;
+  const musicReady = hasAutoMusicConfig();
 
   const chipsHtml = showModeChips
     ? '<div class="chips" style="margin-top:6px">' +
@@ -607,15 +611,15 @@ function renderMusicStudioCard(w, { compact = false, showModeChips = false } = {
 
   // choice === "auto"
   const badgeText = busy
-    ? "MiniMax 生成中…"
-    : !hasMinimaxKey && !cm
-      ? "待配置 MiniMax Key"
+    ? "Mureka 生成中…"
+    : !musicReady && !cm
+      ? "待配 Mureka Key"
       : stale
         ? "内容已更新"
         : cm
           ? "已存项目库"
-          : "AI 按内容生成";
-  const badgeTone = busy ? " is-busy" : (!hasMinimaxKey && !cm) || stale ? " is-warn" : cm ? " is-ok" : "";
+          : "Mureka AI 生成";
+  const badgeTone = busy ? " is-busy" : (!musicReady && !cm) || stale ? " is-warn" : cm ? " is-ok" : "";
   const tags = cm
     ? [cm.mood, cm.styleLabel, cm.model, cm.bpm ? cm.bpm + " BPM" : "", cm.duration ? Math.round(cm.duration) + "秒" : ""].filter(Boolean)
     : [];
@@ -624,7 +628,7 @@ function renderMusicStudioCard(w, { compact = false, showModeChips = false } = {
     chipsHtml +
     '<div class="bgm-card' + (compact ? " is-compact" : "") + '">' +
     '<div class="bgm-card-head">' +
-    "<strong>" + esc(cm ? cm.title : "按视频主题与内容调用 MiniMax 生成纯音乐") + "</strong>" +
+    "<strong>" + esc(cm ? cm.title : "按视频主题与内容调用 Mureka 生成纯音乐") + "</strong>" +
     '<span class="bgm-badge' + badgeTone + '">' + esc(badgeText) + "</span>" +
     "</div>" +
     (cm
@@ -638,11 +642,11 @@ function renderMusicStudioCard(w, { compact = false, showModeChips = false } = {
             btn("从项目库删除", "delete-bgm", "textbtn danger", cm.id) +
             "</div>"
           : "") +
-        (stale ? '<p class="bgm-stale-note">视频标题或口播内容已修改，可点击下方按钮调用 MiniMax 重新生成更贴合当前内容的配乐。</p>' : "")
-      : '<p class="bgm-desc">根据当前视频主题、关联药品与口播台词，调用 MiniMax 音乐模型接口生成纯器乐背景音乐（约 ¥1.08/首）；生成后自动命名并保存到项目目录，后续所有视频均可免费复用。</p>') +
-    (!hasMinimaxKey
-      ? '<p class="bgm-stale-note">尚未配置 MiniMax API Key，' +
-        btn("去配置 MiniMax Key", "connect-minimax", "textbtn") +
+        (stale ? '<p class="bgm-stale-note">视频标题或口播内容已修改，可点击下方按钮调用 Mureka 重新生成更贴合当前内容的配乐。</p>' : "")
+      : '<p class="bgm-desc">根据当前视频主题、关联药品与口播台词，调用 Mureka 纯音乐接口生成无人声背景音乐（约 30–60 秒）；生成后自动命名并保存到项目目录，后续所有视频均可免费复用。</p>') +
+    (!musicReady
+      ? '<p class="bgm-stale-note">尚未配置 Mureka API Key，' +
+        btn("去背景音乐页配置", "connect-music", "textbtn") +
         "</p>"
       : "") +
     '<div class="bgm-controls">' +
@@ -650,7 +654,7 @@ function renderMusicStudioCard(w, { compact = false, showModeChips = false } = {
     '" placeholder="可选：补充氛围偏好（如：更轻快 / 温暖钢琴 / 适合儿童）"' + (busy ? " disabled" : "") + ">" +
     btn(
       busy
-        ? "MiniMax 生成中…"
+        ? "Mureka 生成中…"
         : cm
           ? "根据内容重新生成"
           : "立即生成背景音乐",
@@ -745,9 +749,9 @@ async function deleteLibraryMusic(trackId) {
 
 async function generateWorkMusic(w) {
   if (!w || generatingMusicWorks.has(w.id)) return;
-  if (!config?.minimaxKeyPresent) {
-    notify("请先在「模型配置 → 背景音乐」填写 MiniMax API Key", "warn");
-    openApiKeys("minimax");
+  if (!hasAutoMusicConfig()) {
+    notify("请先在「模型配置 → 背景音乐」填写 Mureka API Key", "warn");
+    openApiKeys("mureka");
     return;
   }
   generatingMusicWorks.add(w.id);
@@ -899,13 +903,13 @@ const keyProviders = {
     link: ["https://bailian.console.aliyun.com/?tab=model#/api-key", "获取 Key"],
     status: () => [config.dashscopeKeySaved, config.dashscopeKeyPresent, config.dashscopeKeySource, config.dashscopeKeyWarning],
   },
-  minimax: {
-    title: "MiniMax 音乐",
-    label: "MiniMax API Key",
-    endpoint: "/api/minimax-key",
+  mureka: {
+    title: "Mureka 音乐",
+    label: "Mureka API Key",
+    endpoint: "/api/mureka-key",
     submit: "验证并连接",
-    link: ["https://platform.minimaxi.com/user-center/basic-information/interface-key", "获取 Key"],
-    status: () => [config.minimaxKeySaved, config.minimaxKeyPresent, config.minimaxKeySource, config.minimaxKeyWarning],
+    link: ["https://platform.mureka.cn/apiKeys", "获取 Key"],
+    status: () => [config.murekaKeySaved, config.murekaKeyPresent, config.murekaKeySource, config.murekaKeyWarning],
   },
 };
 
@@ -979,7 +983,7 @@ function openApiKeys(focus = "deepseek") {
       ? "text"
       : focus === "speech"
         ? "voice"
-        : focus === "minimax"
+        : focus === "mureka" || focus === "music"
           ? "music"
           : focus === "dashscope"
             ? "avatar"
@@ -988,7 +992,8 @@ function openApiKeys(focus = "deepseek") {
   const available = settingsTabsFor(w ? (TemplateStudio.isTemplateVideo(w) ? "template-video" : w.type) : "all");
   if (!available.includes(settingsTab)) prefs(null);
   else prefs(w);
-  $("#" + focus + "-key", dialogBody)?.focus();
+  const inputId = focus === "music" ? "mureka" : focus;
+  $("#" + inputId + "-key", dialogBody)?.focus();
 }
 
 dialog.addEventListener("submit", async (event) => {
@@ -1102,7 +1107,7 @@ function settingsFields(s, which = "all", { inDialog = false, styleField = "", w
       '<p class="key-shared">当前配音：' + esc(voiceLabel(s.voice)) + " · " + keyStatusText("speech") + " " +
       btn("去配音页设置", "settings-tab", "textbtn", "voice") + "</p>" +
       '<p class="key-shared">当前背景音乐：' + esc(currentMusicText) +
-      (musicMode === "auto" ? " · " + keyStatusText("minimax") : "") + " " +
+      (musicMode === "auto" ? " · " + keyStatusText("mureka") : "") + " " +
       btn("去背景音乐页设置", "settings-tab", "textbtn", "music") + "</p>";
   } else {
     video += '<div class="fields">' +
@@ -1133,7 +1138,7 @@ function settingsFields(s, which = "all", { inDialog = false, styleField = "", w
     musicFieldHtml(musicMode, "配乐方式") +
     field("音乐生成模型", "musicModel", musics, resolveMusicModel(s)) +
     "</div>" +
-    '<div class="mode-box" style="margin-top:12px">选择<b>自动搭配</b>时，调用 <b>MiniMax 音乐模型接口</b>按内容生成纯器乐（约 $0.15/首，折合 <b>¥1.08/首</b>），并自动命名保存到 <code>public/assets/music/generated/</code>。' +
+    '<div class="mode-box" style="margin-top:12px">选择<b>自动搭配</b>时，先结合视频主题、关联药品与口播台词规划提示词，再调用 <b>Mureka 纯音乐接口</b>生成无人声背景音乐（含商用授权），并自动命名保存到 <code>public/assets/music/generated/</code>。' +
     (libCount ? `当前项目配乐库已有 <b>${libCount}</b> 首，可直接在上方「配乐方式」下拉框免费复用。` : "生成后可在上方「配乐方式」下拉框随时免费复用。") +
     "</div>";
   if (inDialog && work && work.type === "video") {
@@ -1141,9 +1146,10 @@ function settingsFields(s, which = "all", { inDialog = false, styleField = "", w
   } else if (inDialog && musicMode.startsWith("library:")) {
     music += renderLibraryTrackCard(selectedLibTrack, { compact: true });
   }
-  if (inDialog) music += keyForm("minimax");
-  else if (musicMode === "auto" && !config.minimaxKeyPresent) {
-    music += keyWarning("minimax", "配置 MiniMax API Key 后，选择「自动搭配」即可按视频主题与内容生成专属背景音乐。");
+  if (inDialog) {
+    music += keyForm("mureka");
+  } else if (musicMode === "auto" && !hasAutoMusicConfig()) {
+    music += keyWarning("mureka", "配置 Mureka API Key 后，选择「自动搭配」即可按视频主题与内容生成专属背景音乐。");
   }
 
   // 数字人服务
@@ -1169,7 +1175,7 @@ function settingsFields(s, which = "all", { inDialog = false, styleField = "", w
     image: !config.keyPresent,
     video: !isTplVideo && !config.keyPresent,
     voice: s.voice !== "无配音" && !config.speechKeyPresent,
-    music: musicMode === "auto" && !config.minimaxKeyPresent,
+    music: musicMode === "auto" && !hasAutoMusicConfig(),
     avatar: avatarMode !== "static" && !config.dashscopeKeyPresent,
   };
   return (
@@ -4055,7 +4061,7 @@ document.addEventListener("click", async (e) => {
             authorizeSpeechOnly,
             speechKeyPresent: config.speechKeyPresent,
             dashscopeKeyPresent: !!config.dashscopeKeyPresent,
-            minimaxKeyPresent: !!config.minimaxKeyPresent,
+            autoMusicReady: hasAutoMusicConfig(),
             workCostsEnabled: !!config.workCosts,
           });
         }
@@ -4105,8 +4111,9 @@ document.addEventListener("click", async (e) => {
       case "connect-dashscope":
         if (config) openApiKeys("dashscope");
         break;
-      case "connect-minimax":
-        if (config) openApiKeys("minimax");
+      case "connect-music":
+      case "connect-mureka":
+        if (config) openApiKeys("mureka");
         break;
       case "generate-bgm": {
         const target = v ? data.works.find((item) => item.id === v) : w;
@@ -4305,9 +4312,9 @@ document.addEventListener("click", async (e) => {
           );
           return;
         }
-        if (videoMusic(w) === "auto" && !w.customMusic?.url && !config.minimaxKeyPresent) {
-          notify("当前背景音乐为「自动搭配」，请先填写 MiniMax API Key 或切换其他配乐。", "warn");
-          openApiKeys("minimax");
+        if (videoMusic(w) === "auto" && !w.customMusic?.url && !hasAutoMusicConfig()) {
+          notify("当前背景音乐为「自动搭配」，请先在「背景音乐」填写 Mureka API Key，或切换其他配乐。", "warn");
+          openApiKeys("mureka");
           return;
         }
         authorize(w, w.blocks.length, "video", () =>

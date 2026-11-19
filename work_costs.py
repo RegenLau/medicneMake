@@ -8,6 +8,7 @@ ARK_PRICE = "https://console.volcengine.com/ark/region%3Acn-beijing/docs/model-p
 DEEPSEEK_PRICE = "https://api-docs.deepseek.com/zh-cn/quick_start/pricing"
 SPEECH_PRICE = "https://docs.volcengine.com/docs/doubao-voice/billing-instructions?lang=zh"
 DASHSCOPE_PRICE = "https://help.aliyun.com/zh/model-studio/billing-for-model-studio"
+MUREKA_PRICE = "https://platform.mureka.cn/billing"
 MINIMAX_PRICE = "https://platform.minimaxi.com/docs/guides/pricing-paygo"
 AVATAR_RATES = {
     "videoretalk": Decimal("0.08"),
@@ -16,11 +17,14 @@ AVATAR_RATES = {
     "wan2.2-s2v:720P": Decimal("0.90"),
 }
 MUSIC_RATES = {
-    # MiniMax official API pay-as-you-go: ~$0.15 / track (approx. ¥1.08 / track).
-    "music-3.0": Decimal("1.08"),
-    "music-2.6": Decimal("1.08"),
-    "music-2.5+": Decimal("1.08"),
-    "music-2.5": Decimal("1.08"),
+    # Aliyun DashScope Fun-Music: ¥0.002 / second of generated audio.
+    "fun-music-v1": ("per_second", Decimal("0.002")),
+    "fun-music-preview": ("per_second", Decimal("0.002")),
+    # Legacy MiniMax rates kept for historical job cost rows.
+    "music-3.0": ("per_track", Decimal("1.08")),
+    "music-2.6": ("per_track", Decimal("1.08")),
+    "music-2.5+": ("per_track", Decimal("1.08")),
+    "music-2.5": ("per_track", Decimal("1.08")),
 }
 TEXT_RATES = {
     # Standard online inference (peak standard rates for DeepSeek), per million input, cached input, and output tokens.
@@ -127,7 +131,18 @@ def avatar_cost(model, seconds, *, cached=False, chunk_label="", resolution=""):
     return entry(label, model, details, amount)
 
 
-def music_cost(model, duration_sec=None):
-    rate = MUSIC_RATES.get(model)
-    dur_text = f" · 约 {round(float(duration_sec))} 秒" if isinstance(duration_sec, (int, float)) and duration_sec > 0 else ""
-    return entry("AI 背景音乐生成", model, f"MiniMax 纯音乐 1 首{dur_text}", rate)
+def music_cost(model, duration_sec=None, amount_cny=None):
+    dur = Decimal(str(round(float(duration_sec), 2))) if isinstance(duration_sec, (int, float)) and duration_sec > 0 else None
+    dur_text = f" · 约 {round(float(duration_sec))} 秒" if dur is not None else ""
+    if isinstance(amount_cny, (int, float)) and amount_cny > 0:
+        amount = Decimal(str(round(float(amount_cny), 4)))
+        return entry("AI 背景音乐生成", model, f"Mureka 纯音乐 1 首{dur_text}", amount)
+    spec = MUSIC_RATES.get(model)
+    if spec is None:
+        return entry("AI 背景音乐生成", model, f"Mureka 纯音乐 1 首{dur_text}（按平台账单）", None)
+    kind, rate = spec
+    if kind == "per_second":
+        details = f"百炼纯音乐 · {float(duration_sec):.1f} 秒（¥0.002/秒）" if dur is not None else "百炼纯音乐 · 缺少音频时长"
+        amount = (dur * rate).quantize(Decimal("0.0001")) if dur is not None else None
+        return entry("AI 背景音乐生成", model, details, amount)
+    return entry("AI 背景音乐生成", model, f"纯音乐 1 首{dur_text}", rate)

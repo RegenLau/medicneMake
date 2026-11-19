@@ -200,8 +200,8 @@ PAGE_ARK_KEY = load_saved_key("ark")
 PAGE_DEEPSEEK_KEY = load_saved_key("deepseek")
 PAGE_SPEECH_KEY = load_saved_key("speech")
 PAGE_DASHSCOPE_KEY = load_saved_key("dashscope")
-PAGE_MINIMAX_KEY = load_saved_key("minimax")
-MINIMAX_HOST = ""
+PAGE_MUREKA_KEY = load_saved_key("mureka")
+MUREKA_HOST = ""
 DEEPSEEK_REMOTE_MODELS = []
 
 
@@ -221,8 +221,8 @@ def current_dashscope_key():
     return PAGE_DASHSCOPE_KEY or os.environ.get("DASHSCOPE_API_KEY", "").strip()
 
 
-def current_minimax_key():
-    return PAGE_MINIMAX_KEY or os.environ.get("MINIMAX_API_KEY", "").strip()
+def current_mureka_key():
+    return PAGE_MUREKA_KEY or os.environ.get("MUREKA_API_KEY", "").strip()
 
 
 def text_models():
@@ -356,30 +356,30 @@ def connect_dashscope(key):
         return dashscope_connection()
 
 
-def minimax_connection():
+def mureka_connection():
     return {
-        "minimaxKeyPresent": bool(current_minimax_key()),
-        "minimaxKeySource": "page"
-        if PAGE_MINIMAX_KEY
+        "murekaKeyPresent": bool(current_mureka_key()),
+        "murekaKeySource": "page"
+        if PAGE_MUREKA_KEY
         else "environment"
-        if current_minimax_key()
+        if current_mureka_key()
         else "",
-        "minimaxKeySaved": bool(PAGE_MINIMAX_KEY and KEY_STORAGE != "session"),
-        "minimaxKeyWarning": credential_warnings.get("minimax", ""),
+        "murekaKeySaved": bool(PAGE_MUREKA_KEY and KEY_STORAGE != "session"),
+        "murekaKeyWarning": credential_warnings.get("mureka", ""),
     }
 
 
-def connect_minimax(key):
-    global PAGE_MINIMAX_KEY, MINIMAX_HOST
-    if not isinstance(key, str) or not re.fullmatch(r"[!-~]{1,1024}", key.strip()):
-        raise ValueError("请输入有效的 MiniMax API Key")
+def connect_mureka(key):
+    global PAGE_MUREKA_KEY, MUREKA_HOST
+    if not isinstance(key, str) or not re.fullmatch(r"[!-~]{1,512}", key.strip()):
+        raise ValueError("请输入有效的 Mureka API Key")
     key = key.strip()
-    verified_host = music_gen.verify_minimax_key(key, timeout=15)
+    verified_host, _billing = music_gen.verify_mureka_key(key, timeout=15)
     with CACHE_LOCK:
-        persist_key("minimax", key)
-        PAGE_MINIMAX_KEY = key
-        MINIMAX_HOST = verified_host
-        return minimax_connection()
+        persist_key("mureka", key)
+        PAGE_MUREKA_KEY = key
+        MUREKA_HOST = verified_host
+        return mureka_connection()
 
 
 def write_json(path, data):
@@ -818,9 +818,9 @@ def validate_video_music_settings(s):
     if track == "auto":
         music_model = s.get("musicModel") or music_gen.DEFAULT_MUSIC_MODEL
         if music_model not in music_gen.MUSIC_MODELS:
-            raise ValueError("请选择有效的 MiniMax 音乐模型。")
-        if existing is None and not current_minimax_key():
-            raise ValueError("请先在「模型配置 → 背景音乐」填写 MiniMax API Key，再使用自动搭配生成背景音乐。")
+            raise ValueError("请选择有效的 Mureka 音乐模型。")
+        if existing is None and not current_mureka_key():
+            raise ValueError("请先在「模型配置 → 背景音乐」填写 Mureka API Key，再使用自动搭配生成背景音乐。")
 
 
 def setting_valid(p):
@@ -1308,8 +1308,8 @@ def _make_tracked_deepseek(key, record=None, label="专属背景音乐提示词�
     return request
 
 
-def resolve_video_music(p, job, save, record=None, deepseek_key=None, minimax_key=None):
-    global MINIMAX_HOST
+def resolve_video_music(p, job, save, record=None, deepseek_key=None, mureka_key=None):
+    global MUREKA_HOST
     settings = p["settings"]
     track = settings.get("music", "off")
     if isinstance(track, str) and track.startswith("library:"):
@@ -1324,14 +1324,14 @@ def resolve_video_music(p, job, save, record=None, deepseek_key=None, minimax_ke
         meta = settings.get("musicMeta") if isinstance(settings.get("musicMeta"), dict) else {"url": existing_url}
         return existing_path, "auto", existing_url, {**meta, "url": existing_url}
 
-    mm_key = minimax_key if minimax_key is not None else current_minimax_key()
-    if not mm_key:
-        raise ValueError("请先在「模型配置 → 背景音乐」填写 MiniMax API Key，再使用自动搭配生成背景音乐。")
+    mk_key = mureka_key if mureka_key is not None else current_mureka_key()
+    if not mk_key:
+        raise ValueError("请先在「模型配置 → 背景音乐」填写 Mureka API Key，再使用自动搭配生成背景音乐。")
     music_model = settings.get("musicModel") or music_gen.DEFAULT_MUSIC_MODEL
     if music_model not in music_gen.MUSIC_MODELS:
         music_model = music_gen.DEFAULT_MUSIC_MODEL
 
-    job["progress"] = "正在调用 MiniMax 按视频内容生成专属背景音乐"
+    job["progress"] = "正在调用 Mureka 按视频内容生成专属纯音乐"
     save()
     raw_ctx = p.get("musicContext") if isinstance(p.get("musicContext"), dict) else {}
     lines = raw_ctx.get("lines") if isinstance(raw_ctx.get("lines"), list) else []
@@ -1346,30 +1346,39 @@ def resolve_video_music(p, job, save, record=None, deepseek_key=None, minimax_ke
     model = settings.get("textModel") or default_text_model()
     if model not in text_models():
         model = default_text_model()
+
+    def update_music_progress(stage_text):
+        job["progress"] = f"Mureka 正在生成专属背景音乐（{stage_text}…）"
+        save()
+
     generated = music_gen.generate_music(
         context,
         GENERATED_MUSIC_DIR,
-        mm_key,
+        mk_key,
         music_model=music_model,
-        minimax_host=MINIMAX_HOST or None,
+        mureka_host=MUREKA_HOST or None,
         deepseek_fn=_make_tracked_deepseek(ds_key, record=record),
         text_model=model,
+        on_progress=update_music_progress,
     )
     if generated.get("host"):
         with CACHE_LOCK:
-            MINIMAX_HOST = generated["host"]
+            MUREKA_HOST = generated["host"]
     if record:
-        record(f"music:{uuid.uuid4()}", work_costs.music_cost(generated["model"], generated.get("duration")))
+        record(
+            f"music:{uuid.uuid4()}",
+            work_costs.music_cost(generated["model"], generated.get("duration"), generated.get("spentCny")),
+        )
     return _resolve_generated_music_url(generated["url"]), "auto", generated["url"], generated
 
 
 def generate_music_request(p):
-    global MINIMAX_HOST
+    global MUREKA_HOST
     if not isinstance(p, dict):
         raise ValueError("请求格式无效")
-    mm_key = current_minimax_key()
-    if not mm_key:
-        raise ValueError("请先在「模型配置 → 背景音乐」填写 MiniMax API Key，再生成专属背景音乐。")
+    mk_key = current_mureka_key()
+    if not mk_key:
+        raise ValueError("请先在「模型配置 → 背景音乐」填写 Mureka API Key，再生成专属背景音乐。")
     work_id = p.get("workId")
     if work_id is not None:
         if not isinstance(work_id, str):
@@ -1383,7 +1392,7 @@ def generate_music_request(p):
         raise ValueError("口播台词列表格式无效")
     music_model = p.get("musicModel") or music_gen.DEFAULT_MUSIC_MODEL
     if music_model not in music_gen.MUSIC_MODELS:
-        raise ValueError("请选择有效的 MiniMax 音乐模型。")
+        raise ValueError("请选择有效的 Mureka 音乐模型。")
     model = p.get("textModel") or default_text_model()
     if model not in text_models():
         model = default_text_model()
@@ -1397,16 +1406,19 @@ def generate_music_request(p):
     generated = music_gen.generate_music(
         p,
         GENERATED_MUSIC_DIR,
-        mm_key,
+        mk_key,
         music_model=music_model,
-        minimax_host=MINIMAX_HOST or None,
+        mureka_host=MUREKA_HOST or None,
         deepseek_fn=_make_tracked_deepseek(ds_key, record=record_cost),
         text_model=model,
     )
     if generated.get("host"):
         with CACHE_LOCK:
-            MINIMAX_HOST = generated["host"]
-    record_cost(f"music:{uuid.uuid4()}", work_costs.music_cost(generated["model"], generated.get("duration")))
+            MUREKA_HOST = generated["host"]
+    record_cost(
+        f"music:{uuid.uuid4()}",
+        work_costs.music_cost(generated["model"], generated.get("duration"), generated.get("spentCny")),
+    )
 
     if work_id and costs:
         job_id = str(uuid.uuid4())
@@ -1826,10 +1838,10 @@ def _build_template_slide_xfade(cue_specs, prev_img=None):
     return input_args, ";".join(filters), f"[{acc}]", in_idx
 
 
-def render_template_video(p, job, save, speech_key, record=None, dashscope_key="", deepseek_key=None, minimax_key=None):
+def render_template_video(p, job, save, speech_key, record=None, dashscope_key="", deepseek_key=None, mureka_key=None):
     settings = p["settings"]
     music, track, music_url, music_meta = resolve_video_music(
-        p, job, save, record=record, deepseek_key=deepseek_key, minimax_key=minimax_key
+        p, job, save, record=record, deepseek_key=deepseek_key, mureka_key=mureka_key
     )
     music_extra = {"musicUrl": music_url, "musicMeta": music_meta} if music_url else {}
     items = p["items"]
@@ -2286,12 +2298,12 @@ def render_template_video(p, job, save, speech_key, record=None, dashscope_key="
     return {"url": f"/media/{base}.mp4", "captions": f"/media/{base}.vtt", "music": track, "shotSeconds": shot_seconds, **music_extra}
 
 
-def render_video(p, job, save, speech_key, record=None, dashscope_key="", deepseek_key=None, minimax_key=None):
+def render_video(p, job, save, speech_key, record=None, dashscope_key="", deepseek_key=None, mureka_key=None):
     if p.get("template") is True:
-        return render_template_video(p, job, save, speech_key, record, dashscope_key, deepseek_key, minimax_key)
+        return render_template_video(p, job, save, speech_key, record, dashscope_key, deepseek_key, mureka_key)
     settings = p["settings"]
     music, track, music_url, music_meta = resolve_video_music(
-        p, job, save, record=record, deepseek_key=deepseek_key, minimax_key=minimax_key
+        p, job, save, record=record, deepseek_key=deepseek_key, mureka_key=mureka_key
     )
     music_extra = {"musicUrl": music_url, "musicMeta": music_meta} if music_url else {}
     segments = []
@@ -2447,7 +2459,7 @@ def write_draft(p, job, save, record=None):
         )
 
 
-def work(job, key=None, speech_key="", deepseek_key=None, dashscope_key="", minimax_key=None):
+def work(job, key=None, speech_key="", deepseek_key=None, dashscope_key="", mureka_key=None):
     def save():
         with CACHE_LOCK:
             write_json(JOBS / (job["id"] + ".json"), job)
@@ -2476,7 +2488,7 @@ def work(job, key=None, speech_key="", deepseek_key=None, dashscope_key="", mini
             elif p["kind"] == "draft":
                 write_draft(p, job, save, record)
             else:
-                job["output"] = render_video(p, job, save, speech_key, record, dashscope_key, deepseek_key, minimax_key)
+                job["output"] = render_video(p, job, save, speech_key, record, dashscope_key, deepseek_key, mureka_key)
             job["status"] = "done"
     except Exception as error:
         job.update(status="failed", error=str(error)[:650])
@@ -2554,7 +2566,7 @@ def cost_details(request):
     return {"rows": rows, "total": math.fsum(amounts) if amounts else None, "unresolved": unresolved,
             "priceDate": work_costs.PRICE_DATE, "arkPrice": work_costs.ARK_PRICE,
             "deepseekPrice": work_costs.DEEPSEEK_PRICE, "speechPrice": work_costs.SPEECH_PRICE,
-            "dashscopePrice": work_costs.DASHSCOPE_PRICE, "minimaxPrice": work_costs.MINIMAX_PRICE}
+            "dashscopePrice": work_costs.DASHSCOPE_PRICE, "murekaPrice": work_costs.MUREKA_PRICE}
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -2598,7 +2610,7 @@ class Handler(SimpleHTTPRequestHandler):
                     **ark_connection(),
                     **deepseek_connection(),
                     **dashscope_connection(),
-                    **minimax_connection(),
+                    **mureka_connection(),
                     "encoder": bool(FFMPEG),
                     **speech_connection(),
                     "keyStorage": KEY_STORAGE,
@@ -2674,7 +2686,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         if (
-            self.path not in ("/api/jobs", "/api/costs", "/api/ark-key", "/api/deepseek-key", "/api/speech-key", "/api/dashscope-key", "/api/minimax-key", "/api/upload-frame", "/api/generate-music", "/api/music-library/rename", "/api/music-library/delete")
+            self.path not in ("/api/jobs", "/api/costs", "/api/ark-key", "/api/deepseek-key", "/api/speech-key", "/api/dashscope-key", "/api/mureka-key", "/api/upload-frame", "/api/generate-music", "/api/music-library/rename", "/api/music-library/delete")
             or not self.allowed()
             or self.headers.get("Origin") not in (ORIGIN, f"http://localhost:{PORT}")
             or self.headers.get_content_type() != "application/json"
@@ -2702,15 +2714,15 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(200, {"library": library})
             if self.path == "/api/costs":
                 return self.send_json(200, cost_details(p))
-            if self.path in ("/api/ark-key", "/api/deepseek-key", "/api/speech-key", "/api/dashscope-key", "/api/minimax-key"):
+            if self.path in ("/api/ark-key", "/api/deepseek-key", "/api/speech-key", "/api/dashscope-key", "/api/mureka-key"):
                 if self.path == "/api/speech-key":
                     return self.send_json(200, configure_speech(p.get("key")))
                 if self.path == "/api/deepseek-key":
                     return self.send_json(200, connect_deepseek(p.get("key")))
                 if self.path == "/api/dashscope-key":
                     return self.send_json(200, connect_dashscope(p.get("key")))
-                if self.path == "/api/minimax-key":
-                    return self.send_json(200, connect_minimax(p.get("key")))
+                if self.path == "/api/mureka-key":
+                    return self.send_json(200, connect_mureka(p.get("key")))
                 return self.send_json(200, connect_ark(p.get("key")))
             job_id = str(uuid.UUID(p["id"]))
             if "workId" in p and (not isinstance(p["workId"], str) or str(uuid.UUID(p["workId"])) != p["workId"]):
@@ -2734,9 +2746,9 @@ class Handler(SimpleHTTPRequestHandler):
                 needs_deepseek = p["kind"] == "draft" or needs_auto_music
                 ds_key = current_deepseek_key() if needs_deepseek else None
                 dash_key = current_dashscope_key() if p["kind"] == "video" and p.get("template") is True else ""
-                mm_key = current_minimax_key() if needs_auto_music else None
+                mk_key = current_mureka_key() if needs_auto_music else None
                 threading.Thread(
-                    target=work, args=(job, key, current_speech_key(), ds_key, dash_key, mm_key), daemon=True
+                    target=work, args=(job, key, current_speech_key(), ds_key, dash_key, mk_key), daemon=True
                 ).start()
                 self.send_json(202, visible(job))
         except (ValueError, KeyError, TypeError) as error:

@@ -1,6 +1,7 @@
-"""AI model-driven background music generation via MiniMax Music API (+ DeepSeek prompt planning).
+"""AI model-driven background music generation via Mureka Instrumental API (+ DeepSeek prompt planning).
 
 Pure Python 3.10+ standard library (zero local audio synthesis).
+Generated tracks are named cleanly and saved into the project library (`public/assets/music/generated/`) for reuse.
 """
 
 from __future__ import annotations
@@ -16,20 +17,25 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-MINIMAX_HOSTS = (
-    "https://api.minimaxi.com",
-    "https://api.minimax.io",
+MUREKA_HOSTS = (
+    "https://api.mureka.cn",
+    "https://api.mureka.ai",
 )
 
-# (display label, estimated CNY per track at ~$0.15/track)
+# (display label, estimated CNY or None when billed dynamically by platform)
 MUSIC_MODELS = {
-    "music-2.6": ("MiniMax Music 2.6（推荐 · 纯音乐）", "1.08"),
-    "music-3.0": ("MiniMax Music 3.0", "1.08"),
-    "music-2.5+": ("MiniMax Music 2.5+", "1.08"),
-    "music-2.5": ("MiniMax Music 2.5", "1.08"),
+    "auto": ("Mureka Auto（推荐 · 自动选最新模型）", None),
+    "mureka-9.5": ("Mureka 9.5", None),
+    "mureka-9": ("Mureka 9", None),
+    "mureka-8": ("Mureka 8", None),
+    "mureka-7.6": ("Mureka 7.6", None),
 }
 
-DEFAULT_MUSIC_MODEL = "music-2.6"
+DEFAULT_MUSIC_MODEL = "auto"
+
+LIBRARY_INDEX_NAME = "library.json"
+LIBRARY_URL_PREFIX = "/assets/music/generated/"
+AUDIO_EXTENSIONS = (".mp3", ".flac", ".wav")
 
 _FALLBACK_PROFILES = (
     {
@@ -38,9 +44,8 @@ _FALLBACK_PROFILES = (
         "mood": "温暖安心",
         "bpm": 80,
         "prompt": (
-            "Pure instrumental background music, no vocals, no singing, warm felt acoustic piano "
-            "and subtle soft strings, calm reassuring healthcare documentary vibe, 80 BPM, "
-            "clean spacious studio mix with open midrange for voiceover narration"
+            "warm felt acoustic piano, soft chamber strings pad, gentle reassuring healthcare "
+            "documentary background music, 80 bpm, pure instrumental, no vocals, clean spacious mix"
         ),
     },
     {
@@ -49,9 +54,8 @@ _FALLBACK_PROFILES = (
         "mood": "轻快明朗",
         "bpm": 98,
         "prompt": (
-            "Pure instrumental background music, no vocals, no singing, bright wooden marimba "
-            "and gentle fingerpicked acoustic guitar with light muted bass, friendly educational "
-            "explainer tone, 98 BPM, airy crisp mix leaving space for narration"
+            "bright wooden marimba, gentle fingerpicked acoustic guitar, light warm bass, "
+            "friendly educational explainer background music, 98 bpm, pure instrumental, no vocals, airy crisp mix"
         ),
     },
     {
@@ -60,9 +64,8 @@ _FALLBACK_PROFILES = (
         "mood": "现代专业",
         "bpm": 86,
         "prompt": (
-            "Pure instrumental background music, no vocals, no singing, mellow Rhodes electric piano, "
-            "warm ambient pad and gentle soft bassline, modern trustworthy medical science feel, "
-            "86 BPM, smooth unobtrusive background bed for spoken explanation"
+            "mellow Rhodes electric piano, warm ambient pad, subtle soft bassline, modern trustworthy "
+            "medical science background music, 86 bpm, pure instrumental, no vocals, smooth unobtrusive bed"
         ),
     },
     {
@@ -71,9 +74,8 @@ _FALLBACK_PROFILES = (
         "mood": "温和关怀",
         "bpm": 82,
         "prompt": (
-            "Pure instrumental background music, no vocals, no singing, delicate acoustic harp and "
-            "nylon guitar arpeggios with airy warm pad, tender caring family health atmosphere, "
-            "82 BPM, soft balanced mix ideal underneath narration"
+            "delicate acoustic harp arpeggios, soft nylon string guitar, airy warm pad, tender caring "
+            "family health background music, 82 bpm, pure instrumental, no vocals, soft balanced mix"
         ),
     },
     {
@@ -82,9 +84,8 @@ _FALLBACK_PROFILES = (
         "mood": "沉稳专业",
         "bpm": 74,
         "prompt": (
-            "Pure instrumental background music, no vocals, no singing, dignified warm piano chords "
-            "and smooth cinematic chamber strings, calm serious trustworthy medical advisory mood, "
-            "74 BPM, restrained non-dramatic mix keeping voiceover crystal clear"
+            "dignified warm piano chords, smooth cinematic chamber strings, calm trustworthy "
+            "medical advisory background music, 74 bpm, pure instrumental, no vocals, restrained clear mix"
         ),
     },
     {
@@ -93,9 +94,8 @@ _FALLBACK_PROFILES = (
         "mood": "亲子呵护",
         "bpm": 88,
         "prompt": (
-            "Pure instrumental background music, no vocals, no singing, gentle warm celesta, soft "
-            "acoustic piano and delicate plucked guitar, cozy comforting pediatric care mood, "
-            "88 BPM, warm soft high frequencies suitable under friendly voiceover"
+            "gentle warm celesta, soft acoustic piano, delicate plucked guitar, cozy comforting "
+            "pediatric care background music, 88 bpm, pure instrumental, no vocals, warm rounded highs"
         ),
     },
     {
@@ -104,9 +104,8 @@ _FALLBACK_PROFILES = (
         "mood": "明快易懂",
         "bpm": 96,
         "prompt": (
-            "Pure instrumental background music, no vocals, no singing, chill light lofi electric piano, "
-            "soft plucked melody and subtle muted beat, engaging science myth-busting explainer vibe, "
-            "96 BPM, clean balanced background mix that never competes with speech"
+            "chill light lofi electric piano, soft plucked melody, subtle muted beat, engaging science "
+            "explainer background music, 96 bpm, pure instrumental, no vocals, clean balanced mix"
         ),
     },
 )
@@ -234,7 +233,7 @@ def _plan_prompt_fallback(norm):
     if norm["hint"]:
         prompt = f"{prompt}, user preference: {norm['hint']}"
     if norm["variant"] > 0:
-        prompt = f"{prompt}, fresh melodic variation take {norm['variant'] + 1}"
+        prompt = f"{prompt}, fresh melodic arrangement variation {norm['variant'] + 1}"
     desc = f"根据《{(norm['title'] or norm['topic'] or '本视频')[:18]}》主题定制，以{profile['styleLabel']}营造{profile['mood']}氛围。"
     if norm["hint"]:
         desc = f"结合「{norm['hint'][:18]}」偏好，以{profile['styleLabel']}打造{profile['mood']}纯音乐配乐。"
@@ -243,7 +242,7 @@ def _plan_prompt_fallback(norm):
         "mood": profile["mood"],
         "styleLabel": profile["styleLabel"],
         "bpm": profile["bpm"],
-        "prompt": prompt[:1500],
+        "prompt": prompt[:980],
         "description": desc,
         "hint": norm["hint"],
         "variant": norm["variant"],
@@ -253,7 +252,7 @@ def _plan_prompt_fallback(norm):
 
 
 def plan_music_prompt(context, deepseek_fn=None, text_model=None):
-    """Compose a tailored MiniMax music prompt from the video's theme, drug, and narration."""
+    """Compose a tailored Mureka instrumental prompt from the video's theme, drug, and narration."""
     norm = normalize_context(context)
     fallback = _plan_prompt_fallback(norm)
     if not deepseek_fn or not text_model:
@@ -271,7 +270,7 @@ def plan_music_prompt(context, deepseek_fn=None, text_model=None):
 
     user_prompt = (
         "你是专业医疗健康科普视频的音乐总监。请根据以下用药科普视频的主题、关联药品和口播内容，"
-        "为 MiniMax 音乐生成模型（纯音乐模式 is_instrumental=true）撰写一段精准的音乐提示词，并只返回 JSON。\n"
+        "为 Mureka 纯音乐生成接口（/v1/instrumental/generate）撰写一段精准的纯音乐风格提示词，并只返回 JSON。\n"
         f"视频标题：{norm['title'] or '（未命名）'}\n"
         f"科普主题：{norm['topic'] or '用药科普'}\n"
         f"关联药品：{norm['drug'] or '无'}\n"
@@ -279,12 +278,12 @@ def plan_music_prompt(context, deepseek_fn=None, text_model=None):
         f"{hint_text}{avoid_text}\n\n"
         "要求：\n"
         "1. 必须是纯器乐背景音乐（无任何演唱、哼唱或人声），听感温和克制、留出人声频段，绝不抢药师口播。\n"
-        "2. prompt 字段使用清晰的英文音乐制作描述（约 35-70 词），写明流派、主奏乐器、氛围情绪、BPM（68-112）以及适合口播铺底的干净混音质感。\n"
+        "2. prompt 字段使用凝练精准的英文音乐风格标签与描述（不超过 600 字符），写明流派、主奏乐器、氛围情绪、BPM（68-112）以及适合口播铺底的干净混音质感。\n"
         "3. 输出严格 JSON：\n"
         '{"title":"6-14字中文配乐标题，贴合本视频内容","mood":"4字情绪标签",'
         '"styleLabel":"4-8字中文配器风格名，如温暖原声钢琴、轻快木琴吉他",'
         '"bpm":68到112的整数,'
-        '"prompt":"英文纯音乐生成提示词，必须包含 Pure instrumental background music, no vocals",'
+        '"prompt":"英文纯音乐风格提示词，必须包含 pure instrumental, no vocals",'
         '"description":"一句不超过45字的中文说明，解释为什么这段配乐契合本视频主题与内容"}'
     )
     try:
@@ -305,11 +304,11 @@ def plan_music_prompt(context, deepseek_fn=None, text_model=None):
         parsed = _extract_json(response["choices"][0]["message"]["content"])
         if not isinstance(parsed, dict):
             return fallback
-        prompt_text = _clean_text(parsed.get("prompt", ""), 1500)
-        if len(prompt_text) < 16:
+        prompt_text = _clean_text(parsed.get("prompt", ""), 980)
+        if len(prompt_text) < 12:
             return fallback
-        if not re.search(r"instrumental|纯音乐|无人声", prompt_text, re.I):
-            prompt_text = "Pure instrumental background music, no vocals, " + prompt_text
+        if not re.search(r"instrumental|纯音乐|no vocals", prompt_text, re.I):
+            prompt_text = ("pure instrumental, no vocals, " + prompt_text)[:980]
         try:
             bpm = max(66, min(116, int(round(float(parsed.get("bpm", fallback["bpm"]))))))
         except (TypeError, ValueError):
@@ -330,78 +329,67 @@ def plan_music_prompt(context, deepseek_fn=None, text_model=None):
         return fallback
 
 
-def _minimax_post(host, path, body, api_key, timeout=180):
-    request = Request(
-        host.rstrip("/") + path,
-        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Authorization": "Bearer " + api_key,
-            "Content-Type": "application/json",
-        },
-    )
+def _mureka_request(host, path, api_key, body=None, timeout=60):
+    headers = {"Authorization": "Bearer " + api_key}
+    data = None
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+        data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    request = Request(host.rstrip("/") + path, data=data, headers=headers)
     try:
         with urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8", "replace")
-            return response.status, json.loads(raw)
+            return response.status, json.loads(raw) if raw.strip() else {}
     except HTTPError as error:
         raw = error.read().decode("utf-8", "replace")
         try:
             parsed = json.loads(raw)
         except ValueError:
-            parsed = {"base_resp": {"status_code": error.code, "status_msg": raw[:300]}}
+            parsed = {"error": {"message": raw[:320]}}
         return error.code, parsed
     except (URLError, TimeoutError) as error:
-        raise ValueError(f"暂时连不上 MiniMax 服务（{host}），请检查网络后重试。") from error
+        raise ValueError(f"暂时连不上 Mureka 服务（{host}），请检查网络后重试。") from error
 
 
-def _is_auth_error(http_code, payload):
+def _format_mureka_error(http_code, payload, api_key):
+    err_obj = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(err_obj, dict):
+        msg = str(err_obj.get("message") or err_obj.get("code") or "")
+    elif isinstance(payload, dict):
+        msg = str(payload.get("message") or payload.get("failed_reason") or "")
+    else:
+        msg = ""
+    msg = msg.replace(api_key, "[已隐藏]")[:320]
     if http_code in (401, 403):
-        return True
-    base = payload.get("base_resp") if isinstance(payload, dict) else {}
-    code = base.get("status_code") if isinstance(base, dict) else None
-    return code in (1004, 2049)
+        return "Mureka 未接受此 API Key，请检查是否复制完整或已失效。"
+    if http_code == 402 or re.search(r"balance|credit|insufficient|payment|quota", msg, re.I):
+        return f"Mureka 账户余额不足，请先在 Mureka 开放平台充值后再试。{('（' + msg + '）') if msg else ''}"
+    if http_code == 429:
+        return "Mureka 接口并发或频率达到上限，请稍等片刻后重试。"
+    return f"Mureka 音乐生成失败（HTTP {http_code}）：{msg or '请稍后重试'}"
 
 
-def _format_minimax_error(http_code, payload, api_key):
-    base = payload.get("base_resp") if isinstance(payload, dict) else {}
-    code = base.get("status_code") if isinstance(base, dict) else None
-    msg = str((base or {}).get("status_msg") or "").replace(api_key, "[已隐藏]")[:320]
-    if _is_auth_error(http_code, payload):
-        return "MiniMax 未接受此 API Key，请检查是否复制完整、未过期，或所属账户权限。"
-    if code == 1008:
-        return "MiniMax 账户余额不足，请先充值后再试。"
-    if code in (1002, 1039):
-        return "MiniMax 接口触发频率限制，请稍等片刻后重试。"
-    if code in (1026, 1027):
-        return "配乐提示词未通过 MiniMax 安全审核，请微调偏好描述后重试。"
-    if code is not None:
-        return f"MiniMax 音乐生成失败（错误码 {code}）：{msg or '请稍后重试'}"
-    return f"MiniMax 返回 HTTP {http_code}：{msg or '请稍后重试'}"
-
-
-def verify_minimax_key(api_key, timeout=15):
-    """Validate a MiniMax API Key with zero billing by probing empty music_generation params."""
-    if not isinstance(api_key, str) or not re.fullmatch(r"[!-~]{1,1024}", api_key.strip()):
-        raise ValueError("请输入有效的 MiniMax API Key")
+def verify_mureka_key(api_key, timeout=15):
+    """Validate a Mureka API Key at zero cost via GET /v1/account/billing."""
+    if not isinstance(api_key, str) or not re.fullmatch(r"[!-~]{1,512}", api_key.strip()):
+        raise ValueError("请输入有效的 Mureka API Key")
     key = api_key.strip()
     last_error = None
-    for host in MINIMAX_HOSTS:
+    for host in MUREKA_HOSTS:
         try:
-            http_code, payload = _minimax_post(host, "/v1/music_generation", {}, key, timeout=timeout)
+            http_code, payload = _mureka_request(host, "/v1/account/billing", key, timeout=timeout)
         except ValueError as err:
             last_error = err
             continue
-        if _is_auth_error(http_code, payload):
-            last_error = ValueError(_format_minimax_error(http_code, payload, key))
+        if http_code in (401, 403):
+            last_error = ValueError(_format_mureka_error(http_code, payload, key))
             continue
-        # Non-auth response (e.g. status_code 2013 invalid params) confirms the key is accepted on this host.
-        if isinstance(payload, dict) and isinstance(payload.get("base_resp"), dict):
-            return host
-        if 200 <= http_code < 500:
-            return host
+        if 200 <= http_code < 300 and isinstance(payload, dict):
+            return host, payload
+        last_error = ValueError(_format_mureka_error(http_code, payload, key))
     if last_error is not None:
         raise last_error
-    raise ValueError("MiniMax API Key 验证失败，请检查网络或密钥是否正确。")
+    raise ValueError("Mureka API Key 验证失败，请检查网络或密钥是否正确。")
 
 
 def _detect_audio_ext(raw_bytes):
@@ -420,97 +408,128 @@ def _download_audio_bytes(url, timeout=120):
         with urlopen(req, timeout=timeout) as response:
             data = response.read()
     except (HTTPError, URLError, TimeoutError) as error:
-        raise ValueError("下载 MiniMax 生成的背景音乐失败，请重试。") from error
+        raise ValueError("下载 Mureka 生成的背景音乐失败，请重试。") from error
     if len(data) < 1024:
-        raise ValueError("MiniMax 返回的音频文件内容异常，请重试。")
+        raise ValueError("Mureka 返回的音频文件内容异常，请重试。")
     return data
 
 
-def call_minimax_music(api_key, model, prompt, host=None, timeout=240):
-    """Invoke MiniMax /v1/music_generation to create pure instrumental background music."""
+def _read_billing_spending(host, api_key):
+    try:
+        code, data = _mureka_request(host, "/v1/account/billing", api_key, timeout=10)
+        if 200 <= code < 300 and isinstance(data, dict):
+            val = data.get("total_spending")
+            if isinstance(val, (int, float)):
+                return float(val)
+    except Exception:
+        pass
+    return None
+
+
+def call_mureka_instrumental(api_key, model, prompt, host=None, on_progress=None, poll_interval=2.5, max_polls=96):
+    """Submit an async Mureka instrumental generation task, poll until completion, and download MP3."""
     if not api_key:
-        raise ValueError("请先在「模型配置 → 背景音乐」填写 MiniMax API Key。")
+        raise ValueError("请先在「模型配置 → 背景音乐」填写 Mureka API Key。")
     if model not in MUSIC_MODELS:
         model = DEFAULT_MUSIC_MODEL
 
-    hosts = [host] if host in MINIMAX_HOSTS else list(MINIMAX_HOSTS)
-    if host in MINIMAX_HOSTS:
-        for alt in MINIMAX_HOSTS:
+    hosts = [host] if host in MUREKA_HOSTS else list(MUREKA_HOSTS)
+    if host in MUREKA_HOSTS:
+        for alt in MUREKA_HOSTS:
             if alt not in hosts:
                 hosts.append(alt)
 
-    base_body = {
-        "model": model,
-        "prompt": prompt,
-        "is_instrumental": True,
-        "output_format": "url",
-        "audio_setting": {
-            "sample_rate": 44100,
-            "bitrate": 256000,
-            "format": "mp3",
-        },
-    }
-
+    used_host = None
+    task_id = None
     last_error = None
+    spending_before = None
+
     for idx, current_host in enumerate(hosts):
-        body = dict(base_body)
+        spending_before = _read_billing_spending(current_host, api_key)
+        body = {"model": model, "prompt": prompt[:1000], "n": 1}
         try:
-            http_code, payload = _minimax_post(current_host, "/v1/music_generation", body, api_key, timeout=timeout)
+            http_code, payload = _mureka_request(current_host, "/v1/instrumental/generate", api_key, body=body, timeout=45)
         except ValueError as err:
             last_error = err
             continue
 
-        # If auth fails on the first host (e.g. user's key is for global .io rather than domestic .com), try next host.
-        if _is_auth_error(http_code, payload) and idx + 1 < len(hosts):
-            last_error = ValueError(_format_minimax_error(http_code, payload, api_key))
+        if http_code in (401, 403) and idx + 1 < len(hosts):
+            last_error = ValueError(_format_mureka_error(http_code, payload, api_key))
             continue
 
-        base_resp = payload.get("base_resp") if isinstance(payload, dict) else {}
-        status_code = base_resp.get("status_code") if isinstance(base_resp, dict) else None
-        status_msg = str((base_resp or {}).get("status_msg") or "")
+        # Compatibility retry if endpoint rejects explicit n=1
+        if http_code == 400 and isinstance(payload, dict) and "n" in str(payload).lower():
+            compat_body = {"model": model, "prompt": prompt[:1000]}
+            http_code, payload = _mureka_request(current_host, "/v1/instrumental/generate", api_key, body=compat_body, timeout=45)
 
-        # Compatibility fallback for older music-2.5 if it rejects is_instrumental and requires lyrics tag.
-        if status_code == 2013 and "lyrics" in status_msg.lower() and body.get("is_instrumental"):
-            compat_body = {k: v for k, v in body.items() if k != "is_instrumental"}
-            compat_body["lyrics"] = "[Inst]\n[Outro]"
-            http_code, payload = _minimax_post(current_host, "/v1/music_generation", compat_body, api_key, timeout=timeout)
-            base_resp = payload.get("base_resp") if isinstance(payload, dict) else {}
-            status_code = base_resp.get("status_code") if isinstance(base_resp, dict) else None
+        if http_code >= 400 or not isinstance(payload, dict) or not payload.get("id"):
+            raise ValueError(_format_mureka_error(http_code, payload, api_key))
 
-        if http_code >= 400 or (status_code is not None and status_code != 0):
-            raise ValueError(_format_minimax_error(http_code, payload, api_key))
+        used_host = current_host
+        task_id = str(payload["id"])
+        break
 
-        data = payload.get("data") if isinstance(payload, dict) else None
-        audio_field = data.get("audio") if isinstance(data, dict) else None
-        if not isinstance(audio_field, str) or not audio_field.strip():
-            raise ValueError("MiniMax 未返回背景音乐音频数据，请稍后重试。")
+    if not task_id or not used_host:
+        if last_error is not None:
+            raise last_error
+        raise ValueError("Mureka 未返回纯音乐生成任务 ID，请稍后重试。")
 
-        audio_str = audio_field.strip()
-        if audio_str.startswith(("http://", "https://")):
-            raw_bytes = _download_audio_bytes(audio_str, timeout=120)
-        else:
-            try:
-                raw_bytes = bytes.fromhex(audio_str)
-            except ValueError as err:
-                raise ValueError("无法解析 MiniMax 返回的音频编码，请重试。") from err
-            if len(raw_bytes) < 1024:
-                raise ValueError("MiniMax 返回的音频数据不完整，请重试。")
+    status_labels = {
+        "preparing": "准备中",
+        "queued": "排队中",
+        "running": "编曲生成中",
+        "streaming": "音频合成中",
+        "reviewing": "质检审核中",
+    }
 
-        ext = _detect_audio_ext(raw_bytes)
-        extra = payload.get("extra_info") if isinstance(payload, dict) else {}
-        dur_ms = extra.get("music_duration") if isinstance(extra, dict) else None
-        duration = round(float(dur_ms) / 1000.0, 2) if isinstance(dur_ms, (int, float)) and dur_ms > 0 else None
-        trace_id = str(payload.get("trace_id") or "") if isinstance(payload, dict) else ""
-        return raw_bytes, ext, duration, current_host, trace_id
+    for _ in range(max_polls):
+        time.sleep(poll_interval)
+        http_code, payload = _mureka_request(used_host, f"/v1/instrumental/query/{task_id}", api_key, timeout=30)
+        if http_code >= 400 or not isinstance(payload, dict):
+            raise ValueError(_format_mureka_error(http_code, payload, api_key))
 
-    if last_error is not None:
-        raise last_error
-    raise ValueError("MiniMax 背景音乐生成失败，请检查 API Key 与网络连接后重试。")
+        status = str(payload.get("status") or "").lower()
+        if status == "succeeded":
+            choices = payload.get("choices")
+            if not isinstance(choices, list) or not choices:
+                raise ValueError("Mureka 任务已完成，但未返回音频列表。")
+            first = choices[0] if isinstance(choices[0], dict) else {}
+            audio_url = first.get("url") or first.get("flac_url")
+            if not isinstance(audio_url, str) or not audio_url.strip().startswith(("http://", "https://")):
+                raise ValueError("Mureka 任务已完成，但缺少音频下载地址。")
+            raw_bytes = _download_audio_bytes(audio_url.strip(), timeout=120)
+            ext = _detect_audio_ext(raw_bytes)
+            raw_dur = first.get("duration")
+            duration = None
+            if isinstance(raw_dur, (int, float)) and raw_dur > 0:
+                duration = round(float(raw_dur) / 1000.0 if raw_dur > 1000 else float(raw_dur), 2)
+            actual_model = str(payload.get("model") or model)
+            spending_after = _read_billing_spending(used_host, api_key)
+            spent_cny = None
+            if (
+                used_host == "https://api.mureka.cn"
+                and spending_before is not None
+                and spending_after is not None
+                and spending_after >= spending_before
+            ):
+                delta_cents = spending_after - spending_before
+                if delta_cents > 0:
+                    spent_cny = round(delta_cents / 100.0, 4)
+            return raw_bytes, ext, duration, used_host, task_id, actual_model, spent_cny
+
+        if status in ("failed", "timeouted", "cancelled"):
+            reason = str(payload.get("failed_reason") or status).replace(api_key, "[已隐藏]")[:320]
+            raise ValueError(f"Mureka 背景音乐生成未完成：{reason}")
+
+        if on_progress:
+            on_progress(status_labels.get(status, "生成中"))
+
+    raise ValueError("Mureka 背景音乐生成超时，请稍后重试。")
 
 
-LIBRARY_INDEX_NAME = "library.json"
-LIBRARY_URL_PREFIX = "/assets/music/generated/"
-AUDIO_EXTENSIONS = (".mp3", ".flac", ".wav")
+# ---------------------------------------------------------------------------
+# Project Music Library (`public/assets/music/generated/`)
+# ---------------------------------------------------------------------------
 
 
 def sanitize_filename_part(text, limit=32):
@@ -681,24 +700,26 @@ def delete_library_track(library_dir, track_id):
 def generate_music(
     context,
     library_dir,
-    minimax_key,
+    mureka_key,
     *,
     music_model=DEFAULT_MUSIC_MODEL,
-    minimax_host=None,
+    mureka_host=None,
     deepseek_fn=None,
     text_model=None,
+    on_progress=None,
 ):
-    """Plan prompt from video content, generate pure instrumental BGM via MiniMax API, and save into project library."""
-    if not minimax_key:
-        raise ValueError("请先在「模型配置 → 背景音乐」填写 MiniMax API Key，再生成专属背景音乐。")
+    """Plan prompt from video content, generate pure instrumental BGM via Mureka API, and save into project library."""
+    if not mureka_key:
+        raise ValueError("请先在「模型配置 → 背景音乐」填写 Mureka API Key，再生成专属背景音乐。")
     model = music_model if music_model in MUSIC_MODELS else DEFAULT_MUSIC_MODEL
     norm = normalize_context(context)
     plan = plan_music_prompt(norm, deepseek_fn=deepseek_fn, text_model=text_model)
-    raw_bytes, ext, duration, used_host, trace_id = call_minimax_music(
-        minimax_key,
+    raw_bytes, ext, duration, used_host, task_id, actual_model, spent_cny = call_mureka_instrumental(
+        mureka_key,
         model,
         plan["prompt"],
-        host=minimax_host,
+        host=mureka_host,
+        on_progress=on_progress,
     )
     lib_path = Path(library_dir)
     lib_path.mkdir(parents=True, exist_ok=True)
@@ -726,14 +747,15 @@ def generate_music(
         "drug": norm["drug"],
         "hint": plan["hint"],
         "variant": plan["variant"],
-        "model": model,
-        "modelLabel": MUSIC_MODELS[model][0],
+        "model": actual_model or model,
+        "modelLabel": MUSIC_MODELS.get(model, (actual_model or model,))[0],
         "promptSource": plan["promptSource"],
-        "provider": "minimax",
+        "provider": "mureka",
         "contentHash": plan["contentHash"],
         "duration": duration,
         "host": used_host,
-        "traceId": trace_id,
+        "taskId": task_id,
+        "spentCny": spent_cny,
         "createdAt": int(time.time()),
     }
     existing = list_music_library(lib_path)

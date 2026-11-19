@@ -1421,9 +1421,9 @@
     const usesSpeech = w.settings.voice !== "无配音";
     const musicChoice = hooks.videoMusic(w);
     const needsAutoMusicKey = musicChoice === "auto" && !w.customMusic?.url;
-    if (needsAutoMusicKey && !hooks.minimaxKeyPresent) {
-      hooks.notify("当前背景音乐为「自动搭配」，请先配置 MiniMax API Key 或切换其他配乐。", "warn");
-      hooks.openApiKeys("minimax");
+    if (needsAutoMusicKey && !hooks.autoMusicReady) {
+      hooks.notify("当前背景音乐为「自动搭配」，请先在「背景音乐」配置 Mureka API Key，或切换其他配乐。", "warn");
+      hooks.openApiKeys("mureka");
       return;
     }
     const rawAvatarMode = w.settings.avatarMode ?? dataStore.settings?.avatarMode ?? defaults.avatarMode;
