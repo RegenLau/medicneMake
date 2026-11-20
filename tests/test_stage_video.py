@@ -71,6 +71,25 @@ class StageVideoTests(unittest.TestCase):
         _, _, shots, _, _ = stage_video.stage_input(p, server.ASSETS, server.media_path)
         self.assertEqual(shots[0]["line"], long_line)
 
+    def test_card_and_scene_illustration_resolves_local_file(self):
+        for kind in ("card", "scene"):
+            with self.subTest(kind=kind):
+                p = self.payload(kind)
+                p["items"][0]["points"]["items"] = [{"title": "找到栏目", "detail": "", "tag": ""}]
+                p["items"][0]["points"]["takeaway"] = "拿不准问药师"
+                p["items"][0]["content"].update(art="/assets/template-info-tablet.jpg", artPrompt="说明书")
+                _, _, shots, _, _ = stage_video.stage_input(p, server.ASSETS, server.media_path)
+                self.assertTrue(shots[0]["artUrl"].startswith("file:"))
+                self.assertEqual("找到栏目", shots[0]["items"][0]["title"])
+                self.assertEqual("拿不准问药师", shots[0]["takeaway"])
+                for bad in ("https://example.invalid/art.png", "/media/captions.vtt"):
+                    p["items"][0]["content"]["art"] = bad
+                    with self.assertRaises(ValueError):
+                        stage_video.stage_input(p, server.ASSETS, server.media_path)
+        p = self.payload("card")
+        _, _, shots, _, _ = stage_video.stage_input(p, server.ASSETS, server.media_path)
+        self.assertNotIn("artUrl", shots[0])
+
     def test_transition_field_is_optional_and_validated(self):
         p = self.payload()
         _, _, shots, _, _ = stage_video.stage_input(p, server.ASSETS, server.media_path)

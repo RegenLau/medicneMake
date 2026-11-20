@@ -138,9 +138,13 @@ const StageStudio = (() => {
 
   function selectKind(w, shot, kind) {
     const transition = shot.content.transition;
+    const from = shot.content;
     shot.variants[shot.content.kind] = shot.content;
     shot.content = shot.variants[kind] || initialContent(kind, shot);
     shot.content.kind = kind;
+    if (artKinds.has(kind) && artKinds.has(from.kind) && !shot.content.art && !shot.content.artPrompt) {
+      for (const key of ["art", "artName", "artPrompt"]) if (from[key]) shot.content[key] = from[key];
+    }
     if (transition !== undefined) shot.content.transition = transition;
     shot.variants[kind] = shot.content;
   }
@@ -370,7 +374,7 @@ const StageStudio = (() => {
 
   function usePlan(shot, content) {
     const saved = shot.content.kind === content.kind ? shot.content : shot.variants[content.kind] || {};
-    const fields = ["image","outroImage","focusRegions","libraryArtId","libraryArtName"];
+    const fields = ["image","outroImage","focusRegions","libraryArtId","libraryArtName","art","artName"];
     if (content.kind === "mg" && content.mgRequest && !content.assetId) fields.push("assetId","assetName","fit","overlay");
     const media = Object.fromEntries(fields
       .filter(field => saved[field] !== undefined).map(field => [field,saved[field]]));
@@ -469,6 +473,7 @@ const StageStudio = (() => {
       const spec = {...content, kind:content.kind, name:shot.name, line:shot.line, items:shot.points.items,
         takeaway:shot.points.takeaway, listTitle:shot.points.listTitle, labels:shot.points.highlightWords, start, end, captions,
         ...(content.libraryArtId ? {libraryArtUrl:StudioAssets.url(content.libraryArtId)} : {}),
+        ...(artKinds.has(content.kind) && content.art ? {artUrl:content.art} : {}),
         ...(content.assetId ? (content.kind === "mg"
           ? {motionAssetUrl:StudioAssets.motionUrl(content.assetId)} : {assetUrl:StudioAssets.url(content.assetId)}) : {})};
       start = end;
@@ -500,9 +505,9 @@ const StageStudio = (() => {
     if (c.kind === "card") return select("动效方式", "motionStyle", window.CODE_MOTION_MOTION_CHOICES, c.motionStyle);
     if (c.kind === "scene") return '<div class="tpl-two-col">' + select("分镜版式", "visual", pair(CODE_MOTION_VISUALS), c.visual) +
       select("动效方式", "motion", pair(CODE_MOTION_MOTIONS), c.motion) + select("主题图形", "motif", pair(CODE_MOTION_MOTIFS), c.motif) +
-      select("强调色调", "tone", pair(CODE_MOTION_TONES), c.tone) + '</div><div class="asset-inline">' +
+      select("强调色调", "tone", pair(CODE_MOTION_TONES), c.tone) + '</div>' + (c.art ? "" : '<div class="asset-inline">' +
       btn(esc(c.libraryArtName || "选配图或 SVG"), "stage-choose", "outline", "art") +
-      (c.libraryArtId ? btn("恢复内置图形", "stage-clear", "textbtn", "art") : "") + '</div>';
+      (c.libraryArtId ? btn("恢复内置图形", "stage-clear", "textbtn", "art") : "") + '</div>');
     return c.beats.map((beat, index) => `<fieldset class="svg-beat-fields"><legend>动作 ${index + 1}</legend>` +
       select("道具动作", "beat-action:" + index, Object.entries(config.svgMotion.actions), beat.action) +
       text("画面标签", "beat-label:" + index, beat.label, 10) + text("对应口播片段", "beat-line:" + index, beat.line, 55) +
@@ -511,6 +516,37 @@ const StageStudio = (() => {
   }
 
   const productionTitle = content => content.reason || content.assetId ? "重新制作本幕" : "制作本幕";
+  const artKinds = new Set(["card", "scene"]);
+  const missingArt = w => w.stagePlan.shots.flatMap((shot, i) =>
+    artKinds.has(shot.content.kind) && shot.content.artPrompt?.trim() && !shot.content.art ? [i] : []);
+
+  function artFields(c) {
+    const note = c.art ? (c.artName ? `已选素材：${esc(c.artName)}。` : "已生成插画。") + "画面左侧显示插画，右侧逐条显示要点。"
+      : "生成后，画面左侧显示插画，右侧逐条显示要点。插画由火山方舟按张计费。";
+    return '<fieldset class="svg-beat-fields stage-art-fields"><legend>本幕插画</legend>' +
+      `<label class="field">插画描述<textarea data-stage-field="artPrompt" maxlength="300" rows="3" placeholder="例如：妈妈用带刻度的量杯给孩子倒退烧药混悬液">${esc(c.artPrompt || "")}</textarea></label>` +
+      '<div class="asset-inline">' + btn(c.art ? "重新生成插画" : "生成本幕插画", "stage-art", c.art ? "outline" : "primary", "one") +
+      btn(c.art ? "从素材库换插画" : "从素材库选插画", "stage-choose", "outline", "art-image") +
+      (c.art?.startsWith("/media/") ? btn("收入素材库", "stage-collect", "textbtn", "art") : "") +
+      (c.art ? btn("移除插画", "stage-clear", "textbtn", "art-image") : "") + '</div>' +
+      `<p class="small">${note}</p></fieldset>`;
+  }
+
+  function illustrationPrompt(w, shot) {
+    const warm = (w.templateTheme || "medical") === "warm";
+    const items = shot.points.items.map(item => item.title).filter(Boolean).join("、");
+    const subject = shot.content.artPrompt?.trim() || `表现「${shot.name}」：${items || shot.line.slice(0, 80)}`;
+    return [
+      "用途：医院药师用药科普短视频的配图插画。插画放在画面左侧的方形区域，文字由程序另外叠加在右侧，插画本身不含任何文字。",
+      `画面内容：${subject}`,
+      warm
+        ? "风格：温暖亲切的扁平手绘医学插画，柔和暖米白纯色背景（#fdf5e7），深炭蓝细描边（#2c3e50），暖砖红（#cf5228）、柔和草绿（#5c9145）与淡琥珀色点缀，色块干净，轻微纸张质感。"
+        : "风格：现代清爽的扁平矢量医学插画，极浅蓝纯色背景（#eef5fd），以医学蓝（#1466cc）和深藏青（#122d4c）为主色，少量珊瑚橙（#e6592d）点缀，柔和渐变与轻阴影，线条圆润干净。",
+      "构图：1:1 方形，一个清晰主体位于中央，约占画面 60%，四周留出均匀空白；背景纯色铺满，不画边框、卡片、画框或分栏。",
+      w.drug && `涉及药品：${w.drug}（通用外观，不画品牌名、商品 Logo 和价格）。`,
+      "禁止：画面中不出现任何文字、汉字、字母、数字、标签、对话框文字、品牌名、Logo 或水印；不画医生或主讲人头像；不画红十字标志；不做信息图排版。",
+    ].filter(Boolean).join("\n").slice(0, 2100);
+  }
 
   function hasProductionJob(w) {
     return isActive(w) && Boolean(w.job?.stageImageSlots || w.job?.stageDraft === "produce");
@@ -520,7 +556,8 @@ const StageStudio = (() => {
     const area = $("#stage-production-job");
     if (!area || !hasProductionJob(w)) return;
     const job = w.job;
-    const subject = job.stageShotIndex === undefined ? "缺失配图" : `第 ${job.stageShotIndex + 1} 幕${job.stageImageSlots ? "配图" : "画面"}`;
+    const picture = job.stageArt ? "插画" : "配图";
+    const subject = job.stageShotIndex === undefined ? "缺失" + picture : `第 ${job.stageShotIndex + 1} 幕${job.stageImageSlots ? picture : "画面"}`;
     area.hidden = false;
     area.innerHTML = job.error
       ? `<div class="banner err" role="alert">${subject}未制作完成。${esc(job.error)}<div class="banner-actions">` +
@@ -544,7 +581,7 @@ const StageStudio = (() => {
     if (kind !== "image" && config.stageShotProduction) {
       actions += btn(productionTitle(content), "stage-produce", actions ? "outline" : "primary");
     }
-    return actions ? '<div class="asset-inline">' + actions + '</div>' : "";
+    return (actions ? '<div class="asset-inline">' + actions + '</div>' : "") + (artKinds.has(kind) ? artFields(content) : "");
   }
 
   function soundControls(w) {
@@ -635,6 +672,7 @@ const StageStudio = (() => {
     const actions = (isMix ? btn("重新编排全片","stage-replan","outline","all") : "") +
       btn("全片模型与配音", "work-settings", "outline") +
       (shots.some(shot => shot.content.kind === "image" && !shot.content.image) ? btn("生成缺失配图", "stage-images", "outline", "missing") : "") +
+      (missingArt(w).length ? btn("生成缺失插画", "stage-art", "outline", "missing") : "") +
       btn("合成视频", "stage-compose", "primary");
     const strip = shots.map((s,i) => `<button type="button" class="scene-choice" data-action="stage-select" data-val="${i}" aria-pressed="${i === index}"${isMix && s.content.reason ? ` title="${esc(s.content.reason)}"` : ""}>
       <span class="scene-choice-title">${i + 1} ${esc(s.name)}</span><span class="scene-choice-meta"><span class="stage-kind-badge">${kinds[s.content.kind]}</span>${s.seconds} 秒${isMix && s.content.adjusted ? ' · 已调整' : ''}</span></button>`).join("");
@@ -881,12 +919,36 @@ const StageStudio = (() => {
     });
   }
 
-  function installImages(w, indices, output) {
+  function prepareArt(w, mode) {
+    const p = w.stagePlan;
+    const indices = mode === "one" ? [selected.get(w) || 0] : missingArt(w);
+    if (!indices.length || w.job || indices.some(i => !artKinds.has(p.shots[i].content.kind))) return;
+    if (!checkShotText(w, indices)) return;
+    const settings = {...w.settings, ratio:"1:1"};
+    return authorize({...w, settings}, indices.length, "images", () => {
+      const items = indices.map((index,i) => ({prompt:illustrationPrompt(w, p.shots[index]), variant:i + 1}));
+      const job = createJob(w, "stage-images", items, settings);
+      delete job.payload.storyboard;
+      Object.assign(job.payload, {template:true, styleReference:false});
+      job.stageImageSlots = indices;
+      job.stageArt = true;
+      if (mode === "one") job.stageShotIndex = indices[0];
+      w.job = job;
+      return sendJob(w);
+    });
+  }
+
+  function installImages(w, indices, output, job) {
+    const art = Boolean(job?.stageArt);
     indices.forEach((index,i) => {
       const shot = w.stagePlan.shots[index];
-      if (shot?.content.kind === "image" && output.images[i]) {
-        shot.content.image = output.images[i];
-        shot.variants.image = shot.content;
+      const fits = art ? artKinds.has(shot?.content.kind) : shot?.content.kind === "image";
+      if (fits && output.images[i]) {
+        if (art) {
+          shot.content.art = output.images[i];
+          delete shot.content.artName;
+        } else shot.content.image = output.images[i];
+        shot.variants[shot.content.kind] = shot.content;
       }
     });
     touch(w);
@@ -1060,8 +1122,9 @@ const StageStudio = (() => {
       }
     } else if (action === "stage-choose" && shot) {
       const content = shot.content;
-      StudioAssets.pick(value === "sfx" ? ["sfx"] : value === "image" ? ["image"] : value === "mg" ? ["lottie","mg"] : ["image", "svg"], item => {
+      StudioAssets.pick(value === "sfx" ? ["sfx"] : value === "image" || value === "art-image" ? ["image"] : value === "mg" ? ["lottie","mg"] : ["image", "svg"], item => {
         if (value === "image") content.image = item.url;
+        else if (value === "art-image") { content.art = item.url; content.artName = item.name; }
         else if (value === "asset" || value === "mg") {
           content.assetId=item.id;
           content.assetName=item.name;
@@ -1075,8 +1138,11 @@ const StageStudio = (() => {
       return true;
     } else if (action === "stage-clear" && shot) {
       if (value === "sfx") { delete shot.sfxId; delete shot.sfxName; }
-      for (const key of ({image:["image"],asset:["assetId","assetName"],mg:["assetId","assetName"],art:["libraryArtId","libraryArtName"]}[value] || [])) delete shot.content[key];
+      for (const key of ({image:["image"],asset:["assetId","assetName"],mg:["assetId","assetName"],art:["libraryArtId","libraryArtName"],"art-image":["art","artName"]}[value] || [])) delete shot.content[key];
       touch(w,true);
+    } else if (action === "stage-collect" && value === "art" && shot?.content.art) {
+      StudioAssets.collect(shot.content.art,{name:shot.name,topic:w.topic,ratio:"1:1",style:w.templateTheme || "medical",prompt:shot.content.artPrompt || ""});
+      return true;
     } else if (action === "stage-collect" && shot?.content.image) {
       StudioAssets.collect(shot.content.image,{name:shot.name,topic:w.topic,ratio:"16:9",style:w.templateTheme || "medical",prompt:shot.content.imagePrompt || ""});
       return true;
@@ -1085,6 +1151,7 @@ const StageStudio = (() => {
     } else if (action === "stage-beat-remove" && shot?.content.beats?.length > 1) {
       shot.content.beats.splice(Number(value),1); touch(w,true);
     } else if (action === "stage-images") { prepareImages(w,value); return true; }
+    else if (action === "stage-art") { prepareArt(w,value); return true; }
     else if (action === "stage-audition") { $("#stage-preview")?.audition?.(); return true; }
     else if (action === "stage-speech") { prepareSpeech(w,index); return true; }
     else if (action === "stage-compose") { compose(w); return true; }

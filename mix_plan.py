@@ -17,10 +17,16 @@ EDITOR_DIRECTION = (
     "再依据口播节拍和要点关系选动效。操作按实际顺序演示，对比突出差异，时间条件沿时间线展开，"
     "核对项逐条提示，单个结论用简单聚焦。让观众有时间看清关键步骤，避免没有信息作用的运动。"
 )
+ART_PROMPT_LIMIT = 300
+ART_RULE = (
+    "同时给 artPrompt：用不超过 120 字描述一张配在要点旁边的无文字插画。写清画面主体（药品剂型、器具、身体部位或人物动作）、"
+    "动作和场景，只画口播里出现的对象。不写画面里的文字、数字、品牌或医学结论，不画医生或主讲人。"
+)
 SHOT_DESIGN_RULES = {
-    "card": "用动效改变要点出现的顺序或聚焦方式。逐项说明可用 flow，需要定位一个要点时可用 spotlight。填写具体 motionStyle。",
+    "card": "用动效改变要点出现的顺序或聚焦方式。逐项说明可用 flow，需要定位一个要点时可用 spotlight。填写具体 motionStyle。"
+            + ART_RULE,
     "scene": "重排版式 visual 或调整信息如何展开的 motion。真实步骤用流程，时间条件用时间线，"
-             "有 2–3 个对照项时可并排比较，并列核对项可用清单。motif 应表现本幕的对象，tone 只辅助表达。",
+             "有 2–3 个对照项时可并排比较，并列核对项可用清单。motif 应表现本幕的对象，tone 只辅助表达。" + ART_RULE,
     "svg": "选 1–3 个能演示本幕实际动作的道具，按口播顺序排列。line 必须是对应的口播原文，label 不超过 10 字。"
            "重新制作时改变动作组合或顺序。只改标签不算新的演示。",
     "asset": "选择能直接说明本幕对象的素材，按画面重点决定静止、推近或平移。",
@@ -237,6 +243,10 @@ def content_for(kind, row, params, catalog, candidates):
     if not isinstance(params, dict) or params.keys() - capabilities.keys():
         raise ValueError("专有参数不符合清单")
     result = dict(params)
+    if "artPrompt" in result:
+        result["artPrompt"] = draft_content.string_field(result, "artPrompt", ART_PROMPT_LIMIT, optional=True)
+        if not result["artPrompt"]:
+            del result["artPrompt"]
     if kind == "scene":
         result.setdefault("visual", catalog["pointVisuals"][row["points"]["type"]])
         if not isinstance(result["visual"], str) or result["visual"] not in catalog["sceneDefaults"]:
@@ -283,14 +293,14 @@ def mg_request(value):
 def production_structure(content, points):
     kind = content["kind"]
     if kind == "scene":
-        return content["visual"], content["motion"] if points.get("items") else None
+        return content["visual"], content["motion"] if points.get("items") else None, content.get("artPrompt", "")
     if kind == "card":
         # Compare the motion that the player applies, including its automatic style.
         auto = {"cover": "focus-zoom", "compare": "contrast", "steps": "flow", "warning": "pulse", "summary": "flow"}
         motion = content["motionStyle"]
         return motion if motion != "auto" else auto.get(
             points["type"], "spotlight" if len(points.get("points", points.get("items", []))) >= 2 else "reveal"
-        )
+        ), content.get("artPrompt", "")
     if kind == "svg":
         return tuple(beat["action"] for beat in content["beats"])
     if kind == "asset":
@@ -513,6 +523,7 @@ def arrange(client, model, item, script, library):
             "reason 用一句话，逐字引用本幕 name，再具体说明这幕的对象、动作或信息结构为什么适合该方式。"
             "params 可为空对象。选择 SVG 时按清单选动作，给 1–3 段 beats，line 必须是对应口播中的原文片段，"
             "label 不超过 10 字，不重复演示与本幕无关的动作。"
+            "选择 card 或 scene 时，在 params 中" + ART_RULE +
             "若布局支持 mg 而且没有贴切的已确认 MG 素材，可额外输出 mgRequest（一句无文字动作描述，不超过 160 字），"
             "同时把 kind 和 params 设为能立即渲染的备用方式。"
             "可在 transition 中从清单选入场转场。延续同一个要点或画面时省略，使用淡入。"

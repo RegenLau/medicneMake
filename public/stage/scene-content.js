@@ -297,9 +297,61 @@
     }
   }
 
+  /* ===== Illustration split layout (AI art left, animated points right) ===== */
+  const ART_VISUAL_BY_TYPE = {
+    cover: "hook", explain: "mechanism", compare: "compare", steps: "steps",
+    warning: "warning", summary: "summary", timeline: "timeline", checklist: "checklist",
+  };
+  const ART_TONE_BY_VISUAL = { warning: "caution", checklist: "safe", summary: "safe" };
+  const WARN_ICON = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4m0 4h.01"/></svg>`;
+
+  function cardArtShot(shot, slide) {
+    const visual = ART_VISUAL_BY_TYPE[slide?.type] || "mechanism";
+    return { ...shot, visual, motion: resolveTemplateMotion(slide), motif: "none", tone: ART_TONE_BY_VISUAL[visual] || "primary" };
+  }
+
+  function artMarker(visual, item, i) {
+    if (visual === "timeline") return `<span class="cm-art-marker is-pill" data-cm-pill="${i}">${esc(item.tag || `时机 ${i + 1}`)}</span>`;
+    if (visual === "warning") return `<span class="cm-art-marker is-warn">${WARN_ICON}</span>`;
+    if (visual === "checklist") {
+      return `<svg class="cm-art-marker is-check" viewBox="0 0 30 30" aria-hidden="true">
+        <rect x="2" y="2" width="26" height="26" rx="8" fill="var(--v-green-soft)" stroke="var(--v-green)" stroke-width="2"/>
+        <path data-cm-check="${i}" d="M8.5 15.5 13 20l9-10" fill="none" stroke="var(--v-green)" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"/>
+      </svg>`;
+    }
+    return `<span class="cm-art-marker${visual === "compare" ? ` col-${i}` : ""}">${i + 1}</span>`;
+  }
+
+  function buildArtSceneHtml(shot, meta) {
+    const { visual, tone, items, takeaway } = meta;
+    const count = items.length;
+    const list = count ? `<div class="cm-art-list count-${count}">${items.map((it, i) => `
+      <div class="cm-item cm-art-item" data-cm-item="${i}">
+        <span class="cm-item-accent-bar" data-cm-bar="${i}"></span>
+        ${artMarker(visual, it, i)}
+        <div class="cm-art-text">
+          <strong>${esc(it.title)}</strong>
+          ${it.detail ? `<span>${esc(it.detail)}</span>` : ""}
+        </div>
+        ${it.tag && visual !== "timeline" ? `<span class="cm-tag">${esc(it.tag)}</span>` : ""}
+      </div>`).join("")}</div>` : "";
+    return `<div class="cm-stage tone-${esc(tone)}">
+      <section class="cm-scene cm-art-scene visual-${esc(visual)}" data-cm-scene>
+        <figure class="cm-art-panel" data-cm-art><img class="cm-art-img" src="${esc(shot.artUrl)}" alt=""></figure>
+        <div class="cm-art-copy${count ? "" : " is-sparse"}">
+          <h2 class="cm-heading cm-art-heading" data-cm-heading>${esc(shot.name)}</h2>
+          ${visual === "hook" && takeaway ? `<div class="cm-art-answer" data-cm-answer>${esc(takeaway)}</div>` : ""}
+          ${list}
+          ${visual !== "hook" && takeaway ? `<div class="cm-takeaway cm-art-takeaway" data-cm-takeaway>${esc(takeaway)}</div>` : ""}
+        </div>
+      </section>
+    </div>`;
+  }
+
   /* ===== 8 Content-Adaptive Scene DOM Builders ===== */
   function buildDynamicSceneHtml(shot, index, total) {
     const meta = resolveSceneMeta(shot, index, total);
+    if (shot.artUrl) return buildArtSceneHtml(shot, meta);
     const { visual, motif, tone, items, listTitle, takeaway } = meta;
     const uid = `s${index}`;
     const hasMotif = Boolean(shot.libraryArtUrl) || motif !== "none";
@@ -417,20 +469,22 @@
       </div>`;
     } else if (visual === "timeline") {
       const nodeCount = Math.max(2, Math.min(4, count));
-      const centers = Array.from({ length: nodeCount }, (_, i) => ((i + 0.5) * 896) / nodeCount);
-      const axisSvg = `<svg viewBox="0 0 896 44" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
-        <line x1="${centers[0]}" y1="18" x2="${centers[nodeCount - 1]}" y2="18" stroke="var(--v-card-border)" stroke-width="5" stroke-linecap="round"/>
-        <line data-cm-progress-rail x1="${centers[0]}" y1="18" x2="${centers[nodeCount - 1]}" y2="18" stroke="var(--cm-accent)" stroke-width="5" stroke-linecap="round" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"/>
-        ${centers.map((cx, i) => `
-          <line data-cm-drop="${i}" x1="${cx}" y1="22" x2="${cx}" y2="44" stroke="var(--cm-accent)" stroke-width="3" stroke-dasharray="3 3"/>
-          <circle data-cm-node="${i}" cx="${cx}" cy="18" r="11" fill="var(--v-card-bg)" stroke="var(--cm-accent)" stroke-width="4"/>
-          <circle data-cm-node-fill="${i}" cx="${cx}" cy="18" r="5" fill="var(--cm-accent)"/>
-        `).join("")}
+      const axisTrackSvg = `<svg viewBox="0 0 100 5" preserveAspectRatio="none" aria-hidden="true">
+        <line x1="0" y1="2.5" x2="100" y2="2.5" stroke="var(--v-card-border)" stroke-width="5"/>
+        <line data-cm-progress-rail x1="0" y1="2.5" x2="100" y2="2.5" stroke="var(--cm-accent)" stroke-width="5" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"/>
       </svg>`;
+      const axisNodes = Array.from({ length: nodeCount }, (_, i) => `
+        <div class="cm-tl-cell">
+          <span class="cm-tl-drop" data-cm-drop="${i}"></span>
+          <span class="cm-tl-node" data-cm-node="${i}"><span class="cm-tl-node-fill" data-cm-node-fill="${i}"></span></span>
+        </div>`).join("");
       bodyHtml = `<div class="cm-timeline-wrap">
         <div class="cm-timeline-tags count-${nodeCount}">${items.slice(0, nodeCount).map((it, i) => `
           <div><span class="cm-time-pill" data-cm-pill="${i}">${esc(it.tag || `时机 ${i + 1}`)}</span></div>`).join("")}</div>
-        <div class="cm-timeline-axis">${axisSvg}</div>
+        <div class="cm-timeline-axis count-${nodeCount}">
+          <div class="cm-tl-track" data-cm-axis-line>${axisTrackSvg}</div>
+          ${axisNodes}
+        </div>
         <div class="cm-timeline-cards count-${nodeCount}">${items.slice(0, nodeCount).map((it, i) => `
           <div class="cm-item cm-time-card" data-cm-item="${i}">
             <span class="cm-item-accent-bar" data-cm-bar="${i}"></span>
@@ -555,6 +609,19 @@
     // 1. Scene-level crisp entrance
     const sceneEnter = easeOutExpo(localTime / 0.34);
     dom.scene.style.opacity = String(sceneEnter.toFixed(3));
+
+    // Illustration: slide in, settle from a slight zoom, then drift slowly so the frame never freezes.
+    if (dom.art) {
+      const aEnter = easeOutExpo(localTime / 0.75);
+      dom.art.style.opacity = String(aEnter.toFixed(3));
+      dom.art.style.transform = `translateX(${((1 - aEnter) * -28).toFixed(2)}px)`;
+      if (dom.artImage) {
+        const drift = clamp(localTime / Math.max(1, duration));
+        const scale = 1.1 - 0.08 * aEnter + 0.05 * drift;
+        const lift = Math.sin(localTime * 0.9) * 4 * aEnter;
+        dom.artImage.style.transform = `translateY(${lift.toFixed(2)}px) scale(${scale.toFixed(4)})`;
+      }
+    }
 
     // 2. Motif animation (continuous + entrance)
     if (dom.motif) {
@@ -852,5 +919,5 @@
     return focus;
   }
 
-  global.StageSceneContent = { resolveSceneMeta, resolveActiveFocus, buildDynamicSceneHtml, animateDynamicScene, animateTemplateCard, sceneEvents };
+  global.StageSceneContent = { resolveSceneMeta, resolveActiveFocus, buildDynamicSceneHtml, animateDynamicScene, animateTemplateCard, sceneEvents, cardArtShot };
 })(globalThis);

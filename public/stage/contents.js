@@ -52,8 +52,13 @@
   }
 
   const card = {
-    mount(slot) { return { slot }; },
+    mount(slot, shot, ctx) {
+      if (!shot.artUrl) return { slot };
+      const artShot = StageSceneContent.cardArtShot(shot, ctx.slide);
+      return { ...scene.mount(slot, artShot, ctx), artShot };
+    },
     draw(dom, shot, time, { slide }) {
+      if (dom.artShot) return scene.draw(dom, dom.artShot, time);
       const focus = activeCue(shot, time)?.focus || "all";
       if (dom.focus !== focus) {
         dom.slot.innerHTML = TemplateVideo.renderFallbackCard(slide, focus);
@@ -75,6 +80,7 @@
       return {
         meta: StageSceneContent.resolveSceneMeta(shot, index, total),
         scene: one("scene"), heading: one("heading"), motif: one("motif"), answer: one("answer"),
+        art: one("art"), artImage: slot.querySelector(".cm-art-img"),
         takeaway: one("takeaway"), divider: one("divider"), progressRail: one("progress-rail"),
         items: all("item"), bars: all("bar"), checks: all("check"), connectors: all("connector"),
         dots: all("dot"), nodes: all("node"), nodeFills: all("node-fill"), pills: all("pill"),

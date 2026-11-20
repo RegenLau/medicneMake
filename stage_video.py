@@ -112,6 +112,15 @@ def validate_shot_common(item, *, allow_incomplete_text=False):
     return {"name": name, "line": line, "chapterIndex": chapter, "seconds": seconds, "cues": cue_list}
 
 
+def illustration(value, library, media_path, used):
+    path = media_path(value)
+    if path.suffix not in (".png", ".jpg", ".webp"):
+        raise ValueError("请选择有效的本幕插画。")
+    if value.startswith("/library/"):
+        used.append(library.resolve(unquote(value.removeprefix("/library/")), ("image",)))
+    return path.as_uri()
+
+
 def validate_shot(item, layout, compatible, library, media_path, pictures, used):
     base = validate_shot_common(item)
     points = item["points"]
@@ -136,6 +145,8 @@ def validate_shot(item, layout, compatible, library, media_path, pictures, used)
     if "sfxId" in item:
         library.resolve(item["sfxId"], ("sfx",))
         base["sfxId"] = item["sfxId"]
+    if kind in ("card", "scene") and content.get("art"):
+        base["artUrl"] = illustration(content["art"], library, media_path, used)
     if kind == "image":
         for field, value in (("contentImage", content.get("image")), ("outroImage", content.get("outroImage"))):
             if not value:
@@ -153,6 +164,8 @@ def validate_shot(item, layout, compatible, library, media_path, pictures, used)
         if motion != "auto" and motion not in draft_content.CODE_MOTION_MOTIONS:
             raise ValueError("信息图动效方式无效。")
         slide.update(layoutMode="explain", motionStyle=motion)
+        if "artUrl" in base:
+            base.update(items=items, takeaway=points.get("takeaway", ""), listTitle=points.get("listTitle", ""))
     elif kind == "scene":
         for field, valid in (("visual", draft_content.CODE_MOTION_VISUALS), ("motion", draft_content.CODE_MOTION_MOTIONS),
                              ("motif", draft_content.CODE_MOTION_MOTIFS), ("tone", draft_content.CODE_MOTION_TONES)):

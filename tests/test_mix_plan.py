@@ -173,6 +173,37 @@ class MixPlanningTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "保留原画面"):
             mix_plan.produce_shot(client, "deepseek-flash", item, self.library)
 
+    def test_produce_card_and_scene_carry_illustration_prompt(self):
+        for kind in ("card", "scene"):
+            self.assertIn("artPrompt", CATALOG["presenters"][kind]["options"])
+        shot = self.script["shots"][1]
+        art = "一只手把原包装药盒放进敞开的随身包内层。"
+        item = {**self.item, "presentation": "scene", "produceShot": {
+            "shot": shot, "previousParams": {"visual": "steps", "motion": "flow"},
+        }}
+        client = Mock(return_value=model_response({"plans": [
+            {"params": {"visual": "steps", "motion": "flow", "artPrompt": "  " + art + " "}, "reason": "插画展示收纳动作。"},
+        ]}))
+        content = mix_plan.produce_shot(client, "deepseek-flash", item, self.library)
+        self.assertEqual(art, content["artPrompt"])
+        instruction = client.call_args.args[1]["messages"][0]["content"]
+        self.assertIn("artPrompt", instruction)
+        item["produceShot"]["previousParams"] = {"visual": "steps", "motion": "flow", "artPrompt": art}
+        for params in ({"visual": "steps", "motion": "flow", "artPrompt": art},
+                       {"visual": "steps", "motion": "flow", "artPrompt": "长" * 301}):
+            with self.subTest(params=params), self.assertRaisesRegex(ValueError, "保留原画面"):
+                client = Mock(return_value=model_response({"plans": [{"params": params, "reason": "重新呈现本幕。"}]}))
+                mix_plan.produce_shot(client, "deepseek-flash", item, self.library)
+
+    def test_mix_keeps_illustration_prompt_for_card(self):
+        rows = [choice(self.script, 0, "card", params={"motionStyle": "reveal", "artPrompt": "药盒侧面的标签被放大镜照亮。"}),
+                choice(self.script, 1, "scene"), choice(self.script, 2, "card")]
+        result, client = self.arrange(rows)
+        contents = [row["content"] for row in result["shots"]]
+        self.assertEqual("药盒侧面的标签被放大镜照亮。", contents[0]["artPrompt"])
+        self.assertNotIn("artPrompt", contents[2])
+        self.assertIn("artPrompt", client.call_args.args[1]["messages"][0]["content"])
+
     def test_produce_rejects_cosmetic_or_equivalent_changes(self):
         self.supports.append("mg")
         asset = {"id": "builtin:lottie/box", "kind": "lottie", "name": "药盒", "tags": ["药盒"]}

@@ -2752,7 +2752,7 @@ async function poll(w, owner = w) {
             if (job.stageDraft) StageStudio.installDraft(w, job.stageDraft, result.output, job);
             else applyWrittenDraft(w, result.output);
           } else if (job.stageImageSlots) {
-            StageStudio.installImages(w, job.stageImageSlots, result.output);
+            StageStudio.installImages(w, job.stageImageSlots, result.output, job);
           } else if (job.target === "svg-speech") {
             if (job.stageSpeechIndex !== undefined) {
               StageStudio.installSpeech(w, job.stageSpeechIndex, job, result.output);
