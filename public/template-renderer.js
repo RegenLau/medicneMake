@@ -1763,35 +1763,60 @@
     };
   }
 
+  const SUBTITLE_STOPS = "，。！？；、：,.!?;:…—～~";
+  const TRAILING_SUBTITLE_PUNCT_RE = /[，。！？；、：,.!?;:…—～~\s]+$/u;
+
+  function stripTrailingSubtitlePunctuation(text) {
+    return String(text || "").trim().replace(TRAILING_SUBTITLE_PUNCT_RE, "");
+  }
+
+  function isSubtitleStop(text, index) {
+    const ch = text[index];
+    if (!SUBTITLE_STOPS.includes(ch)) return false;
+    if (
+      (ch === "." || ch === ",") &&
+      index > 0 &&
+      index + 1 < text.length &&
+      /\d/.test(text[index - 1]) &&
+      /\d/.test(text[index + 1])
+    ) {
+      return false;
+    }
+    return true;
+  }
+
   function splitSubtitleChunks(line, maxChars) {
     const limit = maxChars || 22;
     let text = String(line || "").replace(/\s+/g, " ").trim();
     if (!text) return [];
-    const stops = "，。！？；、：,.!?;:";
     const chunks = [];
-    while (text.length > limit) {
+    while (stripTrailingSubtitlePunctuation(text).length > limit) {
       let cut = limit;
       for (let i = limit; i > Math.floor(limit / 2); i--) {
-        if (stops.includes(text[i - 1]) || text[i - 1] === " ") {
+        if (isSubtitleStop(text, i - 1) || text[i - 1] === " ") {
           cut = i;
           break;
         }
       }
-      while (cut < Math.min(text.length, limit + 1) && stops.includes(text[cut])) {
+      while (cut < text.length && isSubtitleStop(text, cut)) {
         cut++;
       }
       chunks.push(text.slice(0, cut).trim());
       text = text.slice(cut).trim();
     }
     if (text) chunks.push(text);
-    return chunks.map((chunk) => {
+    const out = [];
+    for (const rawChunk of chunks) {
+      const display = stripTrailingSubtitlePunctuation(rawChunk);
+      if (!display) continue;
       let weight = 0;
-      for (const ch of chunk) {
+      for (const ch of rawChunk) {
         if (!ch.trim()) continue;
-        weight += stops.includes(ch) ? 0.35 : 1;
+        weight += SUBTITLE_STOPS.includes(ch) ? 0.35 : 1;
       }
-      return { text: chunk, weight: Math.max(1, weight) };
-    });
+      out.push({ text: display, weight: Math.max(1, weight) });
+    }
+    return out;
   }
 
   function getSlideCues(slide, maxChars) {
@@ -1801,7 +1826,7 @@
       const cues = [];
       beats.forEach((beat, bi) => {
         const chunks = splitSubtitleChunks(beat.line, limit);
-        const list = chunks.length ? chunks : [{ text: String(beat.line || "").trim(), weight: 1 }];
+        const list = chunks.length ? chunks : [{ text: stripTrailingSubtitlePunctuation(beat.line), weight: 1 }];
         const focus = String(beat.focus || "all");
         const label = beat.label || defaultBeatLabel(slide.type, focus, bi);
         const hl = (Array.isArray(beat.highlightWords) && beat.highlightWords.length)
@@ -1826,7 +1851,7 @@
     }
 
     const fallbackChunks = splitSubtitleChunks(slide?.line || "", limit);
-    const list = fallbackChunks.length ? fallbackChunks : [{ text: String(slide?.line || "").trim(), weight: 1 }];
+    const list = fallbackChunks.length ? fallbackChunks : [{ text: stripTrailingSubtitlePunctuation(slide?.line || ""), weight: 1 }];
     return list.map((chunk) => ({
       text: chunk.text,
       weight: chunk.weight,
@@ -2504,9 +2529,11 @@
 
     const cues = getSlideCues(slide, 22);
     const activeBeatIdx = Number.isInteger(opts.beatIndex) ? opts.beatIndex : -1;
-    const subtitleRaw = opts.subtitleText !== undefined
-      ? opts.subtitleText
-      : (cues[0] ? cues[0].text : slide.line || "");
+    const subtitleRaw = stripTrailingSubtitlePunctuation(
+      opts.subtitleText !== undefined
+        ? opts.subtitleText
+        : (cues[0] ? cues[0].text : slide.line || ""),
+    );
     const hlWords = Array.isArray(opts.highlightWords) && opts.highlightWords.length
       ? opts.highlightWords
       : (slide.highlightWords || []);
@@ -2740,6 +2767,7 @@
     EXAMPLES,
     cloneExample,
     normalizeDeck,
+    stripTrailingSubtitlePunctuation,
     splitSubtitleChunks,
     getSlideCues,
     resolveFocusBox,

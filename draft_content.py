@@ -126,52 +126,404 @@ def ask_json(client, model, instruction, data, tokens):
     return result
 
 
-def code_motion_script(result):
+CODE_MOTION_VISUALS = (
+    "hook",
+    "mechanism",
+    "compare",
+    "steps",
+    "timeline",
+    "checklist",
+    "warning",
+    "summary",
+)
+CODE_MOTION_MOTIONS = (
+    "reveal",
+    "spotlight",
+    "flow",
+    "contrast",
+    "pulse",
+    "focus-zoom",
+)
+CODE_MOTION_MOTIFS = (
+    "pill",
+    "bottle",
+    "clock",
+    "dropper",
+    "thermometer",
+    "heart",
+    "stomach",
+    "body",
+    "alert",
+    "shield",
+    "checklist",
+    "none",
+)
+CODE_MOTION_TONES = ("primary", "warm", "caution", "safe")
+CODE_MOTION_ITEM_BOUNDS = {
+    "hook": (0, 3),
+    "mechanism": (1, 4),
+    "compare": (2, 3),
+    "steps": (2, 4),
+    "timeline": (2, 4),
+    "checklist": (2, 4),
+    "warning": (1, 4),
+    "summary": (0, 4),
+}
+DEFAULT_CODE_MOTION_BY_VISUAL = {
+    "hook": ("focus-zoom", "pill", "primary"),
+    "mechanism": ("reveal", "pill", "primary"),
+    "compare": ("contrast", "none", "primary"),
+    "steps": ("flow", "none", "primary"),
+    "timeline": ("flow", "clock", "warm"),
+    "checklist": ("spotlight", "checklist", "safe"),
+    "warning": ("pulse", "alert", "caution"),
+    "summary": ("focus-zoom", "shield", "safe"),
+}
+LEGACY_CODE_MOTION_VISUALS = ("hook", "mechanism", "compare", "checklist", "summary")
+
+
+def code_motion_duration_plan(reference_seconds):
+    if reference_seconds is None:
+        return {
+            "reference_seconds": None,
+            "max_seconds": None,
+            "min_scenes": 3,
+            "max_scenes": 6,
+            "min_chapters": 2,
+            "max_chapters": 4,
+            "low_chars": 125,
+            "high_chars": 195,
+            "scene_guide": "按内容自然分为 3–6 幕，每幕 1–3 拍、约 24–45 字",
+        }
+    plans = {
+        30: {
+            "min_scenes": 3,
+            "max_scenes": 4,
+            "min_chapters": 2,
+            "max_chapters": 3,
+            "low_chars": 78,
+            "high_chars": 112,
+            "scene_guide": "精简为 3–4 幕，每幕 1–2 拍、约 22–34 字",
+        },
+        45: {
+            "min_scenes": 4,
+            "max_scenes": 5,
+            "min_chapters": 2,
+            "max_chapters": 4,
+            "low_chars": 120,
+            "high_chars": 168,
+            "scene_guide": "规划 4–5 幕，每幕 2 拍左右、约 26–40 字",
+        },
+        60: {
+            "min_scenes": 4,
+            "max_scenes": 6,
+            "min_chapters": 3,
+            "max_chapters": 4,
+            "low_chars": 168,
+            "high_chars": 220,
+            "scene_guide": "规划 4–6 幕，每幕 2–3 拍、约 30–48 字",
+        },
+        90: {
+            "min_scenes": 5,
+            "max_scenes": 8,
+            "min_chapters": 3,
+            "max_chapters": 5,
+            "low_chars": 265,
+            "high_chars": 335,
+            "scene_guide": "规划 5–8 幕，每幕 2–3 拍、约 36–58 字",
+        },
+        120: {
+            "min_scenes": 6,
+            "max_scenes": 10,
+            "min_chapters": 4,
+            "max_chapters": 5,
+            "low_chars": 365,
+            "high_chars": 450,
+            "scene_guide": "规划 6–10 幕，每幕 2–4 拍、约 40–65 字",
+        },
+    }
+    base = plans.get(reference_seconds)
+    if not base:
+        max_scenes = max(3, min(10, round(reference_seconds / 11)))
+        min_scenes = max(2, max_scenes - 2)
+        high_chars = max(75, int((reference_seconds - max_scenes * 1.1) * SPEECH_RATE))
+        base = {
+            "min_scenes": min_scenes,
+            "max_scenes": max_scenes,
+            "min_chapters": 2,
+            "max_chapters": min(5, max_scenes),
+            "low_chars": max(60, int(high_chars * 0.76)),
+            "high_chars": high_chars,
+            "scene_guide": "按内容节奏划分分镜，每幕 1–3 拍",
+        }
+    return {
+        "reference_seconds": reference_seconds,
+        "max_seconds": reference_seconds + DURATION_OVERAGE_LIMIT,
+        **base,
+    }
+
+
+def code_motion_length_guide(reference_seconds):
+    plan = code_motion_duration_plan(reference_seconds)
+    if reference_seconds is None:
+        return (
+            f"- 根据主题复杂度自主规划 {plan['min_scenes']}–{plan['max_scenes']} 幕与 {plan['min_chapters']}–{plan['max_chapters']} 个顶部章节。\n"
+            f"- {plan['scene_guide']}，全片口播总字数约 {plan['low_chars']}–{plan['high_chars']} 字（约 35–55 秒），讲透即止、绝不硬凑固定幕数。\n"
+        )
+    return (
+        f"- 根据所选参考时长（{reference_seconds} 秒）规划 {plan['min_scenes']}–{plan['max_scenes']} 幕与 {plan['min_chapters']}–{plan['max_chapters']} 个顶部章节（按内容需要定幕数，不要为凑幕数硬塞无关环节）。\n"
+        f"- {plan['scene_guide']}，全片所有幕口播总字数（含标点）控制在约 {plan['low_chars']}–{plan['high_chars']} 字，全片估算时长必须严格控制在 {plan['max_seconds']} 秒以内。\n"
+    )
+
+
+def _normalize_code_motion_items(scene, index):
+    raw_items = scene.get("items")
+    raw_labels = scene.get("labels")
+    parsed = []
+    if raw_items is not None:
+        if not isinstance(raw_items, list):
+            raise ValueError(f"第 {index + 1} 幕的画面条目格式无效。")
+        for entry in raw_items:
+            if isinstance(entry, str):
+                title = entry.strip()
+                if not 1 <= len(title) <= 18:
+                    raise ValueError(f"第 {index + 1} 幕的条目文字需为 1–18 字。")
+                parsed.append({"title": title, "detail": "", "tag": ""})
+            elif isinstance(entry, dict):
+                title = string_field(entry, "title", 18)
+                detail = string_field(entry, "detail", 40, optional=True)
+                tag = string_field(entry, "tag", 12, optional=True)
+                parsed.append({"title": title, "detail": detail, "tag": tag})
+            else:
+                raise ValueError(f"第 {index + 1} 幕的画面条目格式无效。")
+    elif raw_labels is not None:
+        if not isinstance(raw_labels, list):
+            raise ValueError(f"第 {index + 1} 幕的图形文字格式无效。")
+        for label in raw_labels:
+            if not isinstance(label, str) or not 1 <= len(label.strip()) <= 18:
+                raise ValueError(f"请补全第 {index + 1} 幕的图形文字（每项最多 18 字）。")
+            parsed.append({"title": label.strip(), "detail": "", "tag": ""})
+    return parsed
+
+
+def code_motion_script(result, drug=""):
     if not isinstance(result, dict):
         raise ValueError("代码动效脚本格式无效。")
-    title = string_field(result, "title", 16)
+    title = string_field(result, "title", 40)
+    short_title = string_field(result, "shortTitle", 20, optional=True) or _default_short_title(title, drug)
+    disclaimer = string_field(result, "disclaimer", 60, optional=True) or "科普内容仅供参考，具体诊疗与用药请遵医嘱"
     scenes = result.get("scenes")
-    if not isinstance(scenes, list) or len(scenes) != 5:
-        raise ValueError("代码动效模板需要恰好五幕。")
+    if not isinstance(scenes, list) or not 2 <= len(scenes) <= MAX_SHOTS:
+        raise ValueError(f"代码动效分镜需要 2–{MAX_SHOTS} 幕。")
+
+    raw_chapters = result.get("chapters")
+    if raw_chapters is None:
+        chapters = ["先看要点", "用药提醒"]
+    else:
+        if not isinstance(raw_chapters, list) or not 2 <= len(raw_chapters) <= 5:
+            raise ValueError("顶部章节需要 2–5 个短标题。")
+        chapters = []
+        for chap in raw_chapters:
+            if not isinstance(chap, str) or not 1 <= len(chap.strip()) <= 10:
+                raise ValueError("每个章节标题需为 1–10 字。")
+            chapters.append(chap.strip())
+
+    legacy_five = len(scenes) == 5 and all(
+        isinstance(scene, dict) and "visual" not in scene and "items" not in scene for scene in scenes
+    )
     blocks = []
-    for index, (scene, counts) in enumerate(zip(scenes, ((0,), (2,), (2,), (2, 3), (0,)))):
+    for index, scene in enumerate(scenes):
         if not isinstance(scene, dict):
             raise ValueError(f"第 {index + 1} 幕的数据格式无效。")
-        labels = scene.get("labels")
-        if not isinstance(labels, list) or len(labels) not in counts or any(
-            not isinstance(label, str) or not 1 <= len(label.strip()) <= 12 for label in labels
-        ):
-            raise ValueError(f"请补全第 {index + 1} 幕的图形文字（每项最多 12 字）。")
+        items = _normalize_code_motion_items(scene, index)
+        if "visual" in scene and scene["visual"] is not None:
+            visual = scene["visual"]
+            if not isinstance(visual, str) or visual not in CODE_MOTION_VISUALS:
+                raise ValueError(f"第 {index + 1} 幕的分镜版式无效。")
+        elif legacy_five:
+            visual = LEGACY_CODE_MOTION_VISUALS[index]
+        elif index == 0:
+            visual = "hook"
+        elif index == len(scenes) - 1 and not items:
+            visual = "summary"
+        else:
+            visual = "checklist" if len(items) >= 2 else "mechanism"
+
+        default_motion, default_motif, default_tone = DEFAULT_CODE_MOTION_BY_VISUAL[visual]
+
+        if "motion" in scene and scene["motion"] is not None:
+            motion = scene["motion"]
+            if not isinstance(motion, str) or motion not in CODE_MOTION_MOTIONS:
+                raise ValueError(f"第 {index + 1} 幕的动效方式无效。")
+        else:
+            motion = default_motion
+
+        if "motif" in scene and scene["motif"] is not None:
+            motif = scene["motif"]
+            if not isinstance(motif, str) or motif not in CODE_MOTION_MOTIFS:
+                raise ValueError(f"第 {index + 1} 幕的主题图形无效。")
+        else:
+            motif = default_motif
+
+        if "tone" in scene and scene["tone"] is not None:
+            tone = scene["tone"]
+            if not isinstance(tone, str) or tone not in CODE_MOTION_TONES:
+                raise ValueError(f"第 {index + 1} 幕的色调风格无效。")
+        else:
+            tone = default_tone
+
+        low_items, high_items = CODE_MOTION_ITEM_BOUNDS[visual]
+        if not low_items <= len(items) <= high_items:
+            raise ValueError(f"第 {index + 1} 幕（{visual}）需要 {low_items}–{high_items} 条画面要点。")
+
+        beats = _normalize_beats(scene.get("beats"))
         try:
-            block = {
-                "name": string_field(scene, "name", 18),
-                "line": string_field(scene, "line", 42),
-                "takeaway": string_field(scene, "takeaway", 24),
-                "labels": [label.strip() for label in labels],
-            }
+            name = string_field(scene, "name", 24)
+            raw_line = string_field(scene, "line", 180, optional=bool(beats))
+            line = "".join(b["line"] for b in beats) if beats and not raw_line else raw_line
+            if not line or len(line) > 180:
+                raise ValueError
+            takeaway = string_field(scene, "takeaway", 36, optional=bool(items))
+            list_title = string_field(scene, "listTitle", 16, optional=True)
         except ValueError:
             raise ValueError(f"请补全第 {index + 1} 幕的标题、口播和屏显要点，并检查字数。") from None
+
+        default_chap = (
+            (0 if index < 3 else 1)
+            if legacy_five and len(chapters) == 2
+            else min(len(chapters) - 1, int(index * len(chapters) / max(1, len(scenes))))
+        )
+        try:
+            chap_idx = int(scene.get("chapterIndex", default_chap))
+        except (TypeError, ValueError):
+            chap_idx = default_chap
+        chap_idx = min(len(chapters) - 1, max(0, chap_idx))
+
+        raw_sec = scene.get("seconds")
+        seconds = (
+            max(3, min(45, round(float(raw_sec))))
+            if type(raw_sec) in (int, float) and 2 <= raw_sec <= 45
+            else template_slide_seconds(line)
+        )
+        block = {
+            "name": name,
+            "chapterIndex": chap_idx,
+            "visual": visual,
+            "motion": motion,
+            "motif": motif,
+            "tone": tone,
+            "line": line,
+            "takeaway": takeaway,
+            "items": items,
+            "labels": [entry["title"] for entry in items],
+            "seconds": seconds,
+        }
+        if list_title:
+            block["listTitle"] = list_title
+        if beats:
+            block["beats"] = beats
         blocks.append(block)
-    return {"title": title, "scenes": blocks}
+
+    # Keep chapter progression monotonic non-decreasing across scenes.
+    prev_chap = 0
+    for block in blocks:
+        if block["chapterIndex"] < prev_chap:
+            block["chapterIndex"] = prev_chap
+        prev_chap = block["chapterIndex"]
+
+    return {
+        "title": title,
+        "shortTitle": short_title,
+        "chapters": chapters,
+        "disclaimer": disclaimer,
+        "scenes": blocks,
+    }
 
 
-def code_motion_draft(client, model, item):
-    instruction = EDITORIAL_RULES + drug_rule(item.get("drug", "")) + """
-【任务】围绕用户主题写一条约 30 秒的用药科普动效视频。恰好五幕，连贯讲清一个问题。
-1. 提问引入（轨道图形），labels 为 []。
-2. 解释关键点（两组点阵），labels 放两个与口播相符的关键词。
-3. 辨析或提示（两条依次点亮的横线），labels 放两个相关概念。没有自然对比时写两项需要核对的事项，不强造对立，不用数字、百分比或疗效比较。
-4. 实用做法（清单逐项点亮），labels 放两到三条具体而短的行动。
-5. 收尾（盾牌），labels 为 []。重申最重要的行动，不引入新的医学结论。
+def code_motion_draft(client, model, item, reference_seconds=None):
+    plan = code_motion_duration_plan(reference_seconds)
+    instruction = EDITORIAL_RULES + drug_rule(item.get("drug", "")) + (
+        "【任务】围绕用户主题规划一条 16:9 信息图模板右侧的「代码动效」用药科普脚本。"
+        "你必须根据主题本身的内容逻辑和参考时长，自主设计分镜数量、顶部章节、每幕版式（visual）、每幕动效（motion）、主题图形（motif）与口播节拍（beats）。\n"
+        "【时长与幕数】\n"
+        + code_motion_length_guide(reference_seconds) +
+        "【核心原则：严禁固定套模板！】\n"
+        "- 绝不要把每个主题都套成固定的“五幕（轨道→点阵→对比→清单→盾牌）”！\n"
+        "- 不同主题必须长出不同的分镜结构与动效组合：例如讲滴眼液用法以 steps + checklist 为主；讲降压药漏服以 hook + timeline + checklist 为主；讲感冒药叠加风险以 hook + mechanism + compare + warning 为主；讲他汀服药时间以 hook + compare + timeline + summary 为主。\n"
+        "- 同一 visual 可按内容需要重复，不需要的 visual 直接省略；每幕 items 数量按真实内容定，绝不凑数。\n"
+        "【8 种分镜版式 visual（按内容选型）】\n"
+        "- hook（破题直答）：提问引出痛点并直接给结论，items 放 0–3 个极短关键词标签。\n"
+        "- mechanism（原理解析）：讲清作用机制、原因链条或成分关联，items 放 1–4 个概念节点（含 title 与可选 detail/tag）。\n"
+        "- compare（对比辨析）：仅当存在真实 2–3 类并列对比或误区对照时选用，items 放 2–3 栏（不无中生有凑对比）。\n"
+        "- steps（实操步骤）：仅当确有先后操作顺序时选用，items 放 2–4 步（实际几步写几步）。\n"
+        "- timeline（时间决策）：适合服药时机、餐前餐后、漏服判断、疗程间隔，items 放 2–4 个时间/情境节点（tag 写时机，title 写做法）。\n"
+        "- checklist（核对清单）：适合并列核对要点、随身准备、日常提醒，items 放 2–4 项，可写 listTitle（如「核对这三项」，不要千篇一律写「这样做」）。\n"
+        "- warning（风险警示）：仅当涉及明确红旗症状、禁忌或就医信号时选用，items 放 1–4 条；涉及严重不良反应红旗信号时严禁写「不要自行停药」，必须提示立即就医评估。\n"
+        "- summary（收口守护）：简洁收口重申最关键行动，items 放 0–3 条（短片可直接 0 条配 takeaway）。\n"
+        "【6 种动效方式 motion（按语义与节奏搭配，避免全片每幕一模一样）】\n"
+        "- focus-zoom：聚焦揭晓（适合 hook 提问→结论转换，或 summary 定格收口）\n"
+        "- reveal：渐进揭示与描边展开（适合 mechanism 原理解析、关键概念拆解）\n"
+        "- contrast：左右对冲与对比聚焦（适合 compare 对比辨析、误区 vs 正确）\n"
+        "- flow：沿路径递进串联点亮（适合 steps 实操步骤、timeline 时间节点）\n"
+        "- spotlight：逐项聚光高亮（适合 checklist 清单核对、多要点逐条拆解）\n"
+        "- pulse：稳重临床警示节律（适合 warning 红线信号与就医提醒）\n"
+        "【12 种主题图形 motif（只选与本幕药学内容真正匹配的图形，不匹配就用 none）】\n"
+        "pill（胶囊药片）、bottle（药瓶药盒）、clock（时钟时机）、dropper（滴眼液滴管）、thermometer（体温发烧）、"
+        "heart（心血管血压）、stomach（肠胃餐前后）、body（肌骨电解质）、alert（警示信号）、shield（安全守护）、checklist（记录清单）、none（纯信息图排版）。\n"
+        "【色调 tone】primary（医疗蓝主调）、warm（温和提醒）、caution（警示珊瑚色）、safe（安心绿）。\n"
+        "【口播与节拍 beats】\n"
+        "- 口播用自然短口语，数字与单位写成读法（如「三十八度五」「每天两次」），不用括号、斜杠、英文缩写和表情。\n"
+        "- 每幕写 1–3 拍 beats，与画面 items 对应：hook 用 focus=\"question\" 与 \"answer\"；多条目幕按讲述顺序用 \"0\"/\"1\"/\"2\"/\"3\" 或 \"action\"/\"all\"；每拍带 1–2 个口播里的 highlightWords。\n"
+        "- 每幕 line 必须等于本幕 beats 拼接后的完整口播；name ≤18 字，takeaway ≤24 字，title ≤20 字，shortTitle ≤12 字。\n"
+        "不用外链、Markdown、HTML 或代码。只返回 JSON：\n"
+        '{"title":"全片标题","shortTitle":"左上短主题","chapters":["章1","章2"],"scenes":[{'
+        '"name":"本幕标题","chapterIndex":0,"visual":"hook","motion":"focus-zoom","motif":"dropper","tone":"primary",'
+        '"takeaway":"核心结论或底栏提示","listTitle":"","items":[{"title":"短标题","detail":"可选短说明","tag":"可选标签"}],'
+        '"beats":[{"focus":"question","line":"第一拍口播。","highlightWords":["关键词"]},{"focus":"answer","line":"第二拍口播。","highlightWords":["关键词"]}],'
+        '"line":"第一拍口播。第二拍口播。"}]}'
+    )
+    topic = {"主题与要求": item["topic"], "关联药品": item.get("drug", "")}
+    raw = ask_json(client, model, instruction, topic, 3600)
+    try:
+        script = code_motion_script(raw, item.get("drug", ""))
+    except ValueError as error:
+        revised = ask_json(
+            client, model,
+            instruction + "\n按校验反馈修正以下脚本并返回完整 JSON，确保 visual/motion/motif 合法且 items 数量满足对应版式要求。",
+            {**topic, "检查结果": str(error), "待修正草稿": raw}, 3600,
+        )
+        script = code_motion_script(revised, item.get("drug", ""))
 
-每幕建议用两句短口语，合计约 18–24 字，避免朗读超过六秒。title 最多 16 字，name 最多 18 字，
-line 最多 42 字，takeaway 为各幕画面中最重要的一句话，最多 24 字。每项 labels 最多 12 字。
-不用外链、Markdown、HTML、脚本或画面生成提示词。仅返回 JSON：
-{"title":"全片标题","scenes":[{"name":"本幕标题","line":"本幕完整口播","takeaway":"屏显要点","labels":[]}]}
-"""
-    return code_motion_script(ask_json(client, model, instruction, {
-        "主题与要求": item["topic"], "关联药品": item.get("drug", ""),
-    }, 2048))
+    max_total = plan["max_seconds"]
+    if max_total is not None:
+        total_seconds = sum(s["seconds"] for s in script["scenes"])
+        for attempt in range(2):
+            if total_seconds <= max_total:
+                break
+            scenes = script["scenes"]
+            current_chars = sum(spoken_length(s["line"]) for s in scenes)
+            target_sec = max(18, reference_seconds - 2 - attempt * 5)
+            char_budget = max(55, int((target_sec - len(scenes) * 1.15) * SPEECH_RATE))
+            tighten_instruction = EDITORIAL_RULES + (
+                "【任务】把下面这份 16:9 代码动效科普脚本精简压缩到规定时长以内，保留内容适配的版式、动效、图形与医学准确性。\n"
+                f"- 当前共 {len(scenes)} 幕、口播总计 {current_chars} 字、估算 {total_seconds} 秒，已超出上限（必须 ≤ {max_total} 秒）。\n"
+                f"- 硬性目标：全片所有 scenes 的口播总字数（含标点）不超过 {char_budget} 字，估算总时长 ≤ {max_total} 秒；可合并或删减次要幕（保留 {plan['min_scenes']}–{plan['max_scenes']} 幕），同步更新 chapters。\n"
+                "- 严禁半途截断句子，每幕 line 需与 beats 拼接一致，保留严重不良反应立即就医的安全红线。\n"
+                "- 只返回同结构完整 JSON（title, shortTitle, chapters, scenes）。"
+            )
+            try:
+                revised_raw = ask_json(client, model, tighten_instruction, script, 3600)
+                revised_script = code_motion_script(revised_raw, item.get("drug", ""))
+            except (KeyError, TypeError, ValueError):
+                break
+            rev_total = sum(s["seconds"] for s in revised_script["scenes"])
+            if rev_total < total_seconds:
+                script = revised_script
+                total_seconds = rev_total
+            else:
+                break
+
+    return script
 
 
 def svg_video_draft(client, model, item, reference_seconds):

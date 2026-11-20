@@ -105,7 +105,7 @@ class SvgMotionTests(unittest.TestCase):
         shot = {"name": "核对信息", "action": "leaflet", "line": line, "beats": [first, second], "seconds": 4}
         svg_motion.validate_shot(shot)
         timing = server.svg_caption_progress(line, 5.5, shot["beats"])
-        self.assertEqual([cue["text"] for cue in timing], [first["line"], second["line"]])
+        self.assertEqual([cue["text"] for cue in timing], ["翻开说明书", "再看药盒"])
         self.assertAlmostEqual(timing[0]["end"], len(first["line"]) / len(line))
         self.assertAlmostEqual(timing[1]["end"], 1.0)
         with self.assertRaisesRegex(ValueError, "动作片段必须"):

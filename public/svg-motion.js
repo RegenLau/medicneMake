@@ -249,7 +249,9 @@
 
   function subtitleAt(shot, progress, intervals) {
     if (intervals?.length) {
-      return (intervals.find(cue => progress < cue.end) || intervals.at(-1)).text;
+      return TemplateVideo.stripTrailingSubtitlePunctuation(
+        (intervals.find(cue => progress < cue.end) || intervals.at(-1)).text
+      );
     }
     if (shot.svgBeats?.length) {
       const phases = beatPhases(shot.svgBeats, progress);
@@ -260,7 +262,9 @@
     const cues = TemplateVideo.getSlideCues(shot, 23);
     const total = cues.reduce((sum, cue) => sum + cue.weight, 0);
     let end = 0;
-    return (cues.find(cue => (end += cue.weight) > progress * total) || cues.at(-1))?.text || "";
+    return TemplateVideo.stripTrailingSubtitlePunctuation(
+      (cues.find(cue => (end += cue.weight) > progress * total) || cues.at(-1))?.text || ""
+    );
   }
 
   function frameOptions(deck, index, progress, options) {

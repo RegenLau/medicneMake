@@ -1463,7 +1463,7 @@ function setup(w) {
   const isTpl = TemplateStudio.isTemplateVideo(w);
   const isSvg = isSvgVideo(w);
   const motion = isCodeMotion(w);
-  const scriptButton = motion ? "生成五幕脚本" : isTpl ? "生成模板分镜脚本" : "生成分镜脚本";
+  const scriptButton = motion ? "生成代码动效脚本" : isTpl ? "生成模板分镜脚本" : "生成分镜脚本";
   const hasBlocks = w.blocks.length > 0;
   let left =
     '<div class="sheet"><div class="card-head"><h2>科普主题</h2>' +
@@ -1496,12 +1496,12 @@ function setup(w) {
     left +=
       '<div class="sheet"><div class="card-head"><h2>视频设置</h2></div>' +
       TemplateStudio.modeSwitcherHtml(w, btn) +
-      (motion ? "" : choice(
+      choice(
         "参考时长",
         videoReferenceDurations.map((seconds) => seconds === null ? "自动" : `${seconds} 秒`),
         reference === null ? "自动" : `${reference} 秒`,
         "duration",
-      )) +
+      ) +
       (motion || isTpl || isSvg
         ? TemplateStudio.templateSetupHtml(w, data, esc, btn)
         : styleChoice(w.style, "画面风格") +
@@ -1545,8 +1545,15 @@ function setup(w) {
   const refSeconds = video ? videoReferenceSeconds(w) : null;
   const summaryRows = video
     ? motion
-      ? [["视频形式", "信息图模板讲解"], ["右侧内容", "代码动效"], ["脚本结构", "五幕 · 约 30 秒"],
-          ["视觉风格", themeName], ["主讲形象", presName], ["输出画面", "16:9 · 1280×720"]]
+      ? [
+          ["视频形式", "信息图模板讲解"],
+          ["右侧内容", "代码动效"],
+          ["参考时长", refSeconds === null ? "自动" : `${refSeconds} 秒`],
+          ["视觉风格", themeName],
+          ["主讲形象", presName],
+          ["输出画面", "16:9 · 1280×720"],
+          ["脚本结构", "按内容与时长动态编排分镜与动效"],
+        ]
       : isTpl
       ? [
           ["视频形式", "信息图模板讲解"],
@@ -1594,7 +1601,7 @@ function setup(w) {
     ctaArea +
     "</div>" +
     '<p class="footmeta setup-footnote">' +
-    (motion ? "生成后可逐幕修改画面文字和口播。" : video
+    (motion ? "生成后可自由增删分镜，并逐幕调整版式、动效、图形与口播。" : video
       ? "生成后可在编辑页逐页修改文字、口播与配图。"
       : "生成后可逐段修改正文，并为段落重做配图。") +
     " 可随时调整" +
@@ -2374,8 +2381,9 @@ function contentSig(w) {
     w.title,
     w.lead,
     w.drug,
-    w.blocks.map((b) => isCodeMotion(w) ? [b.name, b.line, b.takeaway, b.labels] :
+    w.blocks.map((b) => isCodeMotion(w) ? [b.name, b.line, b.takeaway, b.visual, b.motion, b.motif, b.tone, b.items, b.labels] :
       isSvgVideo(w) ? [b.name, b.line, b.action, b.beats] : [b.name, b.line, b.image]),
+    isCodeMotion(w) ? w.motionMeta : null,
     w.video?.url,
   ]);
   let h = 0;
@@ -2615,7 +2623,7 @@ function jobView(w) {
       '" style="margin-top:14px">' +
       esc(
         failed
-          ? (rejected ? portraitMessage : w.job.error)
+          ? (rejected ? portraitMessage : isNetworkErrorMessage(w.job.error) ? NETWORK_ERROR_MESSAGE : w.job.error)
           : writing ? "生成完成后，草稿会保存在「我的作品」。" : "合成期间可先返回工作台处理其他草稿，已完成的分镜会自动复用。",
       ) +
       '</div>' + (rejected ? '<details class="shot-options"><summary>查看方舟原始报错</summary><p class="footmeta">' +
@@ -2630,8 +2638,23 @@ function jobView(w) {
   );
 }
 
+const NETWORK_ERROR_MESSAGE =
+  "无法连接本地工作台服务，请确认启动窗口仍在运行（或双击项目目录中的「启动工作台.cmd」重新启动）后重试。";
+
+function isNetworkErrorMessage(message) {
+  return message === NETWORK_ERROR_MESSAGE ||
+    /^(?:Failed to fetch|Load failed|NetworkError when attempting to fetch resource\.?)$/i.test(String(message || "").trim());
+}
+
 async function jsonRequest(path, init) {
-  const r = await fetch(path, init);
+  let r;
+  try {
+    r = await fetch(path, init);
+  } catch {
+    const err = Error(NETWORK_ERROR_MESSAGE);
+    err.networkError = true;
+    throw err;
+  }
   let value;
   try {
     value = await r.json();
@@ -2651,9 +2674,17 @@ async function recoverFinishedJob(w) {
     return; // Keep the saved failure and its retry controls while offline.
   }
   if (w.job !== job || !job.error) return;
-  if (result.status === "done") {
+  if (result.status === "done" || result.status === "running" || result.status === "queued") {
     job.error = "";
     poll(w);
+  } else if (result.status === "failed" && isNetworkErrorMessage(job.error) && result.error) {
+    job.progress = result.progress || job.progress;
+    if (job.target === "write-draft" && result.output?.sections && !job.partial) {
+      job.partial = result.output;
+    }
+    job.error = result.error;
+    save();
+    updateJobView(w, w);
   } else if (result.status === "failed" && portraitRejected(job) && result.progress && job.progress !== result.progress) {
     job.progress = result.progress;
     save();
@@ -2672,10 +2703,12 @@ async function poll(w, owner = w) {
     return;
   }
   watching.add(job.payload.id);
+  let netFails = 0;
   try {
     while (owner.job === job && !job.error) {
       try {
         const result = await jsonRequest("/api/jobs/" + job.payload.id);
+        netFails = 0;
         if (owner.job !== job) return;
         if (result.status === "failed") {
           job.progress = result.progress || job.progress;
@@ -2750,6 +2783,10 @@ async function poll(w, owner = w) {
         if (el) el.textContent = result.progress;
       } catch (e) {
         if (owner.job !== job) return;
+        if (e.networkError && ++netFails <= 3) {
+          await new Promise((r) => setTimeout(r, 1000));
+          continue;
+        }
         job.error = e.message;
         save();
         updateJobView(w, owner);
@@ -2857,7 +2894,10 @@ function authorize(w, count, kind, fn, voicedCount = count) {
     : "";
   const chosenTextModel = resolveTextModel(w.settings);
   const textSummary = writing ? "<p>将使用 DeepSeek " +
-    (w.type === "video" ? (isCodeMotion(w) ? "按主题生成五幕画面文字和口播，目标时长约 30 秒。" :
+    (w.type === "video" ? (isCodeMotion(w)
+      ? (reference === null
+        ? "按主题内容动态规划分镜数量、版式、动效与口播。"
+        : `参考 ${reference} 秒（控制在 ${reference + 4} 秒以内）按主题动态规划分镜、动效与口播。`) :
       isSvgVideo(w) ? "按主题规划 SVG 道具、动作与口播。" : TemplateStudio.isTemplateVideo(w)
       ? (reference === null
         ? "按主题内容灵活规划模板分镜与口播脚本。"
@@ -2894,7 +2934,7 @@ function authorize(w, count, kind, fn, voicedCount = count) {
     : "";
   openModal(
     writing ? "确认使用 DeepSeek 生成" : isArk ? "确认使用火山方舟生成" : "确认使用火山语音配音",
-    textSummary + arkSummary + (motion ? "<p>五幕画面在本地渲染。</p>" : "") +
+    textSummary + arkSummary + (motion ? "<p>各幕代码动效画面在本地逐帧渲染。</p>" : "") +
     speechSummary + '<div class="actions dialog-actions">' +
       btn("取消", "close", "secondary") +
       btn("确认提交并计费", "confirm-paid", "primary") +
@@ -2966,7 +3006,12 @@ function generate(w) {
   if (w.job || w.blocks.some((b) => b.job && !b.job.error)) return;
   if (isCodeMotion(w)) {
     return authorize(w, 1, "draft", () => {
-      const settings = { ...w.settings, ratio: "16:9", duration: 30, textModel: resolveTextModel(w.settings) };
+      const settings = {
+        ...w.settings,
+        ratio: "16:9",
+        duration: videoReferenceSeconds(w),
+        textModel: resolveTextModel(w.settings),
+      };
       const job = createJob(w, "write-draft", [], settings);
       job.payload.draft = { type: "video", videoMode: "code-motion", topic: w.topic.trim(), drug: w.drug };
       w.job = job;
@@ -3036,7 +3081,7 @@ function applyWrittenDraft(w, output) {
   const { title } = output;
   if (w.type === "video") {
     if (isCodeMotion(w)) {
-      installDraft(w, { title, blocks: output.scenes.map(scene => ({ ...scene, seconds: 6 })) });
+      installCodeMotionDraft(w, output);
       return;
     }
     if (TemplateStudio.isTemplateVideo(w) && Array.isArray(output.slides)) {
@@ -3360,8 +3405,9 @@ document.addEventListener("input", (e) => {
       w.templateDeck.pharmacist = { ...p };
       if (w.video) w.videoDirty = true;
       TemplateStudio.refreshLivePreview(w, data);
-    } else if (isCodeMotion(w) && w.video) {
-      w.videoDirty = true;
+    } else if (isCodeMotion(w)) {
+      if (w.video) w.videoDirty = true;
+      refreshCodeMotionPreview(w, Math.max(0, w.blocks.indexOf(selectedScenes.get(w))));
     } else if (isSvgVideo(w)) {
       if (w.video) w.videoDirty = true;
       refreshSvgStage(w);
@@ -3375,14 +3421,7 @@ document.addEventListener("input", (e) => {
     updateSvgBeat(w, el);
     return;
   }
-  if (isCodeMotion(w) && (el.hasAttribute("data-motion-title") || el.dataset.motionScene !== undefined)) {
-    const selected = Number(el.dataset.motionScene ?? Math.max(0, w.blocks.indexOf(selectedScenes.get(w))));
-    if (el.hasAttribute("data-motion-title")) w.title = el.value;
-    else if (el.dataset.motionLabel !== undefined) w.blocks[selected].labels[Number(el.dataset.motionLabel)] = el.value;
-    else w.blocks[selected][el.dataset.motionField] = el.value;
-    if (w.video) w.videoDirty = true;
-    changed(w);
-    refreshCodeMotionPreview(w, selected);
+  if (isCodeMotion(w) && handleCodeMotionInput(w, el)) {
     return;
   }
   if (TemplateStudio.isTemplateVideo(w) && w.templateDeck) {
@@ -3689,6 +3728,19 @@ document.addEventListener("change", (e) => {
     }
     return;
   }
+  if (el.dataset.tplMotionStyle && w?.templateDeck) {
+    const slide = w.templateDeck.slides[Number(el.dataset.tplSlide)];
+    if (slide) {
+      slide.motionStyle = el.value;
+      if (w.video) w.videoDirty = true;
+      changed(w);
+      TemplateStudio.refreshLivePreview(w, data);
+    }
+    return;
+  }
+  if (isCodeMotion(w) && handleCodeMotionChange(w, el)) {
+    return;
+  }
   if (el.dataset.tplBeatFocus !== undefined && w?.templateDeck) {
     const slide = w.templateDeck.slides[Number(el.dataset.tplSlide)];
     const bi = Number(el.dataset.tplBeatFocus);
@@ -3795,6 +3847,7 @@ document.addEventListener("click", async (e) => {
     v = el.dataset.val,
     w = current();
   try {
+    if (w && isCodeMotion(w) && handleCodeMotionAction(w, action, v)) return;
     switch (action) {
       case "home":
         tab = "examples";

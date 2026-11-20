@@ -873,11 +873,14 @@ def validate_motion_template(p):
     draft_content.string_field(info, "disclaimer", 60, optional=True)
     chapters = info.get("chapters")
     if (not isinstance(chapters, list) or not 2 <= len(chapters) <= 5
-            or any(not isinstance(text, str) or len(text) > 8 for text in chapters)):
+            or any(not isinstance(text, str) or len(text) > 10 for text in chapters)):
         raise ValueError("信息图模板章节格式无效。")
     for item in items:
         if not isinstance(item, dict) or not isinstance(item.get("visual"), dict):
             raise ValueError("信息图分镜格式无效。")
+        motion_style = item["visual"].get("motionStyle")
+        if motion_style is not None and motion_style != "auto" and motion_style not in draft_content.CODE_MOTION_MOTIONS:
+            raise ValueError("信息图动效方式无效。")
         draft_content.string_field(item, "line", 450)
         seconds = item.get("seconds")
         if type(seconds) not in (int, float) or not 2 <= seconds <= 60:
@@ -889,6 +892,54 @@ def validate_motion_template(p):
             if not isinstance(cue, dict) or type(cue.get("weight")) not in (int, float) or not 0 < cue["weight"] <= 500:
                 raise ValueError("字幕节拍格式无效。")
             draft_content.string_field(cue, "text", 180)
+
+
+def code_motion_payload_script(p):
+    raw = {"title": p.get("title"), "scenes": p.get("items")}
+    for key in ("shortTitle", "chapters", "disclaimer"):
+        if key in p and p[key] is not None:
+            raw[key] = p[key]
+    return draft_content.code_motion_script(raw)
+
+
+def code_motion_shot_captions(scene, start, audible):
+    beats = scene.get("beats") or []
+    if beats:
+        entries = []
+        for beat_idx, beat in enumerate(beats):
+            text = str(beat.get("line") or "").strip()
+            if not text:
+                continue
+            chunks = list(_caption_chunk_entries(text, 22))
+            focus = str(beat.get("focus") or "all")
+            hl = beat.get("highlightWords") or []
+            for chunk, raw in chunks:
+                weight = sum(0.35 if unicodedata.category(c).startswith("P") else 1 for c in raw if not c.isspace())
+                entries.append({
+                    "text": chunk,
+                    "weight": max(1.0, weight),
+                    "focus": focus,
+                    "beatIndex": beat_idx,
+                    "highlightWords": hl,
+                })
+        if entries:
+            total = sum(entry["weight"] for entry in entries)
+            elapsed = 0.0
+            cues = []
+            for entry in entries:
+                begin = start + audible * elapsed / total
+                elapsed += entry["weight"]
+                end = start + audible * elapsed / total
+                cues.append({
+                    "start": begin,
+                    "end": end,
+                    "text": entry["text"],
+                    "focus": entry["focus"],
+                    "beatIndex": entry["beatIndex"],
+                    "highlightWords": entry["highlightWords"],
+                })
+            return cues
+    return list(shot_caption_intervals(scene["line"].strip(), start, audible, "16:9"))
 
 
 def setting_valid(p):
@@ -911,7 +962,7 @@ def setting_valid(p):
         if "templateInfo" in p:
             validate_motion_template(p)
         else:
-            draft_content.code_motion_script({"title": p.get("title"), "scenes": p.get("items")})
+            code_motion_payload_script(p)
         appearance = code_motion_appearance(p)
         if not code_motion_ready():
             raise ValueError("代码动效需要 Node.js、Playwright 和 FFmpeg。请按使用说明安装。")
@@ -1385,28 +1436,57 @@ def stamp(value):
     return f"00:{ms // 60000:02}:{ms // 1000 % 60:02}.{ms % 1000:03}"
 
 
-def caption_chunks(line, limit):
-    text = " ".join(line.split())
-    stops = "，。！？；、：,.!?;:"
-    while len(text) > limit:
-        cut = next((i for i in range(limit, limit // 2, -1) if text[i - 1] in stops + " "), limit)
-        while cut < min(len(text), limit + 1) and text[cut] in stops:
+SUBTITLE_STOPS = "，。！？；、：,.!?;:…—～~"
+TRAILING_SUBTITLE_PUNCT_RE = re.compile(r"[，。！？；、：,.!?;:…—～~\s]+$")
+
+
+def strip_trailing_subtitle_punctuation(text):
+    return TRAILING_SUBTITLE_PUNCT_RE.sub("", str(text or "").strip())
+
+
+def _is_subtitle_stop(text, index):
+    ch = text[index]
+    if ch not in SUBTITLE_STOPS:
+        return False
+    if ch in ".," and index > 0 and index + 1 < len(text) and text[index - 1].isdigit() and text[index + 1].isdigit():
+        return False
+    return True
+
+
+def _caption_chunk_entries(line, limit):
+    text = " ".join(str(line or "").split())
+    while len(strip_trailing_subtitle_punctuation(text)) > limit:
+        cut = next(
+            (i for i in range(limit, limit // 2, -1) if _is_subtitle_stop(text, i - 1) or text[i - 1] == " "),
+            limit,
+        )
+        while cut < len(text) and _is_subtitle_stop(text, cut):
             cut += 1
-        yield text[:cut].strip()
+        raw = text[:cut].strip()
+        display = strip_trailing_subtitle_punctuation(raw)
+        if display:
+            yield display, raw
         text = text[cut:].lstrip()
     if text:
-        yield text
+        display = strip_trailing_subtitle_punctuation(text)
+        if display:
+            yield display, text
+
+
+def caption_chunks(line, limit):
+    for display, _ in _caption_chunk_entries(line, limit):
+        yield display
 
 
 def shot_caption_intervals(line, start, seconds, ratio):
     limit = {"9:16": 12, "3:4": 15, "1:1": 17, "16:9": 23}[ratio]
-    chunks = list(caption_chunks(line, limit))
+    entries = list(_caption_chunk_entries(line, limit))
     # Use audible length for the whole line, and estimate the cue boundaries within it.
-    weights = [sum(0.35 if unicodedata.category(c).startswith("P") else 1 for c in chunk if not c.isspace())
-               for chunk in chunks]
+    weights = [sum(0.35 if unicodedata.category(c).startswith("P") else 1 for c in raw if not c.isspace())
+               for _, raw in entries]
     total = sum(weights)
     elapsed = 0
-    for chunk, weight in zip(chunks, weights):
+    for (chunk, _), weight in zip(entries, weights):
         begin = start + seconds * elapsed / total
         elapsed += weight
         end = start + seconds * elapsed / total
@@ -1414,9 +1494,10 @@ def shot_caption_intervals(line, start, seconds, ratio):
 
 
 def caption_vtt(cue):
+    text = strip_trailing_subtitle_punctuation(cue["text"])
     return (
         f"{stamp(cue['start'])} --> {stamp(cue['end'])} position:50% size:84% align:center\n"
-        f"{escape(cue['text'], quote=False)}\n"
+        f"{escape(text, quote=False)}\n"
     )
 
 
@@ -2555,8 +2636,7 @@ def preview_svg_speech(p, save, job, speech_key, record):
 
 def render_code_motion(p, job, save, speech_key, record, dashscope_key=""):
     template_info = p.get("templateInfo")
-    script = ({"title": p["title"], "scenes": p["items"]} if template_info else
-              draft_content.code_motion_script({"title": p["title"], "scenes": p["items"]}))
+    script = ({"title": p["title"], "scenes": p["items"]} if template_info else code_motion_payload_script(p))
     fps = 24 if template_info else CODE_MOTION_FPS
     appearance = code_motion_appearance(p)
     base = job["id"]
@@ -2578,15 +2658,22 @@ def render_code_motion(p, job, save, speech_key, record, dashscope_key=""):
             cues = []
             cursor = start
             for cue, length in zip(scene["cues"], template_cue_seconds(scene["cues"], seconds, spoken)):
-                cues.append({**cue, "start": cursor, "end": min(cursor + length, start + seconds)})
+                cleaned_text = strip_trailing_subtitle_punctuation(cue.get("text", ""))
+                cues.append({**cue, "text": cleaned_text, "start": cursor, "end": min(cursor + length, start + seconds)})
                 cursor += length
                 if cursor >= start + seconds:
                     break
         else:
-            seconds = max(6 * fps, math.ceil((spoken + 0.45) * fps)) / fps
-            cues = list(shot_caption_intervals(line, start, spoken or seconds, "16:9"))
+            if spoken > 0:
+                tail = 0.65 if scene.get("visual") == "summary" else 0.45
+                seconds = max(round(3.2 * fps), math.ceil((spoken + tail) * fps)) / fps
+            else:
+                est = float(scene.get("seconds") or draft_content.template_slide_seconds(line))
+                seconds = max(round(3.2 * fps), round(est * fps)) / fps
+            cues = code_motion_shot_captions(scene, start, spoken or seconds)
         elapsed = end = start + seconds
-        cues[-1]["end"] = end
+        if cues:
+            cues[-1]["end"] = end
         shots.append({**scene, "start": start, "end": end, "captions": cues})
         entries.append((audio, seconds))
         durations.append(seconds)
@@ -2614,11 +2701,20 @@ def render_code_motion(p, job, save, speech_key, record, dashscope_key=""):
                 "-frames:v", frames, "-start_number", 0, "-q:v", 3, scratch / "avatar-%05d.jpg",
             )
         manifest = scratch / "motion.json"
-        write_json(manifest, {"title": script["title"], "shots": shots, "appearance": appearance,
-                              "fps": fps, "frames": frames, "hasAvatarFrames": bool(avatar_mp4),
-                              "templateInfo": template_info,
-                              "localAvatar": media_path(portrait).as_uri() if portrait else None})
-        job["progress"] = f"逐帧渲染代码动效（{len(shots)} 页 · {frames} 帧）"
+        write_json(manifest, {
+            "title": script["title"],
+            "shortTitle": script.get("shortTitle"),
+            "chapters": script.get("chapters"),
+            "disclaimer": script.get("disclaimer"),
+            "shots": shots,
+            "appearance": appearance,
+            "fps": fps,
+            "frames": frames,
+            "hasAvatarFrames": bool(avatar_mp4),
+            "templateInfo": template_info,
+            "localAvatar": media_path(portrait).as_uri() if portrait else None,
+        })
+        job["progress"] = f"逐帧渲染代码动效（{len(shots)} 幕 · {frames} 帧）"
         save()
         result = subprocess.run(
             [shutil.which("node"), str(ROOT / "scripts/render-code-motion.mjs"), str(manifest), str(scratch)],
@@ -2645,7 +2741,8 @@ def render_code_motion(p, job, save, speech_key, record, dashscope_key=""):
         captions.write_text("WEBVTT\n\n" + "\n".join(caption_vtt(cue) for shot in shots for cue in shot["captions"]),
                             encoding="utf-8")
         captions.replace(MEDIA / (base + ".vtt"))
-        (scratch / f"frame-{fps:05d}.jpg").replace(MEDIA / (base + ".jpg"))
+        poster_idx = min(round(fps * 1.4), max(0, frames - 1))
+        (scratch / f"frame-{poster_idx:05d}.jpg").replace(MEDIA / (base + ".jpg"))
         output.replace(MEDIA / (base + ".mp4"))
     return {
         "url": f"/media/{base}.mp4", "poster": f"/media/{base}.jpg", "captions": f"/media/{base}.vtt",
@@ -2791,9 +2888,16 @@ def write_draft(p, job, save, record=None):
     if item["type"] == "video":
         settings = p["settings"]
         if item.get("videoMode") == "code-motion":
-            job["progress"] = "按主题撰写五幕动效脚本"
+            ref_duration = settings.get("duration")
+            job["progress"] = (
+                f"按 {ref_duration} 秒动态编排代码动效分镜"
+                if ref_duration
+                else "按主题动态编排代码动效分镜"
+            )
             save()
-            job["output"] = draft_content.code_motion_draft(tracked_deepseek("代码动效脚本"), model, item)
+            job["output"] = draft_content.code_motion_draft(
+                tracked_deepseek("代码动效脚本"), model, item, ref_duration,
+            )
             return
         if item.get("videoMode") == "svg":
             job["progress"] = "用 DeepSeek 规划 SVG 道具、动作与口播"

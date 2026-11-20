@@ -840,6 +840,21 @@
         '<option value="' + ci + '"' + (Number(slide.chapterIndex) === ci ? " selected" : "") + ">" + escFn(ch || `章节${ci + 1}`) + "</option>"
       ).join("") +
       "</select></label>" +
+      (motion
+        ? '<label class="field">本页代码动效<select data-tpl-slide="' + idx + '" data-tpl-motion-style="1">' +
+          (global.CODE_MOTION_MOTION_CHOICES || [
+            ["auto", "自动按内容匹配"],
+            ["focus-zoom", "聚焦揭晓"],
+            ["reveal", "渐进揭示"],
+            ["spotlight", "逐项聚光"],
+            ["flow", "递进串联"],
+            ["contrast", "左右对冲"],
+            ["pulse", "警示节律"],
+          ]).map(([mid, mname]) =>
+            '<option value="' + escFn(mid) + '"' + ((slide.motionStyle || "auto") === mid ? " selected" : "") + ">" + escFn(mname) + "</option>"
+          ).join("") +
+          "</select></label>"
+        : "") +
       "</div>" +
       '<label class="field" style="margin-top:10px">本页页签名称<input maxlength="24" data-tpl-slide="' + idx + '" data-tpl-field="name" value="' + escFn(slide.name || "") + '" placeholder="用于下方分镜栏"></label>' +
       "</section></div>";

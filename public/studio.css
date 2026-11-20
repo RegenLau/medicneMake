@@ -2754,6 +2754,35 @@ dialog p b {
   accent-color: var(--brand-600);
 }
 
+.code-motion-clock {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cm-items-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.cm-items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cm-item-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .mode-card[aria-pressed="true"],
 .mode-template-card {
   border-color: var(--brand-500);
