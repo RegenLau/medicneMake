@@ -152,20 +152,51 @@ const StageStudio = (() => {
     return layoutLoads.get(layoutId);
   }
 
+  const activeLayouts = () => (config.stageLayouts || []).filter(item => item.aspect === "16:9");
+  const allowsMode = (layout, mode) => !layout?.supports || (mode === "mix"
+    ? ["card","scene","svg"].some(kind => layout.supports.includes(kind)) : layout.supports.includes(mode));
+
+  function defaultKind(w, type) {
+    const preferred = config.stageCatalog.pointDefaults[type];
+    const layout = activeLayouts().find(item => item.id === w.stagePlan.layout.id);
+    return allowsMode(layout,preferred) ? preferred : ["card","scene","svg"].find(kind => allowsMode(layout,kind));
+  }
+
   function layoutControls(w) {
     const id = w.stagePlan.layout.id;
-    const choices = config.stageLayouts || [];
+    const choices = activeLayouts();
     return '<div class="formrow"><span class="label">布局模板</span><div class="stage-layout-grid">' + choices.map(item =>
       `<button type="button" class="mode-card" data-action="stage-layout" data-val="${esc(item.id)}" aria-pressed="${id === item.id}">
-      <span class="stage-layout-mini" aria-hidden="true"><span></span><span></span><span></span></span><strong>${esc(item.name)}</strong></button>`).join("") +
+      ${StudioAssets.layoutDiagram(item)}<strong>${esc(item.name)}</strong></button>`).join("") +
+      '<button type="button" class="mode-card stage-layout-manage" data-action="stage-manage-layouts">管理布局</button>' +
       (choices.some(item => item.id === id) ? "" : '<span class="small">当前作品保留已下架布局</span>') + '</div></div>';
+  }
+
+  function samplePlan(layout, theme, kind, stage = "explain") {
+    const title = "先核对说明书";
+    const line = "读清楚手边这份资料，再记下需要核对的地方。";
+    const points = [{title:"找到对应栏目", detail:"对照手里的外包装"}, {title:"记下疑问", detail:"带上说明书问药师"}];
+    const slide = {name:title, headline:title, line, type:"steps", layoutMode:stage, chapterIndex:0,
+      question:"说明书先看哪里？", answer:"先找到对应栏目", takeaway:"记下需要核对的地方",
+      points:points.map(({title,detail}) => ({title,desc:detail})), steps:points.map(({title,detail}) => ({title,desc:detail}))};
+    const shot = {...slide, kind, items:points, start:0, end:4, captions:[{start:0,end:4,text:line,focus:stage === "outro" ? "outro" : "all"}]};
+    if (kind === "image") slide.contentImage = "/assets/template-info-tablet.jpg";
+    if (kind === "scene") Object.assign(shot,{visual:"steps",motion:"flow",motif:"checklist",tone:"primary"});
+    if (kind === "svg") {
+      shot.beats = [{action:"leaflet",line,label:"看说明书"}];
+      Object.assign(slide,{action:"leaflet",svgBeats:shot.beats});
+    }
+    if (kind === "asset") Object.assign(shot,{assetUrl:StudioAssets.url("builtin:svg/reading-list"),move:"zoom"});
+    return {layout, previewStage:stage, deck:{title:"看懂用药信息",shortTitle:"用药信息",theme,presenter:"digital",
+      pharmacist:{...TemplateStudio.ensurePharmacist(data)},chapters:["先核对","再记录"],slides:[slide]}, shots:[shot]};
   }
 
   function modeControls(w) {
     const p = w.stagePlan;
+    const layout = activeLayouts().find(item => item.id === p.layout.id);
     return '<div class="formrow"><span class="label">制作方式</span><div class="chips">' +
       draftModes.map(([kind,label]) => btn(label, "stage-mode", "chip" + (p.mode === kind ? " selected" : ""), kind,
-        `aria-pressed="${p.mode === kind}"`)).join("") + '</div></div>' +
+        `aria-pressed="${p.mode === kind}" ${allowsMode(layout,kind) ? "" : "disabled"}`)).join("") + '</div></div>' +
       (p.mode === "mix" ? `<label class="field stage-budget">AI 出图上限
         <input type="number" data-stage-field="imageBudget" min="0" max="4" step="1" value="${imageBudget(w)}">
         <span class="small" id="stage-image-estimate" aria-live="polite">${imageEstimate(w,imageBudget(w))}</span></label>` : "");
@@ -238,6 +269,7 @@ const StageStudio = (() => {
     w.stagePlan.shots = mode === "stage" ? output.shots.map(shot => ({
       ...shot, variants:{[shot.content.kind]:shot.content},
     })) : (output.slides || output.scenes || output.shots).map((row, index) => fromLegacy(row, mode, index));
+    if (fixedKinds.includes(mode)) w.stagePlan.mode = mode;
     w.stagePlan.shortTitle = output.shortTitle || "";
     w.stagePlan.chapters = output.chapters || ["先看要点", "用药提醒"];
     w.stagePlan.disclaimer = output.disclaimer ?? TemplateVideo.DEFAULT_DISCLAIMER;
@@ -356,8 +388,9 @@ const StageStudio = (() => {
     if (!shot) return setup(w);
     selected.set(w, index);
     const tabs = inspector.get(w) || "scene";
+    const support = activeLayouts().find(item => item.id === w.stagePlan.layout.id)?.supports;
     const kindButtons = Object.entries(kinds).map(([kind,name]) => btn(name, "stage-kind", "chip" + (shot.content.kind === kind ? " selected" : ""),
-      kind, `aria-pressed="${shot.content.kind === kind}"`)).join("");
+      kind, `aria-pressed="${shot.content.kind === kind}" ${!support || support.includes(kind) ? "" : "disabled"}`)).join("");
     const isMix = w.stagePlan.mode === "mix";
     const settings = [layoutControls(w), modeControls(w), text("作品标题", "work-title", w.title, 40),
       text("标题短句", "work-shortTitle", w.stagePlan.shortTitle, 20),
@@ -557,7 +590,7 @@ const StageStudio = (() => {
       w.stagePlan.imageBudget = budget;
       const adjusted = active.filter(shot => shot.content.decidedBy !== "user").slice(budget - manual.length);
       for (const shot of adjusted) {
-        selectKind(w, shot, config.stageCatalog.pointDefaults[shot.points.type]);
+        selectKind(w, shot, defaultKind(w, shot.points.type));
         shot.content.adjusted = "因 AI 出图上限调整为默认方式";
       }
       touch(w, adjusted.length > 0);
@@ -695,11 +728,26 @@ const StageStudio = (() => {
     const p = w.stagePlan;
     const index = selected.get(w) || 0;
     const shot = p.shots[index];
-    if (action === "stage-layout") { p.layout.id = value; touch(w, true); }
+    if (action === "stage-manage-layouts") { StudioAssets.manageLayouts(); return true; }
+    if (action === "stage-layout") {
+      const layout = activeLayouts().find(item => item.id === value);
+      if (!layout || value === p.layout.id) return true;
+      if (layout.supports && p.shots.some(row => !layout.supports.includes(row.content.kind))) {
+        notify("所选布局缺少本片使用的制作方式。","warn");
+        return true;
+      }
+      if (!allowsMode(layout, p.mode)) {
+        const allowed = draftModes.find(([kind]) => allowsMode(layout,kind));
+        if (!allowed) { notify("所选布局不支持脚本制作方式。","warn"); return true; }
+        p.mode = allowed[0];
+      }
+      p.layout.id = value;
+      touch(w, true);
+    }
     else if (action === "stage-mode" && ["mix", ...fixedKinds].includes(value) && p.mode !== value) {
       p.mode = value;
       p.shots.forEach(shot => {
-        selectKind(w, shot, value === "mix" ? config.stageCatalog.pointDefaults[shot.points.type] : value);
+        selectKind(w, shot, value === "mix" ? defaultKind(w, shot.points.type) : value);
         for (const key of ["decidedBy","reason","adjusted"]) delete shot.content[key];
       });
       touch(w, true);
@@ -719,7 +767,7 @@ const StageStudio = (() => {
       touch(w,true);
     }
     else if (action === "stage-add" && p.shots.length < 12) {
-      const next = fromLegacy({name:`第 ${p.shots.length + 1} 幕`, line:"", seconds:5}, p.mode === "mix" ? config.stageCatalog.pointDefaults.explain : p.mode, p.shots.length);
+      const next = fromLegacy({name:`第 ${p.shots.length + 1} 幕`, line:"", seconds:5}, p.mode === "mix" ? defaultKind(w,"explain") : p.mode, p.shots.length);
       p.shots.push(next); selected.set(w,p.shots.length-1); touch(w,true);
     } else if (action === "stage-remove" && p.shots.length > 1) {
       p.shots.splice(index,1); selected.set(w,Math.min(index,p.shots.length-1)); touch(w,true);
@@ -758,5 +806,5 @@ const StageStudio = (() => {
     return true;
   }
 
-  return {applies,isActive,normalizeWork,initWork,setupControls,requestDraft,installDraft,installImages,installSpeech,editor,handleInput,handleAction};
+  return {applies,isActive,normalizeWork,initWork,setupControls,samplePlan,requestDraft,installDraft,installImages,installSpeech,editor,handleInput,handleAction};
 })();

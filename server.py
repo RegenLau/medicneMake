@@ -3339,8 +3339,10 @@ def preset_music_item(choice):
 
 
 def list_assets():
+    items = ASSETS.items()
     return [
-        *ASSETS.items(),
+        *(item for item in items if item["kind"] != "layout"),
+        *ASSETS.layout_items(items),
         *(library_music_item(track) for track in music_gen.list_music_library(GENERATED_MUSIC_DIR)),
         *(preset_music_item(choice) for choice, path in MUSIC_TRACKS.items() if path.is_file()),
         *({"id": "builtin:motion/" + action, "kind": "motion", "name": label, "action": action,
@@ -3394,7 +3396,8 @@ class Handler(SimpleHTTPRequestHandler):
                     "codeMotionReady": code_motion_ready(),
                     "templateMotionSwitch": True,
                     "stageRender": STAGE_RENDER,
-                    "stageLayouts": [item for item in ASSETS.items() if item["kind"] == "layout"],
+                    "stageLayouts": ASSETS.layout_items(),
+                    "layoutVariants": asset_library.LAYOUT_VARIANTS,
                     "stageCatalog": ASSETS.stage_catalog(),
                     "imageRates": work_costs.image_estimate_rates(),
                     "sfxPacks": ASSETS.sound_packs(),
@@ -3485,7 +3488,7 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         if (
             self.path not in ("/api/jobs", "/api/costs", "/api/ark-key", "/api/deepseek-key", "/api/speech-key", "/api/dashscope-key", "/api/mureka-key", "/api/upload-frame", "/api/generate-music", "/api/music-library/rename", "/api/music-library/delete",
-                              "/api/library/upload", "/api/library/collect-image", "/api/library/archive")
+                              "/api/library/upload", "/api/library/collect-image", "/api/library/copy-layout", "/api/library/archive")
             or not self.allowed()
             or self.headers.get("Origin") not in (ORIGIN, f"http://localhost:{PORT}")
             or self.headers.get_content_type() != "application/json"
@@ -3496,7 +3499,7 @@ class Handler(SimpleHTTPRequestHandler):
             max_bytes = 8_000_000 if self.path == "/api/upload-frame" else (100000 if self.path in ("/api/jobs", "/api/costs", "/api/generate-music") else 4096)
             if self.path == "/api/library/upload":
                 max_bytes = 11_200_000
-            elif self.path == "/api/library/collect-image":
+            elif self.path in ("/api/library/collect-image", "/api/library/copy-layout"):
                 max_bytes = 32_000
             if not 0 < n <= max_bytes:
                 raise ValueError("请求大小无效")
@@ -3507,6 +3510,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(200, save_uploaded_frame(p))
             if self.path == "/api/library/upload":
                 return self.send_json(200, {"item": ASSETS.upload(p, FFMPEG)})
+            if self.path == "/api/library/copy-layout":
+                return self.send_json(200, {"item": ASSETS.copy_layout(p)})
             if self.path == "/api/library/collect-image":
                 source = media_path(p.get("url"))
                 if source.suffix not in (".png", ".jpg", ".webp") or source.stat().st_size > asset_library.LIMITS["image"]:

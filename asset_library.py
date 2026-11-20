@@ -19,7 +19,7 @@ SVG_ELEMENTS = frozenset("svg g path rect circle ellipse line polyline polygon d
 SVG_ATTRIBUTES = frozenset("id viewBox width height x y x1 x2 y1 y2 cx cy r rx ry d points fill fill-rule stroke stroke-width stroke-linecap stroke-linejoin stroke-dasharray stroke-dashoffset opacity fill-opacity stroke-opacity transform gradientTransform gradientUnits spreadMethod offset stop-color stop-opacity clip-path clip-rule clipPathUnits mask maskUnits maskContentUnits preserveAspectRatio font-size font-weight text-anchor dominant-baseline dx dy".split())
 LOCAL_PAINT = re.compile(r"url\(#[A-Za-z_][\w.:-]*\)")
 USER_ID = re.compile(r"user:[0-9a-f]{32}")
-LIMITS = {"image": 8 * 1024 * 1024, "svg": 300 * 1024}
+LIMITS = {"image": 8 * 1024 * 1024, "svg": 300 * 1024, "layout": 64 * 1024}
 LAYOUT_VARIANTS = {
     "header": ("pill-title+chapter-rail",),
     "chapters": ("rail",),
@@ -212,26 +212,54 @@ class LocalLibrary:
         path, item = self.resolve(asset_id, ("layout",))
         return validate_layout(json.loads(path.read_text(encoding="utf-8"))), item, path
 
+    def layout_items(self, items=None):
+        entries = self.items() if items is None else items
+        layouts = []
+        for item in entries:
+            if item["kind"] != "layout":
+                continue
+            definition, _, _ = self.layout(item["id"])
+            layouts.append({**item, "aspect": definition["aspect"], "supports": definition["supports"],
+                            "regions": definition["regions"]})
+        return layouts
+
+    def copy_layout(self, payload):
+        _, origin, _ = self.layout(payload.get("originId"))
+        fields = {"name": payload.get("name"), "tags": ", ".join(origin["tags"]),
+                  "license": origin["license"], "credit": origin.get("credit") or f'来源布局：{origin["name"]}'}
+        definition = validate_layout(payload.get("definition"))
+        return self.add("layout", json.dumps(definition, ensure_ascii=False).encode("utf-8"),
+                        fields, None, "copy", origin=origin)
+
     def upload(self, payload, ffmpeg):
         kind = payload.get("kind")
         if kind not in LIMITS:
-            raise ValueError("请选择图片或 SVG。")
+            raise ValueError("请选择图片、SVG 或布局 JSON。")
         try:
             raw = base64.b64decode(payload["data"], validate=True)
         except (KeyError, TypeError, ValueError, binascii.Error) as error:
             raise ValueError("文件数据无效。") from error
         return self.add(kind, raw, payload, ffmpeg, "upload")
 
-    def add(self, kind, data, fields, ffmpeg, source):
+    def add(self, kind, data, fields, ffmpeg, source, origin=None):
         if not 0 < len(data) <= LIMITS[kind]:
-            raise ValueError("文件过大。图片上限 8 MB，SVG 上限 300 KB。")
+            raise ValueError("文件大小无效。图片上限 8 MB，SVG 上限 300 KB，布局上限 64 KB。")
         if kind == "svg":
             data, ext = clean_svg(data), ".svg"
+        elif kind == "layout":
+            try:
+                definition = json.loads(data.decode("utf-8-sig"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise ValueError("请选择 UTF-8 编码的布局 JSON 文件。") from error
+            data = json.dumps(validate_layout(definition), sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ext = ".json"
         else:
             ext = check_image(data, ffmpeg)
         name = text_field(fields, "name", 80, required=True)
         rights = text_field(fields, "license", 120, required=True)
         credit = text_field(fields, "credit", 200)
+        if kind == "layout" and not credit:
+            raise ValueError("请填写布局的原始来源或署名。")
         if rights == "CC BY" and not credit:
             raise ValueError("CC BY 素材请填写署名。")
         tags = list(dict.fromkeys(tag.strip() for tag in re.split(r"[,，、]", text_field(fields, "tags", 180)) if tag.strip()))
@@ -240,7 +268,7 @@ class LocalLibrary:
         sha = hashlib.sha256(data).hexdigest()
         with self.lock:
             entries = self._read_user()
-            for item in entries:
+            for item in entries if kind != "layout" else ():
                 if item.get("sha256") == sha and item["kind"] == kind and not item.get("archived"):
                     return self.public(item)
             files = self.root / "files"
@@ -254,6 +282,12 @@ class LocalLibrary:
             item = {"id": "user:" + uuid.uuid4().hex, "kind": kind, "name": name, "tags": tags,
                     "source": source, "license": rights, "credit": credit, "sha256": sha,
                     "file": filename, "meta": {key: value for key, value in metadata.items() if value}}
+            if kind == "layout":
+                item["aspect"] = definition["aspect"]
+                if origin:
+                    item["originId"] = origin["id"]
+                    if origin.get("termsUrl"):
+                        item["termsUrl"] = origin["termsUrl"]
             entries.insert(0, item)
             self._write_user(entries)
             return self.public(item)

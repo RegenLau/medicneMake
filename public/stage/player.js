@@ -30,6 +30,8 @@
       if (!fonts.length) throw Error("素材库字体未加载。");
     }
     await document.fonts.ready;
+    await Promise.all(input.shots.map((shot,index) =>
+      Contents[shot.kind].prepare?.(shot, {deck, theme:deck.theme, slide:deck.slides[index], index})));
   }
 
   const mapSrc = (url) => imgMap.get(url) || url || "";
@@ -78,9 +80,9 @@
     const focus = cue?.focus || "all";
     const renderer = Contents[shot.kind];
     const code = shot.kind === "card" || shot.kind === "scene";
-    const layoutFocus = code ? "all" : focus;
-    const stage = layoutFocus === "outro" && !slide.outroImage ? "outro"
-      : slide.layoutMode === "hook" && !slide.contentImage ? "hook" : "explain";
+    const layoutFocus = plan.previewStage === "outro" ? "outro" : code ? "all" : focus;
+    const stage = plan.previewStage || (layoutFocus === "outro" && !slide.outroImage ? "outro"
+      : slide.layoutMode === "hook" && !slide.contentImage ? "hook" : "explain");
     const progress = Math.max(0, Math.min(1, time / plan.shots.at(-1).end));
     const highlightWords = cue?.highlightWords?.length ? cue.highlightWords
       : code ? (shot.labels || shot.items?.map((item) => item.title) || []) : slide.highlightWords;

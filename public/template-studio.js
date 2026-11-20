@@ -300,7 +300,7 @@
           "</small></span></button>",
       ).join("") +
       "</div></div>" +
-      '<div class="formrow"><span class="label">主讲人槽位（左侧恒定栏，不挤压右图）</span><div class="chips">' +
+      '<div class="formrow"><span class="label">主讲人</span><div class="chips">' +
       TemplateVideo.PRESENTERS.map(
         (pr) =>
           '<button type="button" class="chip' +
@@ -327,7 +327,7 @@
           "</div>"
         : "") +
       "</div>" +
-      '<div class="formrow"><span class="label">药师权威名片（显示在左侧主讲区）</span><div class="tpl-profile-grid">' +
+      '<div class="formrow"><span class="label">药师名片</span><div class="tpl-profile-grid">' +
       '<label class="field">姓名<input maxlength="16" data-pharm="name" value="' +
       escFn(p.name) +
       '" placeholder="例如：李明远"></label>' +

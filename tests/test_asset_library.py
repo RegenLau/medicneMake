@@ -1,3 +1,6 @@
+import base64
+from copy import deepcopy
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -24,6 +27,45 @@ class AssetLibraryTests(unittest.TestCase):
             self.assertEqual(asset_library.digest(path), item["sha256"])
             with self.assertRaises(ValueError):
                 reopened.resolve(item["id"], ("font",))
+
+    def test_layout_copy_assigns_new_ids_and_archived_layout_stays_resolvable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            library = asset_library.LocalLibrary(Path(tmp), server.ASSETS.builtin_root)
+            classic, origin, path = library.layout("builtin:layout/info-classic")
+            before = asset_library.digest(path)
+            definition = deepcopy(classic)
+            definition["regions"]["media"]["x"] = 21.5
+            fields = {"originId": origin["id"], "definition": definition, "name": "左栏布局副本"}
+            one = library.copy_layout(fields)
+            two = library.copy_layout(fields)
+            self.assertNotEqual(one["id"], two["id"])
+            self.assertEqual(one["originId"], origin["id"])
+            self.assertEqual(one["sha256"], two["sha256"])
+            self.assertEqual(before, asset_library.digest(path))
+            library.archive(one["id"])
+            self.assertNotIn(one["id"], [item["id"] for item in library.layout_items()])
+            self.assertEqual(library.layout(one["id"])[0], definition)
+            self.assertIn(two["id"], [item["id"] for item in library.layout_items()])
+
+    def test_layout_upload_requires_source_and_accepts_only_the_schema(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            library = asset_library.LocalLibrary(Path(tmp), server.ASSETS.builtin_root)
+            definition, _, _ = library.layout("builtin:layout/info-classic")
+            def upload(spec, credit):
+                return library.upload({"kind": "layout", "name": "新的布局", "license": "CC0", "credit": credit,
+                                       "data": base64.b64encode(json.dumps(spec).encode()).decode()}, None)
+            with self.assertRaisesRegex(ValueError, "来源"):
+                upload(definition, "")
+            with self.assertRaisesRegex(ValueError, "未知字段"):
+                upload({**definition, "style": "<script>"}, "本机测试")
+            broken = deepcopy(definition)
+            broken["regions"]["media"]["component"] = "unknown"
+            with self.assertRaisesRegex(ValueError, "组件无效"):
+                upload(broken, "本机测试")
+            item = upload(definition, "本机测试")
+            self.assertEqual(item["aspect"], "16:9")
+            self.assertEqual(item["license"], "CC0")
+            self.assertEqual(library.layout(item["id"])[0], definition)
 
     def test_svg_static_allowlist_checks_embedded_content_and_attributes(self):
         for body in ('<script/>', '<foreignObject/>', '<image href="https://example.invalid/img"/>',

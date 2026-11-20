@@ -2454,6 +2454,7 @@ function detail(w) {
       : []),
   ];
 
+  const videoAssets = w.video?.assetVersions || w.video?.assets || [];
   const body = vid
     ? '<div class="video-stage" data-ratio="' +
       esc(w.settings.ratio) +
@@ -2469,9 +2470,9 @@ function detail(w) {
           '">') +
       "</video></div>" +
       '<div id="video-stale" class="banner warn" hidden>内容或背景音乐已修改。返回编辑并重新合成后，成片会同步更新。</div>' +
-      ((w.video.assets || []).some((item) => item.credit) ?
+      (videoAssets.some((item) => item.credit) ?
         '<details class="transcript"><summary>素材署名</summary><ul>' +
-        w.video.assets.filter((item) => item.credit).map((item) =>
+        videoAssets.filter((item) => item.credit).map((item) =>
           `<li>${esc(item.credit)} · ${esc(item.license)}${item.termsUrl ? ` · <a href="${esc(item.termsUrl)}" target="_blank" rel="noopener">授权详情</a>` : ""}</li>`).join("") +
         '</ul></details>' : "") +
       '<div class="dividerline"></div><details class="transcript" open><summary>' +
@@ -2545,7 +2546,7 @@ function detail(w) {
         btn("撤回至草稿继续修改", "withdraw", "secondary widebtn")
       : btn("提交审核", "submit", "primary widebtn") +
         btn(
-          vid ? (isTpl ? "返回模板编辑" : "返回分镜编辑") : "编辑正文与配图",
+          vid ? (isTpl && !StageStudio.isActive(w) ? "返回模板编辑" : "返回分镜编辑") : "编辑正文与配图",
           "edit",
           "secondary widebtn",
         )) +
