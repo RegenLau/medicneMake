@@ -3905,3 +3905,10 @@ dialog p b {
 .stage-fields .shot-options { min-width: 0; }
 .stage-rail .scene-choice-title { display: block; font-weight: 650; }
 .stage-rail .scene-choice-meta { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
+
+.stage-budget input { max-width: 8rem; }
+.stage-decision { display: grid; justify-items: start; gap: 6px; margin: 4px 0; }
+.stage-decision p { margin: 0; }
+.stage-adjusted { color: var(--warning, #9b5320); }
+.stage-kind-badge { display: inline-block; margin-right: 8px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; }
+.stage-overwrite { display: flex; gap: 8px; align-items: center; }

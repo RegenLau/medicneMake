@@ -48,6 +48,13 @@ IMAGE_RATES = {
 }
 
 
+def image_estimate_rates():
+    rates = {model: {size: rate for size in ("1K", "2K", "4K")} for model, rate in IMAGE_RATES.items()}
+    # Ark bills Seedream 5.5 by output pixels. Use the upper price for each workbench size.
+    rates["doubao-seedream-5-5-261028"] = {"1K": "0.13", "2K": "0.23"}
+    return rates
+
+
 def counter(value):
     return value if type(value) is int and value >= 0 else None
 

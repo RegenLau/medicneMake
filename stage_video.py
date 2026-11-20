@@ -49,7 +49,7 @@ def stage_input(p, library, media_path):
     return layout, deck, shots, pictures, used
 
 
-def validate_shot(item, layout, compatible, library, media_path, pictures, used):
+def validate_shot_common(item):
     item = mapping(item, "分镜格式无效。")
     name = draft_content.string_field(item, "name", 60)
     line = draft_content.string_field(item, "line", 450)
@@ -74,16 +74,22 @@ def validate_shot(item, layout, compatible, library, media_path, pictures, used)
         weight = cue.get("weight", 1)
         if type(weight) not in (int, float) or not 0 < weight <= 500:
             raise ValueError("字幕节拍权重无效。")
+    items = points.get("items", [])
+    if not isinstance(items, list) or len(items) > 12 or not all(isinstance(item, dict) for item in items):
+        raise ValueError("分镜要点条目格式无效。")
+    return {"name": name, "line": line, "chapterIndex": chapter, "seconds": seconds, "cues": cue_list}
+
+
+def validate_shot(item, layout, compatible, library, media_path, pictures, used):
+    base = validate_shot_common(item)
+    points = item["points"]
+    items = points.get("items", [])
     content = mapping(item.get("content"), "请选择本幕制作方式。")
     kind = content.get("kind")
     if not isinstance(kind, str) or kind not in layout["supports"] or (compatible and kind != compatible):
         raise ValueError("所选布局不支持本幕制作方式。")
-    base = {"name": name, "line": line, "chapterIndex": chapter, "seconds": seconds, "cues": cue_list,
-            "kind": kind, "tailPause": item.get("tailPause", 0.55)}
+    base.update(kind=kind, tailPause=item.get("tailPause", 0.55))
     slide = {**{key: points[key] for key in SLIDE_FIELDS & points.keys()}, **base}
-    items = points.get("items", [])
-    if not isinstance(items, list) or len(items) > 12 or not all(isinstance(item, dict) for item in items):
-        raise ValueError("分镜要点条目格式无效。")
     default_points = [{"title": entry.get("title", ""), "desc": entry.get("detail", "")} for entry in items]
     for field in ("points", "steps", "warnings", "checks"):
         slide.setdefault(field, default_points)

@@ -6,6 +6,26 @@
   {"id":"builtin:font/noto-sans-sc","kind":"font","name":"Noto Sans SC","tags":["简体中文","无衬线"],"source":"Google Fonts / Noto Project","license":"SIL OFL 1.1","termsUrl":"/assets/library/fonts/OFL.txt","file":"fonts/NotoSansSC.ttf"},
   {"id":"builtin:layout/info-classic","kind":"layout","name":"信息图模板","tags":["左栏主讲","16:9"],"aspect":"16:9","source":"内置","license":"项目自制","file":"layouts/info-classic.json"},
   {"id":"builtin:stage-config/v1","kind":"stage-config","data":{
-    "pointVisuals":{"cover":"hook","explain":"mechanism","compare":"compare","steps":"steps","warning":"warning","summary":"summary","timeline":"timeline","checklist":"checklist"}
+    "pointVisuals":{"cover":"hook","explain":"mechanism","compare":"compare","steps":"steps","warning":"warning","summary":"summary","timeline":"timeline","checklist":"checklist"},
+    "pointTypes":{"cover":"开场问题和直答","explain":"原理或一条关键事实","compare":"真实做法或情形对比","steps":"有实际先后关系的步骤","warning":"误区或警示","summary":"收口和提醒","timeline":"时间条件与决策","checklist":"并列的核对要点"},
+    "pointDefaults":{"cover":"card","explain":"scene","compare":"scene","steps":"scene","warning":"scene","summary":"card","timeline":"scene","checklist":"card"},
+    "sceneDefaults":{
+      "hook":{"motion":"focus-zoom","motif":"pill","tone":"primary"},
+      "mechanism":{"motion":"reveal","motif":"pill","tone":"primary"},
+      "compare":{"motion":"contrast","motif":"none","tone":"primary"},
+      "steps":{"motion":"flow","motif":"none","tone":"primary"},
+      "timeline":{"motion":"flow","motif":"clock","tone":"warm"},
+      "checklist":{"motion":"spotlight","motif":"checklist","tone":"safe"},
+      "warning":{"motion":"pulse","motif":"alert","tone":"caution"},
+      "summary":{"motion":"focus-zoom","motif":"shield","tone":"safe"}
+    },
+    "svgDefault":"consult",
+    "presenters":{
+      "image":{"strengths":"开场快速交代生活情境，有身体部位、药品包装或场景需要整体静态示意的内容。","avoid":"需要按口播逐项展开的实物操作、时间决策、纯文字。","cost":"方舟按张收费","options":{"imagePrompt":"中文配图描述，最多 400 字，不含未在脚本出现的医学事实。"}},
+      "card":{"strengths":"文字为主、要点密集、一个结论或多个并列检查项。适合复述要点、提醒和收口。","avoid":"需要实际运动演示的操作、复杂机制。","cost":0,"options":{"motionStyle":["auto","reveal","spotlight","flow","contrast","pulse","focus-zoom"]}},
+      "scene":{"strengths":"机制解释、前后时间判断、条件决策、对比、结构化警示，也可用图标串联抽象步骤。","avoid":"道具能直接显示的手部操作与动作细节。","cost":0,"options":{"visual":["hook","mechanism","compare","steps","timeline","checklist","warning","summary"],"motion":["reveal","spotlight","flow","contrast","pulse","focus-zoom"],"motif":["pill","bottle","clock","dropper","thermometer","heart","stomach","body","alert","shield","checklist","none"],"tone":["primary","warm","caution","safe"]}},
+      "svg":{"strengths":"说明书栏目定位、转动药盒查看标签、按体重核对记录、操作滴眼液、写用药记录和把药品放进随身药袋等实物分步演示。","avoid":"抽象药理机制、复杂数据比较，或清单中无贴切道具的动作。","cost":0,"options":{"beats":{"actions":{"leaflet":"说明书翻页，放大镜移到对应栏目","carton":"转动药盒，沿边描出标签位置","clock":"时钟指针转动","scale":"体重秤指针摆动","log":"笔在记录本上写下两行","travel":"把药盒和药瓶放进随身药包并拉上拉链","compare":"片状图标分开，出现警示叉号（仅用于明确的误区）","eyedrop":"滴眼液瓶靠近眼部，滴液落向下眼睑的小袋，瓶口不接触眼睛","consult":"出现咨询对话与勾选标记"},"count":"1–3 段"}}},
+      "asset":{"strengths":"素材库有和本幕对象、动作或图示直接对应的现成图片或 SVG。","avoid":"没有贴切素材或需要按口播演示道具动作的内容。","cost":0,"options":{"assetId":"从 candidateAssets 中选 ID。","move":["still","zoom","pan"]}}
+    }
   }}
 ]

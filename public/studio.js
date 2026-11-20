@@ -2869,7 +2869,7 @@ async function startJob(w, target, items, extra = {}, settings = w.settings) {
   await sendJob(w, owner);
 }
 
-function authorize(w, count, kind, fn, voicedCount = count) {
+function authorize(w, count, kind, fn, voicedCount = count, draftOptions) {
   const writing = kind === "draft";
   const motion = kind === "code-motion";
   const isArk = !writing && !motion;
@@ -2906,7 +2906,9 @@ function authorize(w, count, kind, fn, voicedCount = count) {
       : `<p>正文完成后将尝试调用火山方舟生成建议配图（当前尚未连接火山方舟，届时可补充连接后再生成）。</p>`)
     : "";
   const chosenTextModel = resolveTextModel(w.settings);
-  const textSummary = writing ? "<p>将使用 DeepSeek " +
+  const stageText = draftOptions ? `<p>${esc(draftOptions.detail)}预计提交 ${count} 次文本请求，按 Token 计费。</p>` +
+    (draftOptions.image ? `<p>${esc(draftOptions.image)}</p>` : "") : "";
+  const textSummary = stageText || (writing ? "<p>将使用 DeepSeek " +
     (w.type === "video" ? (isCodeMotion(w)
       ? (reference === null
         ? "按主题内容动态规划分镜数量、版式、动效与口播。"
@@ -2921,7 +2923,7 @@ function authorize(w, count, kind, fn, voicedCount = count) {
       w.job?.partial ? "根据已生成的正文规划配图。" : "生成完整文章，再按正文决定哪些段落需要配图。") +
     (isSvgVideo(w) ? "预计提交 1 次文本请求，分镜校验未通过时校正 1 次，按 token 计费。</p>" :
       "预计提交 " + count + " 次文本请求，按 token 计费。</p>") + pictureSummary +
-    '<div class="summary-kv" style="margin-top:12px"><span class="pill">' + esc(textModelLabel(chosenTextModel)) + "</span></div>" : "";
+    '<div class="summary-kv" style="margin-top:12px"><span class="pill">' + esc(textModelLabel(chosenTextModel)) + "</span></div>" : "");
   const arkSummary = !isArk ? "" : (
     "<p>将按当前参数提交最多 <b>" +
       count +

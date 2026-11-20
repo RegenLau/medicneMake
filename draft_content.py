@@ -86,7 +86,7 @@ def validate_request(item, settings, video_models):
             raise ValueError("请选择一种有效的文章排版。")
     elif item.get("type") == "video":
         video_mode = item.get("videoMode", "storyboard")
-        if video_mode not in ("storyboard", "template", "code-motion", "svg"):
+        if video_mode not in ("storyboard", "template", "code-motion", "svg", "stage"):
             raise ValueError("请选择有效的视频制作方式。")
         duration = settings.get("duration")
         if duration is not None and (type(duration) is not int or duration not in DURATIONS):

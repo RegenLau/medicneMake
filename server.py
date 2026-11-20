@@ -28,6 +28,7 @@ import draft_content
 import asset_library
 import svg_motion
 import stage_video
+import mix_plan
 import music_gen
 import work_costs
 
@@ -964,6 +965,8 @@ def setting_valid(p):
         if selected_text_model not in text_models():
             raise ValueError("请选择有效的 DeepSeek 文本模型。")
         draft_content.validate_request(p["draft"], p["settings"], VIDEO_MODELS)
+        if p["draft"].get("videoMode") == "stage":
+            mix_plan.validate_setup(p["draft"], ASSETS)
         return
     if p["kind"] == "video" and p.get("stage") is True:
         validate_stage_video(p)
@@ -3121,6 +3124,21 @@ def write_draft(p, job, save, record=None):
     item = p["draft"]
     if item["type"] == "video":
         settings = p["settings"]
+        if item.get("videoMode") == "stage":
+            script = item.get("script") or job.get("stageScript")
+            if script is None:
+                job["progress"] = "撰写视频脚本"
+                save()
+                script = mix_plan.write_script(
+                    tracked_deepseek("视频脚本"), model, item, settings.get("duration"), ASSETS.stage_catalog(),
+                )
+                job["stageScript"] = script
+                save()
+            job["progress"] = "编排各幕呈现方式"
+            save()
+            label = "Mix 编排呈现" if item["presentation"] == "mix" else "SVG 道具编排"
+            job["output"] = mix_plan.arrange(tracked_deepseek(label), model, item, script, ASSETS)
+            return
         if item.get("videoMode") == "code-motion":
             ref_duration = settings.get("duration")
             job["progress"] = (
@@ -3368,6 +3386,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "stageRender": STAGE_RENDER,
                     "stageLayouts": [item for item in ASSETS.items() if item["kind"] == "layout"],
                     "stageCatalog": ASSETS.stage_catalog(),
+                    "imageRates": work_costs.image_estimate_rates(),
                     "svgMotion": {"actions": svg_motion.ACTIONS, "exportReady": svg_motion.ready(FFMPEG)},
                     **speech_connection(),
                     "keyStorage": KEY_STORAGE,

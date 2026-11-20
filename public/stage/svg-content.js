@@ -144,7 +144,29 @@
     ].join(""));
   }
 
-  const motions = { leaflet, carton, clock, scale, log, travel, compare, consult };
+  function eyedrop(p) {
+    const approach = ease(p * 3);
+    const lower = ease((p - .18) * 3.3);
+    const drop = ease((p - .48) * 3.4);
+    const lid = fmt(20 + 30 * lower);
+    return group("translate(665 491)", [
+      path(`M-119 0 Q-55 -70 0 -63 Q55 -70 119 0 Q63 ${lid} 0 ${lid} Q-63 ${lid} -119 0 Z`, white),
+      circle(0, -12, 28, blue), circle(0, -12, 11, ink),
+      path(`M-119 0 Q-54 ${lid + 21} 0 ${lid + 21} Q54 ${lid + 21} 119 0`, "none", blue, 7),
+      group(`translate(63 ${fmt(-227 + 83 * approach)}) rotate(14)`, [
+        rect(-29, -58, 58, 79, 13, pale),
+        rect(-18, -49, 36, 30, 6, white, "none"),
+        path("M-16 21 H16 L7 43 H-7 Z", white, ink),
+      ].join("")),
+      (p > .48 && drop < 1)
+        ? group(`translate(${fmt(53 - 48 * drop)} ${fmt(-90 + 139 * drop)})`,
+          path("M0 -14 Q-20 9 0 15 Q20 9 0 -14 Z", blue, "none"))
+        : "",
+      drop === 1 ? circle(5, 48, 8, blue, "none") : "",
+    ].join(""));
+  }
+
+  const motions = { leaflet, carton, clock, scale, log, travel, compare, consult, eyedrop };
   const font = '"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif';
 
   function lines(value, size, maxLines) {
@@ -166,6 +188,7 @@
     log: ["记录", "清单", "漏服", "时间", "药名"],
     travel: ["药袋", "分类", "原包装", "出门"],
     compare: ["误区", "掰开", "半片", "加量"],
+    eyedrop: ["滴眼", "下眼睑", "瓶口", "眼睛"],
     consult: ["药师", "咨询", "医师"],
   };
 
