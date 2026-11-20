@@ -1753,6 +1753,11 @@
       : DEFAULT_DISCLAIMER;
     return {
       theme: base.theme === "warm" ? "warm" : "medical",
+      ...(base.themeId ? { themeId: String(base.themeId) } : {}),
+      ...(base.themeVars && typeof base.themeVars === "object" && !Array.isArray(base.themeVars) ? { themeVars: base.themeVars } : {}),
+      ...(base.themeBackground ? { themeBackground: String(base.themeBackground) } : {}),
+      ...(base.themeGlass !== undefined ? { themeGlass: Boolean(base.themeGlass) } : {}),
+      ...(base.themeFadeColor ? { themeFadeColor: String(base.themeFadeColor) } : {}),
       presenter: PRESENTERS.some((p) => p.id === base.presenter) ? base.presenter : "digital",
       title,
       shortTitle,

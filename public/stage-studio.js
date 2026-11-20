@@ -5,6 +5,7 @@ const StageStudio = (() => {
   const CLASSIC = "builtin:layout/info-classic";
   const kinds = {image: "AI 完整图", card: "信息图动效", scene: "代码动效场景", svg: "SVG 演示动画", asset: "素材库素材", mg: "MG 动画"};
   const layoutLoads = new Map();
+  const themeLoads = new Map();
   const selected = new WeakMap();
   const inspector = new WeakMap();
   const mgPanels = new WeakMap();
@@ -154,7 +155,27 @@ const StageStudio = (() => {
     return layoutLoads.get(layoutId);
   }
 
+  function getTheme(themeId) {
+    if (!themeLoads.has(themeId)) {
+      const pending = jsonRequest(StudioAssets.url(themeId)).catch(error => {
+        themeLoads.delete(themeId);
+        throw error;
+      });
+      themeLoads.set(themeId, pending);
+    }
+    return themeLoads.get(themeId);
+  }
+
   const activeLayouts = () => (config.stageLayouts || []).filter(item => item.aspect === "16:9");
+  const activeThemes = () => config.stageThemes || [];
+  const defaultThemeId = w => w.templateTheme === "warm" ? "builtin:theme/warm" : "builtin:theme/medical";
+  const themeIdFor = w => w.stagePlan?.themeId || defaultThemeId(w);
+  const themeName = w => {
+    const id = themeIdFor(w);
+    return activeThemes().find(item => item.id === id)?.name
+      || TemplateVideo.THEMES.find(item => item.id === (w.templateTheme || "medical"))?.name
+      || "医疗白蓝风";
+  };
   const allowsMode = (layout, mode) => !layout?.supports || (mode === "mix"
     ? ["card","scene","svg"].some(kind => layout.supports.includes(kind)) : layout.supports.includes(mode));
 
@@ -174,6 +195,17 @@ const StageStudio = (() => {
       (choices.some(item => item.id === id) ? "" : '<span class="small">当前作品保留已下架布局</span>') + '</div></div>';
   }
 
+  function themeControls(w) {
+    const id = themeIdFor(w);
+    const choices = activeThemes();
+    if (!choices.length) return "";
+    return '<div class="formrow"><span class="label">视觉主题</span><div class="stage-theme-grid">' + choices.map(item =>
+      `<button type="button" class="mode-card stage-theme-card" data-action="stage-theme" data-val="${esc(item.id)}" aria-pressed="${id === item.id}">
+      ${StudioAssets.themeSwatch(item)}<strong>${esc(item.name)}</strong></button>`).join("") +
+      '<button type="button" class="mode-card stage-theme-manage" data-action="stage-manage-themes">管理主题</button>' +
+      (w.stagePlan.themeId && !choices.some(item => item.id === id) ? '<span class="small">当前作品保留已下架主题</span>' : "") + '</div></div>';
+  }
+
   function samplePlan(layout, theme, kind, stage = "explain") {
     const title = "先核对说明书";
     const line = "读清楚手边这份资料，再记下需要核对的地方。";
@@ -190,7 +222,19 @@ const StageStudio = (() => {
     }
     if (kind === "asset") Object.assign(shot,{assetUrl:StudioAssets.url("builtin:svg/reading-list"),move:"zoom"});
     if (kind === "mg") Object.assign(shot,{motionAssetUrl:StudioAssets.motionUrl("builtin:lottie/capsule"),fit:"auto",overlay:"points"});
-    return {layout, previewStage:stage, deck:{title:"看懂用药信息",shortTitle:"用药信息",theme,presenter:"digital",
+    const themeDeck = theme && typeof theme === "object"
+      ? {
+          theme: theme.base === "warm" ? "warm" : "medical",
+          ...(theme.id ? { themeId: theme.id } : {}),
+          themeVars: theme.vars,
+          themeGlass: Boolean(theme.glass),
+          ...(theme.fadeColor ? { themeFadeColor: theme.fadeColor } : {}),
+          ...(theme.background?.assetId
+            ? { themeBackground: theme.background.url || StudioAssets.url(theme.background.assetId) }
+            : {}),
+        }
+      : { theme: theme === "warm" ? "warm" : "medical" };
+    return {layout, previewStage:stage, deck:{title:"看懂用药信息",shortTitle:"用药信息",...themeDeck,presenter:"digital",
       pharmacist:{...TemplateStudio.ensurePharmacist(data)},chapters:["先核对","再记录"],slides:[slide]}, shots:[shot]};
   }
 
@@ -206,7 +250,7 @@ const StageStudio = (() => {
   }
 
   function setupControls(w) {
-    return layoutControls(w) + modeControls(w);
+    return layoutControls(w) + themeControls(w) + modeControls(w);
   }
 
   function submitDraft(w, draft = {}, stageDraft = "stage", shotIndex) {
@@ -347,10 +391,20 @@ const StageStudio = (() => {
     syncBlocks(w);
   }
 
-  function deck(w) {
+  function deck(w, themeDef) {
     const p = w.stagePlan;
+    const themeProps = themeDef
+      ? {
+          theme: themeDef.base === "warm" ? "warm" : "medical",
+          ...(p.themeId ? { themeId: p.themeId } : {}),
+          themeVars: themeDef.vars,
+          themeGlass: Boolean(themeDef.glass),
+          ...(themeDef.fadeColor ? { themeFadeColor: themeDef.fadeColor } : {}),
+          ...(themeDef.background?.assetId ? { themeBackground: StudioAssets.url(themeDef.background.assetId) } : {}),
+        }
+      : { theme: w.templateTheme || "medical" };
     return {title:w.title, shortTitle:p.shortTitle, chapters:p.chapters, disclaimer:p.disclaimer,
-      theme:w.templateTheme || "medical", presenter:w.templatePresenter || "digital", pharmacist:{...TemplateStudio.ensurePharmacist(data)},
+      ...themeProps, presenter:w.templatePresenter || "digital", pharmacist:{...TemplateStudio.ensurePharmacist(data)},
       slides:p.shots.map(shot => {
         const {points, content} = shot;
         const items = points.items.map(({title, detail}) => ({title, desc:detail}));
@@ -363,7 +417,7 @@ const StageStudio = (() => {
       })};
   }
 
-  function previewPlan(w, layout) {
+  function previewPlan(w, layout, themeDef) {
     let start = 0;
     const shots = w.stagePlan.shots.map(shot => {
       const cues = shot.cues.length ? shot.cues : authoredCues(shot.line);
@@ -385,7 +439,7 @@ const StageStudio = (() => {
       start = end;
       return spec;
     });
-    return {layout, deck:deck(w), shots, compatibility:w.stagePlan.compatibility, fontId:w.settings.fontId};
+    return {layout, deck:deck(w, themeDef), shots, compatibility:w.stagePlan.compatibility, fontId:w.settings.fontId};
   }
 
   function select(name, field, values, current) {
@@ -493,11 +547,11 @@ const StageStudio = (() => {
     const kindButtons = Object.entries(kinds).map(([kind,name]) => btn(name, "stage-kind", "chip" + (shot.content.kind === kind ? " selected" : ""),
       kind, `aria-pressed="${shot.content.kind === kind}" ${!support || support.includes(kind) ? "" : "disabled"}`)).join("");
     const isMix = w.stagePlan.mode === "mix";
-    const settings = [layoutControls(w), modeControls(w), text("作品标题", "work-title", w.title, 40),
+    const settings = [layoutControls(w), themeControls(w), modeControls(w), text("作品标题", "work-title", w.title, 40),
       text("标题短句", "work-shortTitle", w.stagePlan.shortTitle, 20),
       ...w.stagePlan.chapters.map((name,i) => text(`章节 ${i+1}`, "work-chapter:"+i, name, 10)),
       text("底部参考声明", "work-disclaimer", w.stagePlan.disclaimer, 60),
-      TemplateStudio.templateSetupHtml(w,data,esc,btn), renderMusicStudioCard(w, {showModeChips:true}), soundControls(w),
+      TemplateStudio.templateSetupHtml(w,data,esc,btn,{hideTheme:true}), renderMusicStudioCard(w, {showModeChips:true}), soundControls(w),
       select("全片字体", "font", [["", "默认"], ["builtin:font/noto-sans-sc", "Noto Sans SC"]], w.settings.fontId)].join("");
     const items = shot.points.items.map(item => [item.title,item.detail,item.tag].filter(Boolean).join("｜")).join("\n");
     const decision = isMix || shot.content.reason || shot.content.adjusted || shot.content.mgRequest ? '<div class="stage-decision">' +
@@ -600,10 +654,13 @@ const StageStudio = (() => {
       player.drawFrame(Math.min(shot.end - .001, shot.start + offset));
     }
     async function prepare() {
-      const layout = await getLayout(w.stagePlan.layout.id);
+      const [layout, themeDef] = await Promise.all([
+        getLayout(w.stagePlan.layout.id),
+        w.stagePlan.themeId ? getTheme(w.stagePlan.themeId) : null,
+      ]);
       if (!iframe.isConnected) return;
       player = iframe.contentWindow;
-      plan = previewPlan(w, layout);
+      plan = previewPlan(w, layout, themeDef);
       seek.max = String(w.stagePlan.shots[index].seconds);
       await player.setPlan(plan);
       draw(Number(seek.value));
@@ -828,7 +885,8 @@ const StageStudio = (() => {
       delete job.payload.svg;
       delete job.payload.svgLayout;
       Object.assign(job.payload,{stage:true,layoutId:p.layout.id,title:w.title,shortTitle:p.shortTitle || undefined,
-        disclaimer:p.disclaimer,chapters:p.chapters,appearance:{theme:appearance.theme,presenter:appearance.presenter,pharmacist:appearance.pharmacist},
+        disclaimer:p.disclaimer,chapters:p.chapters,appearance:{theme:appearance.theme,presenter:appearance.presenter,pharmacist:appearance.pharmacist,
+          ...(p.themeId ? {themeId:p.themeId} : {})},
         compatibility:p.compatibility,audio:p.audio,...(avatar ? {avatar} : {}),...(w.video?.url ? {previousVideo:w.video.url} : {})});
       // Drop optional absent values before saving so the replay payload is byte-stable.
       job.payload = JSON.parse(JSON.stringify(job.payload));
@@ -851,7 +909,15 @@ const StageStudio = (() => {
     const index = selected.get(w) || 0;
     const shot = p.shots[index];
     if (action === "stage-manage-layouts") { StudioAssets.manageLayouts(); return true; }
-    if (action === "stage-layout") {
+    if (action === "stage-manage-themes") { StudioAssets.manageThemes(); return true; }
+    if (action === "stage-theme") {
+      const theme = activeThemes().find(item => item.id === value);
+      if (!theme || value === themeIdFor(w)) return true;
+      p.themeId = value;
+      w.templateTheme = theme.base === "warm" ? "warm" : "medical";
+      touch(w, true);
+    }
+    else if (action === "stage-layout") {
       const layout = activeLayouts().find(item => item.id === value);
       if (!layout || value === p.layout.id) return true;
       if (layout.supports && p.shots.some(row => !layout.supports.includes(row.content.kind))) {
@@ -965,5 +1031,5 @@ const StageStudio = (() => {
     return true;
   }
 
-  return {applies,isActive,normalizeWork,initWork,setupControls,samplePlan,requestDraft,installDraft,installImages,installSpeech,editor,hasProductionJob,updateProductionJob,handleInput,handleAction};
+  return {applies,isActive,normalizeWork,initWork,setupControls,themeName,samplePlan,requestDraft,installDraft,installImages,installSpeech,editor,hasProductionJob,updateProductionJob,handleInput,handleAction};
 })();

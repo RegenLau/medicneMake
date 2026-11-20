@@ -85,16 +85,16 @@
   };
 
   const svg = {
-    html(shot, progress, theme, includeHeading = true) { return StageSvgContent.content(shot, clamp(progress), theme, includeHeading); },
+    html(shot, progress, theme, includeHeading = true, deck = null) { return StageSvgContent.content(shot, clamp(progress), theme, includeHeading, deck); },
     mount(slot, shot, { layoutTitle }) {
       const drawing = slot.ownerDocument.createElement("div");
       drawing.className = "stage-svg-drawing";
       slot.append(drawing);
       return { slot: drawing, includeHeading: !layoutTitle };
     },
-    draw(dom, shot, time, { slide, theme }) {
+    draw(dom, shot, time, { slide, theme, deck }) {
       const duration = shot.motionSeconds ?? shot.end - shot.start;
-      dom.slot.innerHTML = svg.html(slide, duration > 0 ? time / duration : 1, theme, dom.includeHeading);
+      dom.slot.innerHTML = svg.html(slide, duration > 0 ? time / duration : 1, theme, dom.includeHeading, deck);
     },
     events: shot => StageSvgContent.events(shot),
   };

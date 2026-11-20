@@ -57,13 +57,22 @@
 
   const hex = numbers => "#" + numbers.slice(0,3).map(channel =>
     Math.round(255 * Math.max(0,Math.min(1,channel))).toString(16).padStart(2,"0")).join("");
-  const rgb = color => [1,3,5].map(index => parseInt(color.slice(index,index+2),16)/255);
+  const rgb = color => {
+    const text = String(color || "").trim();
+    if (/^#[0-9a-f]{3}$/i.test(text)) return [1,2,3].map(i => parseInt(text[i] + text[i], 16) / 255);
+    if (/^#[0-9a-f]{6,8}$/i.test(text)) return [1,3,5].map(i => parseInt(text.slice(i, i + 2), 16) / 255);
+    const m = /^rgba?\(\s*([\d.]+)(%?)\s*,\s*([\d.]+)(%?)\s*,\s*([\d.]+)(%?)/.exec(text);
+    if (m) return [1,3,5].map(i => (m[i + 1] === "%" ? Number(m[i]) / 100 : Number(m[i]) / 255));
+    return null;
+  };
 
-  function currentPalette(map, theme) {
+  function currentPalette(map, theme, themeVars) {
     const shell = document.createElement("span");
     shell.className = "pt-frame theme-" + (theme === "warm" ? "warm" : "medical");
     shell.hidden = true;
     shell.style.display = "none";
+    const safeVars = global.LayoutEngine?.safeThemeVars ? global.LayoutEngine.safeThemeVars(themeVars) : {};
+    for (const [key, val] of Object.entries(safeVars)) shell.style.setProperty(key, val);
     document.body.append(shell);
     const computed = getComputedStyle(shell);
     const palette = Object.fromEntries(Object.entries(map || {}).map(([ink,variable]) => [ink,computed.getPropertyValue(variable).trim()]));
@@ -85,23 +94,28 @@
       if (!node || typeof node !== "object") return;
       const swap = (array,index) => {
         const to = palette[hex(array.slice(index,index+3))];
-        if (to) array.splice(index,3,...rgb(to));
+        const parsed = to && rgb(to);
+        if (parsed) array.splice(index,3,...parsed);
       };
       if (["fl","st"].includes(node.ty)) colors(node.c, color => { if (color.length >= 3) swap(color,0); });
       if (["gf","gs"].includes(node.ty)) colors(node.g?.k, color => {
         for (let i=0;i<node.g.p*4 && i+3<color.length;i+=4) swap(color,i+1);
       });
-      if (typeof node.sc === "string") node.sc = palette[node.sc.toLowerCase()] || node.sc;
+      if (typeof node.sc === "string") {
+        const mapped = palette[node.sc.toLowerCase()];
+        const parsed = mapped && rgb(mapped);
+        if (parsed) node.sc = hex(parsed);
+      }
       for (const entry of Object.values(node)) walk(entry);
     }
     walk(animation);
     return animation;
   }
 
-  async function attachAnimation(host, asset, theme) {
+  async function attachAnimation(host, asset, theme, themeVars) {
     if (!global.lottie) throw Error("离线 Lottie 播放器未加载。");
     const animation = global.lottie.loadAnimation({container:host,renderer:"svg",autoplay:false,loop:false,
-      animationData:applyPalette(asset.animation,currentPalette(asset.palette,theme)),
+      animationData:applyPalette(asset.animation,currentPalette(asset.palette,theme,themeVars)),
       rendererSettings:{preserveAspectRatio:"xMidYMid meet", progressiveLoad:false}});
     animation.setSubframe(false);
     try {
@@ -165,7 +179,7 @@
     return [heading,...words];
   }
 
-  async function prepare(shot, {theme}) {
+  async function prepare(shot, {deck, theme}) {
     disposed.delete(shot);
     const asset = shot.motionAsset || (shot.motionAssetUrl ? await fetch(shot.motionAssetUrl).then(response => {
       if (!response.ok) throw Error("MG 动画素材未找到。");
@@ -174,7 +188,7 @@
     if (!asset) return;
     const host = document.createElement("div");
     host.className = "stage-mg-art";
-    const player = asset.kind === "mg" ? attachSpec(host,asset) : await attachAnimation(host,asset,theme);
+    const player = asset.kind === "mg" ? attachSpec(host,asset) : await attachAnimation(host,asset,theme,deck?.themeVars);
     if (disposed.has(shot)) { player.dispose(); return; }
     prepared.set(shot,{host,asset,player,segments:timing(asset,shot.end-shot.start,shot.fit)});
   }

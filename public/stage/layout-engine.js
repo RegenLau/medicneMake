@@ -10,6 +10,105 @@
       .replace(/'/g, "&#39;");
   }
 
+  const THEME_VAR_NAMES = new Set([
+    "--v-bg", "--v-ink", "--v-ink-soft", "--v-primary", "--v-primary-deep", "--v-primary-soft",
+    "--v-coral", "--v-coral-soft", "--v-amber", "--v-amber-soft", "--v-green", "--v-green-soft",
+    "--v-card-bg", "--v-card-border", "--v-card-shadow", "--v-card-radius",
+    "--v-ring-outer", "--v-ring-track", "--v-ring-inner", "--v-sub-hl",
+    "--v-card-border-w", "--v-card-blur", "--v-band", "--v-band-ink",
+    "--v-rail-bg", "--v-rail-ink", "--v-rail-line",
+  ]);
+  const THEME_FORBIDDEN = /url\s*\(|;|[{}<>"'\\]|\/\*|expression|@|\r|\n/i;
+  const THEME_HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+  const THEME_RGB = /^rgba?\(\s*[\d.,\s%]+\s*\)$/;
+  const THEME_LENGTH = /^\d+(?:\.\d+)?px$/;
+  const THEME_BLUR = /^(?:none|blur\(\d+(?:\.\d+)?px\)(?:\s+saturate\(\d+(?:\.\d+)?\))?)$/;
+  const THEME_SHADOW = /^[\d.\s,pxrgba()%]+$/;
+  const THEME_GRADIENT = /^(?:linear|radial)-gradient\([\d.\s,%a-zA-Z#()-]+\)$/;
+
+  function isSafeColor(value) {
+    if (typeof value !== "string") return false;
+    const text = value.trim();
+    return Boolean(text && !THEME_FORBIDDEN.test(text) && (THEME_HEX.test(text) || THEME_RGB.test(text)));
+  }
+
+  function safeColor(value, fallback) {
+    return isSafeColor(value) ? value.trim() : fallback;
+  }
+
+  function isSafeThemeVar(name, value) {
+    if (!THEME_VAR_NAMES.has(name) || typeof value !== "string") return false;
+    const text = value.trim();
+    if (!text || THEME_FORBIDDEN.test(text)) return false;
+    if (name === "--v-card-radius" || name === "--v-card-border-w") return THEME_LENGTH.test(text);
+    if (name === "--v-card-blur") return THEME_BLUR.test(text);
+    if (name === "--v-card-shadow") return text.length <= 120 && THEME_SHADOW.test(text);
+    if (name === "--v-bg") return text.length <= 300 && (isSafeColor(text) || THEME_GRADIENT.test(text));
+    return isSafeColor(text);
+  }
+
+  function safeThemeVars(raw) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    const out = {};
+    for (const [name, value] of Object.entries(raw)) {
+      if (isSafeThemeVar(name, value)) out[name] = value.trim();
+    }
+    return out;
+  }
+
+  function parseRgb(color) {
+    if (typeof color !== "string") return null;
+    const text = color.trim();
+    if (THEME_HEX.test(text)) {
+      const hex = text.slice(1);
+      if (hex.length === 3) {
+        return [0, 1, 2].map((i) => parseInt(hex[i] + hex[i], 16));
+      }
+      return [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
+    }
+    const m = /^rgba?\(\s*([\d.]+)(%?)\s*,\s*([\d.]+)(%?)\s*,\s*([\d.]+)(%?)/.exec(text);
+    if (!m) return null;
+    return [1, 3, 5].map((idx) => {
+      const num = Number(m[idx]);
+      return m[idx + 1] === "%" ? Math.round(num * 2.55) : Math.round(num);
+    });
+  }
+
+  function isDarkTheme(deck) {
+    const bg = deck?.themeVars?.["--v-card-bg"];
+    const rgb = parseRgb(bg);
+    if (!rgb) return false;
+    const lin = (channel) => {
+      const s = Math.max(0, Math.min(1, channel / 255));
+      return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    };
+    const lum = 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);
+    return lum < 0.35;
+  }
+
+  function themeFrameMeta(deck, mapSrc) {
+    const vars = safeThemeVars(deck?.themeVars);
+    const declarations = Object.entries(vars).map(([k, v]) => `${k}:${v}`);
+    let hasThemeBg = false;
+    if (deck?.themeBackground) {
+      const mapped = String(mapSrc(deck.themeBackground) || "").trim();
+      const isDataImg = /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/i.test(mapped);
+      const isLocalUrl = /^(?:\/|file:\/\/|blob:)/i.test(mapped) && !/["'()\\;\r\n<>]/.test(mapped);
+      if (isDataImg || isLocalUrl) {
+        declarations.push(`--v-bg:center / cover no-repeat url("${mapped}")`);
+        hasThemeBg = true;
+      }
+    }
+    const classes = [];
+    if (deck?.themeGlass) classes.push("is-glass");
+    if (isDarkTheme(deck)) classes.push("is-dark");
+    if (hasThemeBg) classes.push("has-theme-bg");
+    return {
+      classSuffix: classes.length ? " " + classes.join(" ") : "",
+      styleAttr: declarations.length ? ` style="${xmlEsc(declarations.join(";"))}"` : "",
+    };
+  }
+
   function renderAvatarProgress(progress, strokeRatio = 3.5) {
     const p = Math.max(0, Math.min(1, Number(progress) || 0));
     const sw = Math.max(2, Number(strokeRatio) || 3.5);
@@ -274,8 +373,9 @@
       ? `<div class="pt-disclaimer pt-region-disclaimer"${attach("disclaimer")}>${xmlEsc(deck.disclaimer)}</div>` : "";
     const progressBar = regions?.progress
       ? `<div class="pt-region-progress"${attach("progress")}><span style="width:${ringProgress * 100}%"></span></div>` : "";
+    const themeMeta = themeFrameMeta(deck, mapSrc);
     return `
-      <div class="pt-frame theme-${deck.theme} layout-${effectiveLayout}">
+      <div class="pt-frame theme-${deck.theme} layout-${effectiveLayout}${themeMeta.classSuffix}"${themeMeta.styleAttr}>
         <div class="pt-glow-1"></div>
         <div class="pt-glow-2"></div>
         ${headerHtml}
@@ -321,5 +421,5 @@
     if (avatar && !avatar.complete) return avatar.decode();
   }
 
-  global.LayoutEngine = { render, update, mediaSize, renderAvatarProgress };
+  global.LayoutEngine = { render, update, mediaSize, renderAvatarProgress, isDarkTheme, safeThemeVars, safeColor };
 })(globalThis);

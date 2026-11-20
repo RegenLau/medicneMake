@@ -224,7 +224,7 @@
     });
   }
 
-  function actionPoses(shot, progress, warm) {
+  function actionPoses(shot, progress, warm, surface) {
     const base = (action, time) => group("translate(-184 -124) scale(1 .91)", motions[action](clamp(time)));
     const beats = shot.svgBeats || [];
     if (beats.length < 2) return base(shot.action, progress);
@@ -237,12 +237,17 @@
       const visible = index === 0 ? 1 : ease(partProgress * 6);
       const emphasis = partProgress < 1 && visible > 0;
       const center = centers[index];
-      const shadow = warm ? "#e9dfce" : "#dbe9f5";
-      const labelFill = emphasis ? (warm ? "#ede0c8" : "#deedf9") : (warm ? "#f6ecdf" : "#eaf3fb");
-      const labelColor = beat.action === "compare" ? orange : ink;
+      const shadow = surface ? surface.shadow : (warm ? "#e9dfce" : "#dbe9f5");
+      const labelFill = surface
+        ? (emphasis ? surface.labelActive : surface.label)
+        : (emphasis ? (warm ? "#ede0c8" : "#deedf9") : (warm ? "#f6ecdf" : "#eaf3fb"));
+      const labelColor = surface
+        ? (beat.action === "compare" ? "var(--v-coral)" : "var(--v-ink)")
+        : (beat.action === "compare" ? orange : ink);
+      const lineStroke = surface ? surface.connector : (warm ? "#cbb997" : "#afcde7");
       return `<g data-svg-beat="${index}" opacity="${fmt(visible)}">
         ${index ? path(`M${centers[index - 1] + 124} 389 Q${(centers[index - 1] + center) / 2} 369 ${center - 124} 389`,
-          "none", warm ? "#cbb997" : "#afcde7", 3) : ""}
+          "none", lineStroke, 3) : ""}
         <ellipse cx="${center}" cy="434" rx="${fmt(176 * size)}" ry="12" fill="${shadow}"/>
         ${group(`translate(${center} ${fmt(314 + 14 * (1 - visible))}) scale(${size}) translate(-480 -310)`,
           base(beat.action, partProgress))}
@@ -253,21 +258,34 @@
     }).join("");
   }
 
-  function content(shot, progress, theme, includeHeading = true) {
+  function content(shot, progress, theme, includeHeading = true, deck = null) {
     const warm = theme === "warm";
+    const isDark = Boolean(deck && global.LayoutEngine?.isDarkTheme?.(deck));
+    const isGlass = Boolean(deck?.themeGlass);
+    const surface = isDark ? {
+      bg: "var(--v-card-bg)", hill: "var(--v-rail-bg)", shadow: "rgba(0,0,0,0.28)",
+      swoosh: "var(--v-primary)", connector: "var(--v-card-border)",
+      labelActive: "var(--v-primary-soft)", label: "var(--v-rail-bg)",
+      heading: "var(--v-ink)", warn: "var(--v-coral)",
+    } : isGlass ? {
+      bg: "none", hill: "var(--v-primary-soft)", shadow: "var(--v-rail-line)",
+      swoosh: "var(--v-primary)", connector: "var(--v-rail-line)",
+      labelActive: "var(--v-card-bg)", label: "var(--v-rail-bg)",
+      heading: "var(--v-ink)", warn: "var(--v-coral)",
+    } : null;
     const heading = lines(shot.name, 19, 2);
     return `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540"
       style="display:block;width:100%;height:100%;" role="img" aria-label="${text(shot.name)}">
       <g stroke-linecap="round" stroke-linejoin="round">
-        ${rect(0, 0, 960, 540, 0, warm ? "#fcf6ea" : "#f5faff", "none")}
-        ${path("M0 436 Q247 410 479 462 T960 442 V540 H0 Z", warm ? "#f7ecdc" : "#e7f2fc", "none")}
+        ${rect(0, 0, 960, 540, 0, surface ? surface.bg : (warm ? "#fcf6ea" : "#f5faff"), "none")}
+        ${path("M0 436 Q247 410 479 462 T960 442 V540 H0 Z", surface ? surface.hill : (warm ? "#f7ecdc" : "#e7f2fc"), "none")}
         ${shot.svgBeats?.length > 1 ? "" :
-          `<ellipse cx="483" cy="467" rx="235" ry="16" fill="${warm ? "#e9dfce" : "#dbe9f5"}"/>`}
-        ${path("M194 266 Q213 238 237 251 M705 212 Q719 190 742 196", "none", warm ? "#82a69c" : "#a0c5e8", 4)}
-        ${actionPoses(shot, progress, warm)}
-        ${includeHeading ? `<g font-family='${font}' fill="${ink}">
+          `<ellipse cx="483" cy="467" rx="235" ry="16" fill="${surface ? surface.shadow : (warm ? "#e9dfce" : "#dbe9f5")}"/>`}
+        ${path("M194 266 Q213 238 237 251 M705 212 Q719 190 742 196", "none", surface ? surface.swoosh : (warm ? "#82a69c" : "#a0c5e8"), 4)}
+        ${actionPoses(shot, progress, warm, surface)}
+        ${includeHeading ? `<g font-family='${font}' fill="${surface ? surface.heading : ink}">
           ${heading.map((row, i) => `<text x="480" y="${80 + i * 48}" text-anchor="middle" font-weight="770" font-size="45">${row}</text>`).join("")}
-          ${shot.action === "compare" && !(shot.svgBeats?.length > 1) ? '<text x="480" y="159" text-anchor="middle" font-size="25" font-weight="670" fill="#a74d30">常见误区</text>' : ""}
+          ${shot.action === "compare" && !(shot.svgBeats?.length > 1) ? `<text x="480" y="159" text-anchor="middle" font-size="25" font-weight="670" fill="${surface ? surface.warn : "#a74d30"}">常见误区</text>` : ""}
         </g>` : ""}
       </g>
     </svg>`;

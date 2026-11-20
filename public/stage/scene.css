@@ -990,3 +990,83 @@
 .stage-mg-overlay li { padding: 6px 12px; border-radius: 8px; background: var(--v-primary-soft); font-size: 23px; }
 
 .stage-mg-art [data-part] { transform-box: fill-box; transform-origin: center; }
+
+/* ---- Theme extensions for code-motion scenes and MG overlays ---- */
+.pt-frame.is-glass .cm-stage {
+  background: transparent;
+}
+
+.pt-frame.is-glass .cm-item {
+  background: rgba(255, 255, 255, 0.64);
+  border-color: var(--v-card-border);
+}
+
+.pt-frame.is-glass .cm-takeaway {
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.pt-frame.is-glass .cm-check-card,
+.pt-frame.is-glass .cm-check-row {
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.pt-frame.is-dark .cm-stage.tone-warm {
+  --cm-accent-deep: var(--v-amber);
+}
+
+.pt-frame.is-dark .cm-stage.tone-caution {
+  --cm-accent-deep: var(--v-coral);
+}
+
+.pt-frame.is-dark .cm-stage.tone-safe {
+  --cm-accent-deep: var(--v-green);
+}
+
+.pt-frame.is-dark .cm-item,
+.pt-frame.is-dark .cm-compare-col.col-0,
+.pt-frame.is-dark .cm-compare-col.col-1,
+.pt-frame.is-dark .cm-compare-col.col-2,
+.pt-frame.is-dark .cm-stage.tone-caution .cm-compare-col.col-1,
+.pt-frame.is-dark .cm-check-head,
+.pt-frame.is-dark .cm-takeaway {
+  background: var(--v-rail-bg);
+  border-color: var(--v-card-border);
+}
+
+.pt-frame.is-dark .cm-compare-badge {
+  background: var(--v-card-bg);
+  color: var(--v-ink);
+}
+
+.pt-frame.is-dark .cm-warn-card {
+  background: var(--v-rail-bg);
+  border-color: var(--v-coral);
+}
+
+.pt-frame.is-dark .cm-warn-card h3 {
+  color: var(--v-coral);
+}
+
+.pt-frame.is-dark .cm-warn-card p {
+  color: var(--v-ink);
+}
+
+.pt-frame.is-dark .cm-mech-index,
+.pt-frame.is-dark .cm-compare-chip,
+.pt-frame.is-dark .cm-step-num,
+.pt-frame.is-dark .cm-time-pill,
+.pt-frame.is-dark .cm-summary-num,
+.pt-frame.is-dark .cm-stage.tone-caution .cm-takeaway,
+.pt-frame.is-dark .cm-scene.visual-warning .cm-takeaway {
+  color: var(--v-band);
+}
+
+.pt-frame.is-dark .cm-tag {
+  background: var(--v-rail-bg);
+  color: var(--cm-accent-deep);
+}
+
+.pt-frame.is-dark .stage-mg-overlay li {
+  background: var(--v-rail-bg);
+  color: var(--v-ink);
+}

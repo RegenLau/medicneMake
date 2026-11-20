@@ -31,6 +31,16 @@
       if (!fonts.length) throw Error("素材库字体未加载。");
     }
     await document.fonts.ready;
+    if (deck.themeBackground) {
+      const bgImg = new Image();
+      bgImg.src = mapSrc(deck.themeBackground);
+      await new Promise((resolve, reject) => {
+        if (bgImg.complete && bgImg.naturalWidth) return resolve();
+        bgImg.onload = () => resolve();
+        bgImg.onerror = () => reject(Error("主题背景图未加载。"));
+      });
+      if (bgImg.decode) await bgImg.decode().catch(() => {});
+    }
     await Promise.all(input.shots.map((shot,index) =>
       Contents[shot.kind].prepare?.(shot, {deck, theme:deck.theme, slide:deck.slides[index], index})));
   }
@@ -122,7 +132,9 @@
         root.innerHTML = previous;
         mounted = null;
       } else {
-        const fill = deck.theme === "warm" ? "#fdf5e7" : "#edf6fe";
+        const fallback = deck.theme === "warm" ? "#fdf5e7" : "#edf6fe";
+        const candidate = deck.themeFadeColor || deck.themeVars?.["--v-bg"] || fallback;
+        const fill = LayoutEngine.safeColor ? LayoutEngine.safeColor(candidate, fallback) : fallback;
         root.insertAdjacentHTML("beforeend", `<div style="position:absolute;inset:0;opacity:${fade.alpha};background:${fill}">${previous}</div>`);
       }
     }

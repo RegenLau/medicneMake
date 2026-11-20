@@ -2842,6 +2842,36 @@ def render_code_motion(p, job, save, speech_key, record, dashscope_key=""):
     }
 
 
+def stage_appearance(p, images=None, used=None):
+    appearance = code_motion_appearance(p)
+    raw = p.get("appearance", {})
+    theme_id = raw.get("themeId")
+    if theme_id is None:
+        return appearance
+    if not isinstance(theme_id, str) or not theme_id.strip():
+        raise ValueError("所选主题无效。")
+    definition, theme_item, theme_path = ASSETS.theme(theme_id)
+    base = definition["base"]
+    appearance.update(
+        theme=base,
+        themeId=theme_id,
+        themeVars=dict(definition["vars"]),
+        themeGlass=bool(definition.get("glass")),
+        themeFadeColor=definition.get("fadeColor") or ("#fdf5e7" if base == "warm" else "#edf6fe"),
+    )
+    if used is not None:
+        used.append((theme_path, theme_item))
+    if background := definition.get("background"):
+        bg_path, bg_item = ASSETS.resolve(background["assetId"], ("image",))
+        bg_url = asset_library.asset_url(background["assetId"])
+        appearance["themeBackground"] = bg_url
+        if images is not None:
+            images[bg_url] = bg_path.as_uri()
+        if used is not None:
+            used.append((bg_path, bg_item))
+    return appearance
+
+
 def validate_stage_video(p):
     settings = p.get("settings")
     if not isinstance(settings, dict) or settings.get("voice") not in (*SPEAKERS, "无配音"):
@@ -2850,14 +2880,13 @@ def validate_stage_video(p):
         raise ValueError("当前视频布局固定为 16:9。")
     stage_video.stage_input(p, ASSETS, media_path)
     stage_video.sound_settings(p, ASSETS)
-    code_motion_appearance(p)
+    appearance = stage_appearance(p)
     if not code_motion_ready():
         raise ValueError("视频合成需要 Node.js、Playwright 和 FFmpeg。")
     if settings["voice"] in SPEAKERS and not current_speech_key() and not has_template_speech(p):
         raise ValueError("请先配置火山语音，再合成带配音的视频。")
     if p.get("avatar") is not None:
         avatar = p["avatar"]
-        appearance = code_motion_appearance(p)
         if (not isinstance(avatar, dict) or avatar.get("enabled") is not True or settings["voice"] not in SPEAKERS
                 or appearance["presenter"] == "none" or avatar.get("presenter") != appearance["presenter"]):
             raise ValueError("数字人设置与当前主讲人不匹配。")
@@ -2965,7 +2994,7 @@ def render_motion_preview(asset, destination):
 
 def render_stage_video(p, job, save, speech_key, record=None, dashscope_key=""):
     layout, deck, shots, images, used = stage_video.stage_input(p, ASSETS, media_path)
-    appearance = code_motion_appearance(p)
+    appearance = stage_appearance(p, images, used)
     deck.update(appearance)
     deck["slides"] = [shot.pop("slide") for shot in shots]
     if appearance["presenter"] == "digital" and appearance["pharmacist"].get("avatarImage"):
@@ -3425,8 +3454,9 @@ def preset_music_item(choice):
 def list_assets():
     items = ASSETS.items()
     return [
-        *(item for item in items if item["kind"] != "layout"),
+        *(item for item in items if item["kind"] not in ("layout", "theme")),
         *ASSETS.layout_items(items),
+        *ASSETS.theme_items(items),
         *(library_music_item(track) for track in music_gen.list_music_library(GENERATED_MUSIC_DIR)),
         *(preset_music_item(choice) for choice, path in MUSIC_TRACKS.items() if path.is_file()),
         *({"id": "builtin:motion/" + action, "kind": "motion", "name": label, "action": action,
@@ -3482,6 +3512,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "stageRender": STAGE_RENDER,
                     "stageShotProduction": True,
                     "stageLayouts": ASSETS.layout_items(),
+                    "stageThemes": ASSETS.theme_items(),
                     "layoutVariants": asset_library.LAYOUT_VARIANTS,
                     "stageCatalog": ASSETS.stage_catalog(),
                     "motionPalette": motion_asset.THEME_PALETTE,
@@ -3593,7 +3624,7 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         if (
             self.path not in ("/api/jobs", "/api/costs", "/api/ark-key", "/api/deepseek-key", "/api/speech-key", "/api/dashscope-key", "/api/mureka-key", "/api/upload-frame", "/api/generate-music", "/api/music-library/rename", "/api/music-library/delete",
-                              "/api/library/upload", "/api/library/collect-image", "/api/library/copy-layout", "/api/library/motion-palette", "/api/library/mg-decide", "/api/library/archive")
+                              "/api/library/upload", "/api/library/collect-image", "/api/library/copy-layout", "/api/library/copy-theme", "/api/library/motion-palette", "/api/library/mg-decide", "/api/library/archive")
             or not self.allowed()
             or self.headers.get("Origin") not in (ORIGIN, f"http://localhost:{PORT}")
             or self.headers.get_content_type() != "application/json"
@@ -3604,7 +3635,7 @@ class Handler(SimpleHTTPRequestHandler):
             max_bytes = 8_000_000 if self.path == "/api/upload-frame" else (100000 if self.path in ("/api/jobs", "/api/costs", "/api/generate-music") else 4096)
             if self.path == "/api/library/upload":
                 max_bytes = 11_200_000
-            elif self.path in ("/api/library/collect-image", "/api/library/copy-layout", "/api/library/motion-palette"):
+            elif self.path in ("/api/library/collect-image", "/api/library/copy-layout", "/api/library/copy-theme", "/api/library/motion-palette"):
                 max_bytes = 32_000
             if not 0 < n <= max_bytes:
                 raise ValueError("请求大小无效")
@@ -3623,6 +3654,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(200, {"item": ASSETS.copy_motion_palette(p, render_motion_preview)})
             if self.path == "/api/library/copy-layout":
                 return self.send_json(200, {"item": ASSETS.copy_layout(p)})
+            if self.path == "/api/library/copy-theme":
+                return self.send_json(200, {"item": ASSETS.copy_theme(p)})
             if self.path == "/api/library/collect-image":
                 source = media_path(p.get("url"))
                 if source.suffix not in (".png", ".jpg", ".webp") or source.stat().st_size > asset_library.LIMITS["image"]:

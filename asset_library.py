@@ -2,6 +2,7 @@
 
 import base64
 import binascii
+import copy
 import hashlib
 import json
 import re
@@ -21,7 +22,8 @@ SVG_ELEMENTS = frozenset("svg g path rect circle ellipse line polyline polygon d
 SVG_ATTRIBUTES = frozenset("id viewBox width height x y x1 x2 y1 y2 cx cy r rx ry d points fill fill-rule stroke stroke-width stroke-linecap stroke-linejoin stroke-dasharray stroke-dashoffset opacity fill-opacity stroke-opacity transform gradientTransform gradientUnits spreadMethod offset stop-color stop-opacity clip-path clip-rule clipPathUnits mask maskUnits maskContentUnits preserveAspectRatio font-size font-weight text-anchor dominant-baseline dx dy".split())
 LOCAL_PAINT = re.compile(r"url\(#[A-Za-z_][\w.:-]*\)")
 USER_ID = re.compile(r"user:[0-9a-f]{32}")
-LIMITS = {"image": 8 * 1024 * 1024, "svg": 300 * 1024, "layout": 64 * 1024, "lottie": motion_asset.LOTTIE_LIMIT, "mg": motion_asset.MG_LIMIT}
+LIMITS = {"image": 8 * 1024 * 1024, "svg": 300 * 1024, "layout": 64 * 1024, "theme": 16 * 1024,
+          "lottie": motion_asset.LOTTIE_LIMIT, "mg": motion_asset.MG_LIMIT}
 LAYOUT_VARIANTS = {
     "header": ("pill-title+chapter-rail",),
     "chapters": ("rail",),
@@ -33,6 +35,157 @@ LAYOUT_VARIANTS = {
 }
 LAYOUT_CONTENTS = frozenset(("image", "card", "scene", "svg", "asset", "mg"))
 REGION_FIELDS = frozenset(("x", "y", "w", "h", "component"))
+THEME_BASES = frozenset(("medical", "warm"))
+THEME_LENGTH_VARS = frozenset(("--v-card-radius", "--v-card-border-w"))
+THEME_COLOR_VARS = frozenset((
+    "--v-ink", "--v-ink-soft", "--v-primary", "--v-primary-deep", "--v-primary-soft",
+    "--v-coral", "--v-coral-soft", "--v-amber", "--v-amber-soft", "--v-green", "--v-green-soft",
+    "--v-card-bg", "--v-card-border", "--v-ring-outer", "--v-ring-track", "--v-ring-inner",
+    "--v-sub-hl", "--v-band", "--v-band-ink", "--v-rail-bg", "--v-rail-ink", "--v-rail-line",
+))
+THEME_VARS = THEME_COLOR_VARS | THEME_LENGTH_VARS | frozenset(("--v-bg", "--v-card-shadow", "--v-card-blur"))
+_THEME_FORBIDDEN = re.compile(r"url\s*\(|;|[{}<>\"'\\]|/\*|expression|@|\r|\n", re.IGNORECASE)
+_NUM = r"(?:\d+(?:\.\d+)?|\.\d+)"
+_HEX_COLOR = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
+_RGB_FUNC = re.compile(rf"^rgb\(\s*{_NUM}%?\s*,\s*{_NUM}%?\s*,\s*{_NUM}%?\s*\)$")
+_RGBA_FUNC = re.compile(rf"^rgba\(\s*{_NUM}%?\s*,\s*{_NUM}%?\s*,\s*{_NUM}%?\s*,\s*{_NUM}%?\s*\)$")
+_RGBA_INLINE = re.compile(rf"rgba\(\s*{_NUM}%?\s*,\s*{_NUM}%?\s*,\s*{_NUM}%?\s*,\s*{_NUM}%?\s*\)")
+_COLOR_INLINE = re.compile(rf"rgba?\(\s*{_NUM}%?\s*,\s*{_NUM}%?\s*,\s*{_NUM}%?(?:\s*,\s*{_NUM}%?)?\s*\)")
+_THEME_LENGTH = re.compile(r"^\d+(?:\.\d+)?px$")
+_THEME_SHADOW_LEN = re.compile(r"^(?:0|\d+(?:\.\d+)?px)$")
+_THEME_BLUR = re.compile(r"^(?:none|blur\(\d+(?:\.\d+)?px\)(?:\s+saturate\(\d+(?:\.\d+)?\))?)$")
+_THEME_GRADIENT = re.compile(r"^(?:linear|radial)-gradient\((.+)\)$")
+_THEME_PCT = re.compile(rf"^{_NUM}%$")
+_THEME_DEG = re.compile(rf"^-?{_NUM}deg$")
+
+
+def _theme_clean_text(value):
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or _THEME_FORBIDDEN.search(text):
+        return None
+    return text
+
+
+def _is_theme_color(value):
+    text = _theme_clean_text(value)
+    return bool(text and (_HEX_COLOR.fullmatch(text) or _RGB_FUNC.fullmatch(text) or _RGBA_FUNC.fullmatch(text)))
+
+
+def _is_theme_shadow(value):
+    text = _theme_clean_text(value)
+    if not text or len(text) > 120:
+        return False
+    scrubbed = _RGBA_INLINE.sub("RGBA", text)
+    if "(" in scrubbed or ")" in scrubbed:
+        return False
+    layers = [part.strip() for part in scrubbed.split(",")]
+    if not layers or any(not layer for layer in layers):
+        return False
+    for layer in layers:
+        tokens = layer.split()
+        if tokens.count("RGBA") != 1:
+            return False
+        if tokens[0] != "RGBA" and tokens[-1] != "RGBA":
+            return False
+        lengths = [tok for tok in tokens if tok != "RGBA"]
+        if not 2 <= len(lengths) <= 4 or not all(_THEME_SHADOW_LEN.fullmatch(tok) for tok in lengths):
+            return False
+    return True
+
+
+def _is_theme_bg(value):
+    text = _theme_clean_text(value)
+    if not text or len(text) > 300:
+        return False
+    if _is_theme_color(text):
+        return True
+    match = _THEME_GRADIENT.fullmatch(text)
+    if not match:
+        return False
+    inner = match.group(1).strip()
+    parts, buf, depth = [], [], 0
+    for ch in inner:
+        if ch == "(":
+            depth += 1
+            if depth > 1:
+                return False
+        elif ch == ")":
+            depth -= 1
+            if depth < 0:
+                return False
+        if ch == "," and depth == 0:
+            parts.append("".join(buf).strip())
+            buf = []
+        else:
+            buf.append(ch)
+    if depth != 0:
+        return False
+    parts.append("".join(buf).strip())
+    if len(parts) < 2 or any(not part for part in parts):
+        return False
+    color_stops = 0
+    for part in parts:
+        tokens = []
+        pos = 0
+        for found in _COLOR_INLINE.finditer(part):
+            tokens.extend(part[pos:found.start()].split())
+            tokens.append(found.group(0))
+            pos = found.end()
+        tokens.extend(part[pos:].split())
+        if not tokens:
+            return False
+        has_color = False
+        for token in tokens:
+            if _is_theme_color(token):
+                has_color = True
+            elif not (_THEME_PCT.fullmatch(token) or _THEME_DEG.fullmatch(token) or token in ("at", "circle", "ellipse")):
+                return False
+        if has_color:
+            color_stops += 1
+    return color_stops >= 2
+
+
+def validate_theme(definition, resolve_image=None):
+    required = {"schemaVersion", "base", "vars"}
+    allowed = required | {"background", "glass", "fadeColor"}
+    if not isinstance(definition, dict) or not required <= definition.keys() or not definition.keys() <= allowed:
+        raise ValueError("主题定义包含缺失或未知字段。")
+    if type(definition["schemaVersion"]) is not int or definition["schemaVersion"] != 1:
+        raise ValueError("只支持第 1 版主题定义。")
+    if definition["base"] not in THEME_BASES:
+        raise ValueError("主题基础风格只能是 medical 或 warm。")
+    variables = definition["vars"]
+    if not isinstance(variables, dict) or not variables or not variables.keys() <= THEME_VARS:
+        raise ValueError("主题包含未知或空的样式变量。")
+    for name, value in variables.items():
+        if name in THEME_LENGTH_VARS:
+            ok = bool(_theme_clean_text(value) and _THEME_LENGTH.fullmatch(value.strip()))
+        elif name == "--v-card-shadow":
+            ok = _is_theme_shadow(value)
+        elif name == "--v-card-blur":
+            ok = bool(_theme_clean_text(value) and _THEME_BLUR.fullmatch(value.strip()))
+        elif name == "--v-bg":
+            ok = _is_theme_bg(value)
+        else:
+            ok = _is_theme_color(value)
+        if not ok:
+            raise ValueError(f"主题变量 {name} 的取值不符合安全规范。")
+    if "glass" in definition and type(definition["glass"]) is not bool:
+        raise ValueError("主题毛玻璃选项无效。")
+    if "fadeColor" in definition and not _is_theme_color(definition["fadeColor"]):
+        raise ValueError("主题淡入底色无效。")
+    if "background" in definition:
+        bg = definition["background"]
+        if not isinstance(bg, dict) or set(bg.keys()) != {"assetId"}:
+            raise ValueError("主题背景图配置无效。")
+        asset_id = _theme_clean_text(bg.get("assetId"))
+        if not asset_id:
+            raise ValueError("主题背景图素材 ID 无效。")
+        if resolve_image is not None:
+            resolve_image(asset_id)
+    return definition
 
 
 def _layout_number(value, lower, upper):
@@ -255,6 +408,56 @@ class LocalLibrary:
         return self.add("layout", json.dumps(definition, ensure_ascii=False).encode("utf-8"),
                         fields, None, "copy", origin=origin)
 
+    def theme(self, asset_id):
+        path, item = self.resolve(asset_id, ("theme",))
+        definition = validate_theme(
+            json.loads(path.read_text(encoding="utf-8")),
+            lambda image_id: self.resolve(image_id, ("image",)),
+        )
+        return definition, item, path
+
+    def theme_items(self, items=None):
+        entries = self.items() if items is None else items
+        themes = []
+        for item in entries:
+            if item["kind"] != "theme":
+                continue
+            definition, _, _ = self.theme(item["id"])
+            bg_id = (definition.get("background") or {}).get("assetId")
+            themes.append({
+                **item,
+                "base": definition["base"],
+                "vars": definition["vars"],
+                "glass": bool(definition.get("glass")),
+                **({"fadeColor": definition["fadeColor"]} if "fadeColor" in definition else {}),
+                **({"background": {"assetId": bg_id, "url": asset_url(bg_id)}} if bg_id else {}),
+            })
+        return themes
+
+    def copy_theme(self, payload):
+        allowed_fields = {"originId", "name", "backgroundAssetId", "primary"}
+        if not isinstance(payload, dict) or payload.keys() - allowed_fields:
+            raise ValueError("复制主题只允许修改名称、背景图和主色调。")
+        origin_def, origin, _ = self.theme(payload.get("originId"))
+        definition = copy.deepcopy(origin_def)
+        if "primary" in payload and payload["primary"] is not None:
+            if not isinstance(payload["primary"], str):
+                raise ValueError("主题主色调格式无效。")
+            definition["vars"]["--v-primary"] = payload["primary"].strip()
+        if "backgroundAssetId" in payload:
+            bg_id = payload["backgroundAssetId"]
+            if bg_id in ("", None):
+                definition.pop("background", None)
+            elif isinstance(bg_id, str):
+                definition["background"] = {"assetId": bg_id.strip()}
+            else:
+                raise ValueError("主题背景图素材 ID 无效。")
+        validate_theme(definition, lambda image_id: self.resolve(image_id, ("image",)))
+        fields = {"name": payload.get("name"), "tags": ", ".join(origin.get("tags", [])),
+                  "license": origin["license"], "credit": origin.get("credit") or f'来源主题：{origin["name"]}'}
+        return self.add("theme", json.dumps(definition, ensure_ascii=False).encode("utf-8"),
+                        fields, None, "copy", origin=origin)
+
     def motion(self, asset_id):
         path, item = self.resolve(asset_id, ("lottie", "mg"))
         data = path.read_bytes()
@@ -389,8 +592,8 @@ class LocalLibrary:
 
     def upload(self, payload, ffmpeg, preview_renderer=None):
         kind = payload.get("kind")
-        if kind not in ("image", "svg", "layout", "lottie"):
-            raise ValueError("请选择图片、SVG、布局或 Lottie JSON。")
+        if kind not in ("image", "svg", "layout", "theme", "lottie"):
+            raise ValueError("请选择图片、SVG、布局、主题或 Lottie JSON。")
         try:
             raw = base64.b64decode(payload["data"], validate=True)
         except (KeyError, TypeError, ValueError, binascii.Error) as error:
@@ -401,7 +604,7 @@ class LocalLibrary:
 
     def add(self, kind, data, fields, ffmpeg, source, origin=None, extra=None):
         if not 0 < len(data) <= LIMITS[kind]:
-            raise ValueError("文件大小无效。图片上限 8 MB，SVG 上限 300 KB，布局上限 64 KB。")
+            raise ValueError("文件大小无效。图片上限 8 MB，SVG 上限 300 KB，布局上限 64 KB，主题上限 16 KB。")
         if kind == "svg":
             data, ext = clean_svg(data), ".svg"
         elif kind == "layout":
@@ -410,6 +613,14 @@ class LocalLibrary:
             except (UnicodeDecodeError, json.JSONDecodeError) as error:
                 raise ValueError("请选择 UTF-8 编码的布局 JSON 文件。") from error
             data = json.dumps(validate_layout(definition), sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ext = ".json"
+        elif kind == "theme":
+            try:
+                definition = json.loads(data.decode("utf-8-sig"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise ValueError("请选择 UTF-8 编码的主题 JSON 文件。") from error
+            validated = validate_theme(definition, lambda image_id: self.resolve(image_id, ("image",)))
+            data = json.dumps(validated, sort_keys=True, separators=(",", ":")).encode("utf-8")
             ext = ".json"
         elif kind in ("lottie", "mg"):
             ext = ".json"
@@ -420,6 +631,8 @@ class LocalLibrary:
         credit = text_field(fields, "credit", 200)
         if kind == "layout" and not credit:
             raise ValueError("请填写布局的原始来源或署名。")
+        if kind == "theme" and not credit:
+            raise ValueError("请填写主题的原始来源或署名。")
         if rights == "CC BY" and not credit:
             raise ValueError("CC BY 素材请填写署名。")
         tags = list(dict.fromkeys(tag.strip() for tag in re.split(r"[,，、]", text_field(fields, "tags", 180)) if tag.strip()))
@@ -428,7 +641,7 @@ class LocalLibrary:
         sha = hashlib.sha256(data).hexdigest()
         with self.lock:
             entries = self._read_user()
-            for item in entries if kind not in ("layout", "lottie", "mg") else ():
+            for item in entries if kind not in ("layout", "theme", "lottie", "mg") else ():
                 if item.get("sha256") == sha and item["kind"] == kind and not item.get("archived"):
                     return self.public(item)
             files = self.root / "files"
@@ -444,10 +657,10 @@ class LocalLibrary:
                     "file": filename, "meta": {key: value for key, value in metadata.items() if value}}
             if kind == "layout":
                 item["aspect"] = definition["aspect"]
-                if origin:
-                    item["originId"] = origin["id"]
-                    if origin.get("termsUrl"):
-                        item["termsUrl"] = origin["termsUrl"]
+            if kind in ("layout", "theme") and origin:
+                item["originId"] = origin["id"]
+                if origin.get("termsUrl"):
+                    item["termsUrl"] = origin["termsUrl"]
             item.update(extra or {})
             entries.insert(0, item)
             self._write_user(entries)

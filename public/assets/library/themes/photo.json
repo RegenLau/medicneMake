@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "base": "medical",
+  "vars": {
+    "--v-bg": "#dbe9ee",
+    "--v-ink": "#15303a",
+    "--v-ink-soft": "#4b6570",
+    "--v-primary": "#127c86",
+    "--v-primary-deep": "#0b5c64",
+    "--v-primary-soft": "rgba(18, 124, 134, 0.12)",
+    "--v-coral": "#e0603f",
+    "--v-coral-soft": "rgba(224, 96, 63, 0.12)",
+    "--v-amber": "#c7821e",
+    "--v-amber-soft": "rgba(199, 130, 30, 0.12)",
+    "--v-green": "#23885a",
+    "--v-green-soft": "rgba(35, 136, 90, 0.12)",
+    "--v-card-bg": "rgba(255, 255, 255, 0.80)",
+    "--v-card-border": "rgba(255, 255, 255, 0.9)",
+    "--v-card-border-w": "1px",
+    "--v-card-shadow": "0 18px 40px rgba(20, 48, 58, 0.16)",
+    "--v-card-radius": "24px",
+    "--v-card-blur": "blur(14px) saturate(1.2)",
+    "--v-ring-outer": "#ffffff",
+    "--v-ring-track": "rgba(255, 255, 255, 0.35)",
+    "--v-ring-inner": "#ffffff",
+    "--v-sub-hl": "#ffe14d",
+    "--v-band": "rgba(13, 38, 48, 0.86)",
+    "--v-band-ink": "#fff",
+    "--v-rail-bg": "rgba(255, 255, 255, 0.66)",
+    "--v-rail-ink": "#15303a",
+    "--v-rail-line": "rgba(21, 48, 58, 0.12)"
+  },
+  "background": {
+    "assetId": "builtin:image/bg-clinic-blur"
+  },
+  "glass": true,
+  "fadeColor": "#dbe9ee"
+}

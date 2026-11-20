@@ -1498,7 +1498,7 @@ function setup(w) {
         "duration",
       ) +
       (motion || isTpl || isSvg
-        ? TemplateStudio.templateSetupHtml(w, data, esc, btn)
+        ? TemplateStudio.templateSetupHtml(w, data, esc, btn, { hideTheme: stageVideo })
         : styleChoice(w.style, "画面风格") +
           choice(
             "出镜形象",
@@ -1535,7 +1535,9 @@ function setup(w) {
         "primary widebtn",
       );
 
-  const themeName = TemplateVideo.THEMES.find((t) => t.id === (w.templateTheme || "medical"))?.name || "医疗白蓝风";
+  const themeName = stageVideo
+    ? StageStudio.themeName(w)
+    : (TemplateVideo.THEMES.find((t) => t.id === (w.templateTheme || "medical"))?.name || "医疗白蓝风");
   const presName = TemplateVideo.PRESENTERS.find((p) => p.id === (w.templatePresenter || "digital"))?.name || "数字人";
   const refSeconds = video ? videoReferenceSeconds(w) : null;
   const summaryRows = stageVideo ? [
