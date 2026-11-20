@@ -423,6 +423,36 @@ class MixPlanningTests(unittest.TestCase):
                     self.assertEqual("top", arrange_payload["layoutMedia"]["art"]["placement"])
                     self.assertIn("顶部横向插画区", arrange_sys)
 
+    def test_write_script_auto_tightens_overlong_script(self):
+        overlong = copy.deepcopy(self.script)
+        for shot in overlong["shots"]:
+            shot["line"] = "孩子发烧时退烧药一定要按体重计算用量并且注意间隔时间不能随意叠加服用。" * 3
+            shot["cues"] = [{"text": shot["line"], "focus": "0", "weight": len(shot["line"])}]
+        tightened = copy.deepcopy(self.script)
+        client = Mock(side_effect=[model_response(overlong), model_response(tightened)])
+        result = mix_plan.write_script(client, "deepseek-flash", self.item, 30, CATALOG)
+        self.assertEqual(2, client.call_count)
+        self.assertLessEqual(sum(s["seconds"] for s in result["shots"]), 34)
+        self.assertEqual(tightened["shots"][0]["line"], result["shots"][0]["line"])
+
+    def test_write_script_returns_best_effort_after_tighten_attempts(self):
+        overlong = copy.deepcopy(self.script)
+        for shot in overlong["shots"]:
+            shot["line"] = "孩子发烧时退烧药一定要按体重计算用量并且注意间隔时间不能随意叠加服用。" * 3
+            shot["cues"] = [{"text": shot["line"], "focus": "0", "weight": len(shot["line"])}]
+        shorter_still_over = copy.deepcopy(self.script)
+        for shot in shorter_still_over["shots"]:
+            shot["line"] = "孩子发烧时退烧药一定要按体重计算用量并且注意间隔时间。" * 2
+            shot["cues"] = [{"text": shot["line"], "focus": "0", "weight": len(shot["line"])}]
+        client = Mock(side_effect=[
+            model_response(overlong),
+            model_response(shorter_still_over),
+            model_response(shorter_still_over),
+        ])
+        result = mix_plan.write_script(client, "deepseek-flash", self.item, 30, CATALOG)
+        self.assertEqual(3, client.call_count)
+        self.assertEqual(shorter_still_over["shots"][0]["line"], result["shots"][0]["line"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -235,6 +235,55 @@ def _presentation_size_rule(spec, mode="mix"):
     return "".join(parts)
 
 
+def _parse_stage_script(result):
+    title = draft_content.string_field(result, "title", 40)
+    chapters = result.get("chapters")
+    if not isinstance(chapters, list) or not 2 <= len(chapters) <= 5 or not all(
+        isinstance(ch, str) and 1 <= len(ch.strip()) <= 10 for ch in chapters
+    ):
+        raise ValueError("脚本需要 2–5 个简短章节。")
+    chapters = [ch.strip() for ch in chapters]
+    if not isinstance(result.get("shots"), list):
+        raise ValueError("模型没有返回分镜脚本。")
+    for row in result["shots"]:
+        stage_video.mapping(row, "分镜格式无效。")
+        line = draft_content.string_field(row, "line", 450)
+        row["line"] = line
+        row["seconds"] = max(2.0, round(draft_content.spoken_length(line) / draft_content.SPEECH_RATE + .55, 2))
+        points = stage_video.mapping(row.get("points"), "请填写本幕要点。")
+        points.setdefault("items", [])
+        points.setdefault("highlightWords", [])
+        _sanitize_script_points(points)
+        if type(row.get("chapterIndex")) is not int or not 0 <= row["chapterIndex"] < len(chapters):
+            raise ValueError("模型返回的章节序号无效。")
+        cues = row.get("cues")
+        if isinstance(cues, list) and cues and all(isinstance(cue, dict) and isinstance(cue.get("text"), str) for cue in cues) and (
+            "".join(cue["text"] for cue in cues).strip() == line
+        ):
+            normalized = []
+            for cue in cues:
+                text = cue["text"]
+                focus = str(cue.get("focus", "all"))
+                words = cue.get("highlightWords")
+                normalized.append({"text": text, "focus": focus if focus in stage_video.FOCUSES else "all",
+                                   "weight": max(1, len(text)), "highlightWords": [
+                                       word for word in words if isinstance(word, str) and word in text
+                                   ][:3] if isinstance(words, list) else []})
+            row["cues"] = normalized
+        else:
+            row["cues"] = [{"text": part, "focus": "all", "weight": len(part), "highlightWords": []}
+                           for part in re.split(draft_content.CLAUSE_END, line) if part.strip()]
+        if len(row["cues"]) > 24:
+            raise ValueError("口播节拍太多，请缩短本幕。")
+    rows = checked_rows(result)
+    script = {"title": title, "shortTitle": draft_content.string_field(result, "shortTitle", 20, optional=True),
+              "chapters": chapters, "shots": [{field: row[field] for field in SHOT_FIELDS} for row in rows]}
+    drug_tags = _sanitize_drug_tags(result.get("drugTags"))
+    if drug_tags:
+        script["drugTags"] = drug_tags
+    return script
+
+
 def write_script(client, model, item, reference, catalog, library=None):
     is_qa = item.get("layoutId") == QA_LAYOUT
     has_drug = bool((item.get("drug") or "").strip())
@@ -276,52 +325,41 @@ def write_script(client, model, item, reference, catalog, library=None):
         "topic": item["topic"], "drug": item.get("drug") or "", "referenceSeconds": reference,
         "pointTypes": catalog["pointTypes"],
     }, 6500)
-    title = draft_content.string_field(result, "title", 40)
-    chapters = result.get("chapters")
-    if not isinstance(chapters, list) or not 2 <= len(chapters) <= 5 or not all(
-        isinstance(ch, str) and 1 <= len(ch.strip()) <= 10 for ch in chapters
-    ):
-        raise ValueError("脚本需要 2–5 个简短章节。")
-    if not isinstance(result.get("shots"), list):
-        raise ValueError("模型没有返回分镜脚本。")
-    for row in result["shots"]:
-        stage_video.mapping(row, "分镜格式无效。")
-        line = draft_content.string_field(row, "line", 450)
-        row["line"] = line
-        row["seconds"] = max(2.0, round(len(line) / draft_content.SPEECH_RATE + .55, 2))
-        points = stage_video.mapping(row.get("points"), "请填写本幕要点。")
-        points.setdefault("items", [])
-        points.setdefault("highlightWords", [])
-        _sanitize_script_points(points)
-        if type(row.get("chapterIndex")) is not int or not 0 <= row["chapterIndex"] < len(chapters):
-            raise ValueError("模型返回的章节序号无效。")
-        cues = row.get("cues")
-        if isinstance(cues, list) and cues and all(isinstance(cue, dict) and isinstance(cue.get("text"), str) for cue in cues) and (
-            "".join(cue["text"] for cue in cues).strip() == line
-        ):
-            normalized = []
-            for cue in cues:
-                text = cue["text"]
-                focus = str(cue.get("focus", "all"))
-                words = cue.get("highlightWords")
-                normalized.append({"text": text, "focus": focus if focus in stage_video.FOCUSES else "all",
-                                   "weight": max(1, len(text)), "highlightWords": [
-                                       word for word in words if isinstance(word, str) and word in text
-                                   ][:3] if isinstance(words, list) else []})
-            row["cues"] = normalized
-        else:
-            row["cues"] = [{"text": part, "focus": "all", "weight": len(part), "highlightWords": []}
-                           for part in re.split(draft_content.CLAUSE_END, line) if part.strip()]
-        if len(row["cues"]) > 24:
-            raise ValueError("口播节拍太多，请缩短本幕。")
-    rows = checked_rows(result)
-    if reference and sum(row["seconds"] for row in rows) > reference + draft_content.DURATION_OVERAGE_LIMIT:
-        raise ValueError("脚本估算时长超过参考时长加 4 秒，请重试。")
-    script = {"title": title, "shortTitle": draft_content.string_field(result, "shortTitle", 20, optional=True),
-              "chapters": chapters, "shots": [{field: row[field] for field in SHOT_FIELDS} for row in rows]}
-    drug_tags = _sanitize_drug_tags(result.get("drugTags"))
-    if drug_tags:
-        script["drugTags"] = drug_tags
+    script = _parse_stage_script(result)
+
+    if reference:
+        plan = draft_content.code_motion_duration_plan(reference)
+        max_total = reference + draft_content.DURATION_OVERAGE_LIMIT
+        total_seconds = sum(row["seconds"] for row in script["shots"])
+        for attempt in range(2):
+            if total_seconds <= max_total:
+                break
+            shots = script["shots"]
+            current_chars = sum(draft_content.spoken_length(row["line"]) for row in shots)
+            target_sec = max(18, reference - 2 - attempt * 5)
+            char_budget = max(55, int((target_sec - len(shots) * 0.85) * draft_content.SPEECH_RATE))
+            tighten_instruction = draft_content.EDITORIAL_RULES + (
+                "【任务】把下面这份用药科普短视频脚本精简压缩到规定时长以内，保留核心科普信息、医学准确性、自然口语与全部字段结构。\n"
+                f"- 当前共 {len(shots)} 幕、口播总计 {current_chars} 字、估算 {total_seconds:.1f} 秒，已超出上限（必须 ≤ {max_total} 秒）。\n"
+                f"- 硬性目标：全片所有 shots 的 line 总字数（含标点）不超过 {char_budget} 字，估算总时长 ≤ {max_total} 秒；"
+                f"可精简重复表达或合并次要幕（保留 {plan['min_scenes']}–{plan['max_scenes']} 幕），同步更新 chapters（2–5 个，各不超过 10 字）与 chapterIndex。\n"
+                "- 严禁半途截断句子，每幕 cues 的 text 拼接必须等于该幕 line，保留严重不良反应立即就医的安全红线。\n"
+                + ("- 除第一幕外，保留每幕 points 中的 question、answer 和 verdictTone。\n" if is_qa else "")
+                + "- 只返回与输入相同结构的完整 JSON（title、shortTitle、chapters、shots"
+                + ("、drugTags" if has_drug else "") + "）。"
+            )
+            try:
+                revised_raw = draft_content.ask_json(client, model, tighten_instruction, script, 6500)
+                revised_script = _parse_stage_script(revised_raw)
+            except (KeyError, TypeError, ValueError):
+                break
+            rev_total = sum(row["seconds"] for row in revised_script["shots"])
+            if rev_total < total_seconds:
+                script = revised_script
+                total_seconds = rev_total
+            else:
+                break
+
     return script
 
 
