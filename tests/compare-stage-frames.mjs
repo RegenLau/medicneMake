@@ -104,7 +104,7 @@ try {
         ...(fixture.kind === "card" ? { templateInfo: { shortTitle: appearance.shortTitle, chapters: appearance.chapters } } : {}),
       });
     }
-    const shot = { ...(code ? fixture.legacy : shared), kind: fixture.kind, captions: fixture.captions ?? fixture.legacy.captions };
+    const shot = { ...(fixture.legacy || shared), kind: fixture.kind, captions: fixture.captions ?? fixture.legacy.captions };
     await newPage.evaluate(plan => setPlan(plan), { layout, deck, images, shots: [shot] });
     for (const progress of samples) {
       if (code) {

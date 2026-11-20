@@ -8,14 +8,23 @@
   addEventListener("resize", fit);
   fit();
 
-  let plan, deck, imgMap, mounted, content;
+  let plan, deck, imgMap, mounted, content, lastSubtitle;
 
   async function setPlan(input) {
     plan = input;
     deck = TemplateVideo.normalizeDeck(input.deck);
+    deck.slides.forEach((slide, index) => {
+      const shot = input.shots[index];
+      if (shot.kind !== "svg") return;
+      slide.highlightWords = [...new Set([
+        ...(shot.beats || [shot]).flatMap(beat => [beat.label, ...(StageSvgContent.keywords[beat.action] || [])]),
+        slide.name,
+      ])].filter(word => word && slide.line.includes(word)).slice(0, 4);
+    });
     imgMap = new Map(Object.entries(input.images || {}));
     root.classList.toggle("cm-library-font", input.fontId === "builtin:font/noto-sans-sc");
     mounted = null;
+    lastSubtitle = null;
     if (input.fontId) {
       const fonts = await document.fonts.load('650 30px "Studio Noto Sans SC"', "用药");
       if (!fonts.length) throw Error("素材库字体未加载。");
@@ -25,9 +34,43 @@
 
   const mapSrc = (url) => imgMap.get(url) || url || "";
 
-  function drawFrame(time, avatarFrame) {
+  function locate(time) {
     const index = plan.shots.findIndex((shot) => time < shot.end);
     const current = index < 0 ? plan.shots.length - 1 : index;
+    return current;
+  }
+
+  function dissolve(index, localTime) {
+    return plan.compatibility || index === 0 ? 1 : Math.min(1, localTime / 0.3);
+  }
+
+  function legacyImageFade(index, time, cue) {
+    if (plan.compatibility !== "image" || !cue) return null;
+    const shot = plan.shots[index];
+    const cueIndex = shot.captions.indexOf(cue);
+    const before = cueIndex > 0 ? shot.captions[cueIndex - 1] : plan.shots[index - 1]?.captions.at(-1);
+    if (!before) return null;
+    const fade = cueIndex === 0 ? 0.24 : cue.transition === "outro" ? 0.28 : cue.transition === "fade" ? 0.22 : 0;
+    const duration = Math.min(fade, (cue.end - cue.start) * .35,
+      cueIndex === 0 ? fade : (before.end - before.start) * .35);
+    const phase = (time - cue.start) / duration;
+    if (duration < .08 || phase >= 1) return null;
+    return { index: cueIndex === 0 ? index - 1 : index, cue: before, alpha: 1 - Math.max(0, phase) };
+  }
+
+  function frameSignature(time) {
+    const index = locate(time);
+    const shot = plan.shots[index];
+    const localTime = Math.max(0, time - shot.start);
+    const cue = Contents.activeCue(shot, localTime);
+    if (plan.hasAvatarFrames || deck.presenter !== "none" || plan.layout.regions.progress ||
+        !Contents[shot.kind].isStatic?.(shot, localTime) || dissolve(index, localTime) !== 1 ||
+        legacyImageFade(index, time, cue)) return null;
+    return `${index}/${shot.captions.indexOf(cue)}`;
+  }
+
+  function drawFrame(time, avatarFrame) {
+    const current = locate(time);
     const shot = plan.shots[current];
     const slide = deck.slides[current];
     const localTime = Math.max(0, time - shot.start);
@@ -58,11 +101,41 @@
       const slot = root.querySelector(".media-slot");
       content = slot ? renderer.mount(slot, shot, context) : null;
       mounted = mountKey;
+      lastSubtitle = null;
     }
     if (content) renderer.draw(content, shot, localTime, context);
-    return LayoutEngine.update(root, { avatarFrame, ...(code ? { progress, subtitle, highlightWords } : {}) });
+    const slot = root.querySelector(".media-slot");
+    if (slot && !plan.compatibility && current > 0) slot.style.opacity = String(dissolve(current, localTime));
+    const fade = legacyImageFade(current, time, cue);
+    if (fade) {
+      const previous = LayoutEngine.render(plan.layout, deck, fade.index, {
+        imgMap, progress, focus: fade.cue.focus || "all", subtitleText: fade.cue.text, highlightWords: fade.cue.highlightWords,
+      });
+      if (fade.alpha === 1) {
+        root.innerHTML = previous;
+        mounted = null;
+      } else {
+        const fill = deck.theme === "warm" ? "#fdf5e7" : "#edf6fe";
+        root.insertAdjacentHTML("beforeend", `<div style="position:absolute;inset:0;opacity:${fade.alpha};background:${fill}">${previous}</div>`);
+      }
+    }
+    const state = { avatarFrame, ...(code ? { progress } : {}) };
+    if (code && lastSubtitle !== cue) {
+      state.subtitle = subtitle;
+      state.highlightWords = highlightWords;
+      lastSubtitle = cue;
+    }
+    return LayoutEngine.update(root, state);
+  }
+
+  function collectEvents() {
+    return plan.shots.flatMap((shot, index) =>
+      Contents[shot.kind].events(shot, { slide: deck.slides[index], theme: deck.theme, index, total: deck.slides.length })
+        .map(event => ({ ...event, shot: index, t: shot.start + event.t })));
   }
 
   global.setPlan = setPlan;
   global.drawFrame = drawFrame;
+  global.frameSignature = frameSignature;
+  global.collectStageEvents = collectEvents;
 })(globalThis);

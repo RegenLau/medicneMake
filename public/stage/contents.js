@@ -32,6 +32,7 @@
         dom.mounted = true;
       }
     },
+    isStatic: () => true,
     events: noEvents,
   };
 

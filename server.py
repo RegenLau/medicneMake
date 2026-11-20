@@ -27,6 +27,7 @@ from urllib.request import Request, urlopen
 import draft_content
 import asset_library
 import svg_motion
+import stage_video
 import music_gen
 import work_costs
 
@@ -50,6 +51,7 @@ for directory in (MEDIA, JOBS, AVATAR_CACHE, GENERATED_MUSIC_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 PORT = int(os.environ.get("STUDIO_PORT", "8765"))
 ORIGIN = f"http://127.0.0.1:{PORT}"
+STAGE_RENDER = os.environ.get("STUDIO_STAGE_RENDER", "1") != "0"
 ARK = "https://ark.cn-beijing.volces.com/api/v3"
 DEEPSEEK = "https://api.deepseek.com"
 DASHSCOPE = "https://dashscope.aliyuncs.com"
@@ -962,6 +964,9 @@ def setting_valid(p):
         if selected_text_model not in text_models():
             raise ValueError("请选择有效的 DeepSeek 文本模型。")
         draft_content.validate_request(p["draft"], p["settings"], VIDEO_MODELS)
+        return
+    if p["kind"] == "video" and p.get("stage") is True:
+        validate_stage_video(p)
         return
     if p["kind"] == "video" and p.get("codeMotion") is True:
         settings = p.get("settings")
@@ -2551,16 +2556,20 @@ def render_template_video(p, job, save, speech_key, record=None, dashscope_key="
     return {"url": f"/media/{base}.mp4", "captions": f"/media/{base}.vtt", "music": track, "shotSeconds": shot_seconds, **music_extra}
 
 
+def svg_speech_cache_path(p, line, speaker):
+    fingerprint = json.dumps([p["workId"], SPEECH_RESOURCE, SPEECH_SAMPLE_RATE, speaker, line])
+    digest = hashlib.sha256(fingerprint.encode()).hexdigest()
+    return MEDIA / (digest + ".wav")
+
+
 def svg_shot_audio(p, item, index, speech_key, record):
     line = item["line"].strip()
     voice = p["settings"]["voice"]
     speaker = SPEAKERS.get(voice)
     if not speaker:
         return None, 0
-    fingerprint = json.dumps([p["workId"], SPEECH_RESOURCE, SPEECH_SAMPLE_RATE, speaker, line])
-    digest = hashlib.sha256(fingerprint.encode()).hexdigest()
-    audio = MEDIA / (digest + ".wav")
-    with SVG_SPEECH_LOCKS[int(digest[:1], 16)]:
+    audio = svg_speech_cache_path(p, line, speaker)
+    with SVG_SPEECH_LOCKS[int(audio.stem[:1], 16)]:
         if not audio.is_file():
             characters = narrate(line, speaker, audio, speech_key)
             if record:
@@ -2805,7 +2814,178 @@ def render_code_motion(p, job, save, speech_key, record, dashscope_key=""):
     }
 
 
+def validate_stage_video(p):
+    settings = p.get("settings")
+    if not isinstance(settings, dict) or settings.get("voice") not in (*SPEAKERS, "无配音"):
+        raise ValueError("未知配音")
+    if settings.get("ratio") != "16:9":
+        raise ValueError("当前视频布局固定为 16:9。")
+    stage_video.stage_input(p, ASSETS, media_path)
+    code_motion_appearance(p)
+    if not code_motion_ready():
+        raise ValueError("视频合成需要 Node.js、Playwright 和 FFmpeg。")
+    if settings["voice"] in SPEAKERS and not current_speech_key() and not has_template_speech(p):
+        raise ValueError("请先配置火山语音，再合成带配音的视频。")
+    if p.get("avatar") is not None:
+        avatar = p["avatar"]
+        appearance = code_motion_appearance(p)
+        if (not isinstance(avatar, dict) or avatar.get("enabled") is not True or settings["voice"] not in SPEAKERS
+                or appearance["presenter"] == "none" or avatar.get("presenter") != appearance["presenter"]):
+            raise ValueError("数字人设置与当前主讲人不匹配。")
+        validate_template_avatar(avatar, True, check_key=not p.get("previousVideo"))
+    if settings.get("fontId"):
+        ASSETS.resolve(settings["fontId"], ("font",))
+    validate_video_music_settings(settings)
+
+
+def _stage_cues(shot, start, seconds, spoken):
+    source = shot["cues"] or [{"text": text, "weight": len(text), "focus": "all"}
+                              for text in caption_chunks(shot["line"], 22)]
+    source = source or [{"text": shot["line"], "weight": 1, "focus": "all"}]
+    cues, cursor = [], start
+    for cue, length in zip(source, template_cue_seconds(source, seconds, spoken)):
+        text = strip_trailing_subtitle_punctuation(cue.get("text", ""))
+        cues.append({**cue, "text": text, "start": cursor, "end": min(cursor + length, start + seconds)})
+        cursor += length
+        if cursor >= start + seconds:
+            break
+    return cues
+
+
+def build_timeline(p, shots, folder, speech_key, record=None, progress=None):
+    """Prepare narration and provide the authored frame times and absolute subtitle cues."""
+    compatible = p.get("compatibility")
+    fps = CODE_MOTION_FPS if compatible == "scene" else 24
+    cached = cached_template_speech(p)
+    entries, caption_rows, elapsed = [], [], 0.0
+    for index, shot in enumerate(shots):
+        if progress:
+            progress(f"准备第 {index + 1} / {len(shots)} 幕口播")
+        audio_dir = folder / str(index)
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        line = shot["line"]
+        speaker = SPEAKERS.get(p["settings"]["voice"])
+        prior = svg_speech_cache_path(p, line, speaker) if speaker and p.get("workId") and shot["kind"] == "svg" else None
+        if prior and prior.is_file():
+            with wave.open(str(prior)) as wav:
+                audio, spoken = prior, wav.getnframes() / wav.getframerate()
+        else:
+            audio, spoken = template_shot_audio(p["settings"], line, audio_dir, speech_key, index, record, cached)
+        if compatible == "svg":
+            frames, moving = svg_motion.timing(spoken, shot["seconds"])
+            seconds = frames / fps
+            shot["motionSeconds"] = moving / fps
+            cues = [{**cue, "start": elapsed + cue["start"], "end": elapsed + cue["end"], "focus": "all"}
+                    for cue in svg_caption_intervals(line, spoken or seconds, shot.get("beats"))]
+        elif compatible == "scene":
+            tail = 0.65 if shot.get("visual") == "summary" else 0.45
+            frames = math.ceil((spoken + tail) * fps) if spoken else round(float(shot["seconds"]) * fps)
+            seconds = max(round(3.2 * fps), frames) / fps
+            cues = code_motion_shot_captions(shot, elapsed, spoken or seconds)
+        else:
+            seconds = template_slide_seconds(shot, spoken)
+            cues = _stage_cues(shot, elapsed, seconds, spoken)
+        end = elapsed + seconds
+        if compatible != "svg" and cues:
+            cues[-1]["end"] = end
+        shot.update(start=elapsed, end=end, captions=cues)
+        entries.append((audio, seconds))
+        if compatible == "image":
+            caption_rows.extend(shot_caption_intervals(line, elapsed, min(spoken, seconds - 0.15) if spoken else seconds, "16:9"))
+        else:
+            caption_rows.extend(cues)
+        elapsed = end
+    vtt = "WEBVTT\n\n" + "\n".join(caption_vtt(cue) for cue in caption_rows)
+    return {"shots": shots, "entries": entries, "fps": fps, "frames": round(elapsed * fps), "vtt": vtt}
+
+
+def render_stage_video(p, job, save, speech_key, record=None, dashscope_key=""):
+    layout, deck, shots, images, used = stage_video.stage_input(p, ASSETS, media_path)
+    appearance = code_motion_appearance(p)
+    deck.update(appearance)
+    deck["slides"] = [shot.pop("slide") for shot in shots]
+    if appearance["presenter"] == "digital" and appearance["pharmacist"].get("avatarImage"):
+        url = appearance["pharmacist"]["avatarImage"]
+        images[url] = media_path(url).as_uri()
+    else:
+        for name in ("digital", "cartoon"):
+            url = f"/assets/template-doctor-{name}.jpg"
+            images[url] = media_path(url).as_uri()
+    base = job["id"]
+    folder = JOBS / base
+    folder.mkdir(exist_ok=True)
+
+    def progress(message):
+        job["progress"] = message
+        save()
+
+    timeline = build_timeline(p, shots, folder, speech_key, record, progress)
+    fps, frames = timeline["fps"], timeline["frames"]
+    duration = frames / fps
+    entries = timeline["entries"]
+    voiced = any(audio for audio, _ in entries)
+    avatar = p.get("avatar")
+    avatar_mp4 = (generate_template_avatar_video(avatar, entries, folder, job, save, dashscope_key, record)
+                  if avatar and voiced else None)
+    settings = p["settings"]
+    font_id = settings.get("fontId")
+    if font_id:
+        used.append(ASSETS.resolve(font_id, ("font",)))
+    music, track, music_url, music_meta = resolve_video_music(p)
+    if music:
+        used.append((music, library_music_item(music_meta) if music_meta else preset_music_item(track)))
+    with tempfile.TemporaryDirectory(dir=folder, prefix="stage-") as temp:
+        scratch = Path(temp)
+        voice = build_template_speech_wav(entries, scratch / "speech.wav", scratch)
+        if avatar_mp4:
+            avatar_size = 2 * round(layout.get("slots", {}).get("avatarSize", 180) / 2)
+            run_ffmpeg("-i", avatar_mp4, "-an", "-vf",
+                       f"fps={fps},scale={avatar_size}:{avatar_size}:force_original_aspect_ratio=increase,"
+                       f"crop={avatar_size}:{avatar_size}:(iw-ow)/2:(ih-oh)*0.2,tpad=stop_mode=clone:stop_duration={duration:.3f}",
+                       "-frames:v", frames, "-start_number", 0, "-q:v", 3, scratch / "avatar-%05d.jpg")
+        manifest = scratch / "stage.json"
+        write_json(manifest, {"deck": deck, "layout": layout, "images": images, "shots": shots, "fps": fps,
+                              "frames": frames, "compatibility": p.get("compatibility"), "fontId": font_id,
+                              "hasAvatarFrames": bool(avatar_mp4), "imageFocus": not bool(p.get("compatibility"))})
+        progress(f"渲染统一舞台（{len(shots)} 幕 · {frames} 帧）")
+        result = subprocess.run([shutil.which("node"), str(ROOT / "scripts/render-stage.mjs"), str(manifest), str(scratch)],
+                                cwd=ROOT, capture_output=True, timeout=max(300, frames / 15 + 60))
+        if result.returncode:
+            detail = result.stderr.decode("utf-8", "replace")
+            error = next((line.removeprefix("Error: ") for line in detail.splitlines()
+                          if line.startswith(("Error: ", "page."))), "请核对 Chrome 和 Playwright 安装。")
+            raise ValueError(f"舞台渲染失败：{error[:260]}")
+        progress("合成画面、配音与 MP4")
+        music_input = ["-stream_loop", "-1", "-i", music] if music else []
+        sfx_input, mix, sounds = library_sound_mix(shots, music, track, duration, voiced)
+        output = scratch / "output.mp4"
+        render_stats = read_json(scratch / "capture-stats.json")
+        sequence = render_stats["captures"] == frames and (scratch / "frame-00000.jpg").is_file()
+        video_input = (["-framerate", fps, "-start_number", 0, "-i", scratch / "frame-%05d.jpg"] if sequence
+                       else ["-f", "concat", "-safe", "0", "-i", scratch / "frames.txt"])
+        run_ffmpeg("-i", voice, *video_input,
+                   *music_input, *sfx_input, "-map", "1:v:0", *mix, "-vf", f"fps={fps}",
+                   "-t", f"{duration:.4f}", "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p",
+                   "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", output)
+        caption_path = scratch / "captions.vtt"
+        caption_path.write_text(timeline["vtt"], encoding="utf-8")
+        asset_refs = asset_versions([*used, *sounds])
+        (scratch / "events.json").replace(folder / "events.json")
+        caption_path.replace(MEDIA / (base + ".vtt"))
+        (scratch / "poster.jpg").replace(MEDIA / (base + ".jpg"))
+        output.replace(MEDIA / (base + ".mp4"))
+    if record:
+        record("stage-render", work_costs.entry("视频舞台", "本地渲染", f"{frames} 帧 · 720p", 0))
+    return {"url": f"/media/{base}.mp4", "poster": f"/media/{base}.jpg", "captions": f"/media/{base}.vtt",
+            "burnedCaptions": True, "music": track, "shotSeconds": [seconds for _, seconds in entries],
+            "assetVersions": asset_refs,
+            "renderStats": render_stats,
+            **({"musicUrl": music_url, "musicMeta": music_meta} if music_url else {})}
+
+
 def render_video(p, job, save, speech_key, record=None, dashscope_key=""):
+    if p.get("stage") is True:
+        return render_stage_video(p, job, save, speech_key, record, dashscope_key)
     if p.get("codeMotion") is True:
         return render_code_motion(p, job, save, speech_key, record, dashscope_key)
     if p.get("svg") is True:
@@ -3185,7 +3365,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "encoder": bool(FFMPEG),
                     "codeMotionReady": code_motion_ready(),
                     "templateMotionSwitch": True,
-                    "stageRender": False,
+                    "stageRender": STAGE_RENDER,
                     "svgMotion": {"actions": svg_motion.ACTIONS, "exportReady": svg_motion.ready(FFMPEG)},
                     **speech_connection(),
                     "keyStorage": KEY_STORAGE,
@@ -3346,7 +3526,7 @@ class Handler(SimpleHTTPRequestHandler):
                 key = current_ark_key()
                 ds_key = current_deepseek_key() if p["kind"] == "draft" else None
                 motion_avatar = p.get("codeMotion") is True and p.get("avatar") is not None
-                dash_key = current_dashscope_key() if p["kind"] == "video" and (p.get("template") is True or motion_avatar) else ""
+                dash_key = current_dashscope_key() if p["kind"] == "video" and (p.get("template") is True or motion_avatar or (p.get("stage") is True and p.get("avatar"))) else ""
                 threading.Thread(
                     target=work, args=(job, key, current_speech_key(), ds_key, dash_key), daemon=True
                 ).start()
