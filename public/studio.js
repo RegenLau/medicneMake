@@ -1883,7 +1883,11 @@ function updateJobView(w, owner, finished = false) {
     return;
   }
   if (finished) {
-    render();
+    render(Boolean($("#stage-production-job")));
+    return;
+  }
+  if (StageStudio.hasProductionJob(w)) {
+    StageStudio.updateProductionJob(w);
     return;
   }
   if (w.job.target !== "initial") {
@@ -2607,6 +2611,8 @@ function rememberRejectedFrame(w) {
 function jobView(w) {
   const failed = !!w.job.error;
   const writing = w.job.target === "write-draft";
+  const makingShot = w.job.stageShotIndex !== undefined;
+  const replanning = w.job.stageDraft === "replan";
   const rejected = portraitRejected(w.job);
   const rejectedIndex = rejected ? rejectedFrameIndex(w) : -1;
   const portraitMessage = rejected &&
@@ -2619,6 +2625,8 @@ function jobView(w) {
     w,
     failed ? "生成任务需要处理" :
       w.job.target === "svg-speech" ? "正在生成口播试听" :
+      makingShot ? `正在制作第 ${w.job.stageShotIndex + 1} 幕画面` :
+      replanning ? "正在编排分镜画面" :
       writing ? (w.type === "article" ? "正在生成文章" : "正在生成分镜脚本") : "正在合成视频",
     1,
     '<div class="view-wrap sheet"><div class="row">' +
@@ -2631,6 +2639,7 @@ function jobView(w) {
       esc(
         failed
           ? (rejected ? portraitMessage : isNetworkErrorMessage(w.job.error) ? NETWORK_ERROR_MESSAGE : w.job.error)
+          : makingShot ? "画面制作完成后会回到分镜编辑。"
           : writing ? "生成完成后，草稿会保存在「我的作品」。" : "合成期间可先返回工作台处理其他草稿，已完成的分镜会自动复用。",
       ) +
       '</div>' + (rejected ? '<details class="shot-options"><summary>查看方舟原始报错</summary><p class="footmeta">' +
@@ -2638,7 +2647,7 @@ function jobView(w) {
       (failed
         ? recovery +
           (w.job.partial ? btn("保留正文，稍后配图", "keep-written-article", "secondary") : "") +
-          btn(writing ? "返回主题设置" : "返回分镜编辑", "abort-job", "secondary")
+          btn(writing && !makingShot && !replanning ? "返回主题设置" : "返回分镜编辑", "abort-job", "secondary")
         : "") +
       btn("返回工作台", "home", "textbtn") +
       "</div></div>",
@@ -2738,7 +2747,7 @@ async function poll(w, owner = w) {
             w.videoDirty = false;
             w.viewingSetup = false;
           } else if (job.target === "write-draft") {
-            if (job.stageDraft) StageStudio.installDraft(w, job.stageDraft, result.output);
+            if (job.stageDraft) StageStudio.installDraft(w, job.stageDraft, result.output, job);
             else applyWrittenDraft(w, result.output);
           } else if (job.stageImageSlots) {
             StageStudio.installImages(w, job.stageImageSlots, result.output);
@@ -3362,9 +3371,10 @@ function render(preserveScroll = false) {
   StageStudio.normalizeWork(w);
   if (w.job) {
     if (w.job.target === "initial") setup(w);
+    else if (StageStudio.hasProductionJob(w)) editor(w);
     else jobView(w);
     if (!w.job.error) poll(w);
-    else if (w.job.target === "compose" || w.job.target === "write-draft") recoverFinishedJob(w);
+    else if (w.job.target === "compose" || w.job.target === "write-draft" || StageStudio.hasProductionJob(w)) recoverFinishedJob(w);
     if (!preserveScroll) window.scrollTo(0, 0);
     return;
   }
@@ -4643,7 +4653,21 @@ document.addEventListener("click", async (e) => {
           break;
         }
         if (j.target === "write-draft") {
+          if (j.stageDraft === "produce" || j.stageDraft === "replan") {
+            const detail = j.stageDraft === "produce" ? `继续制作第 ${j.stageShotIndex + 1} 幕画面。` : "继续编排分镜画面。";
+            authorize({ ...w, settings:j.payload.settings }, 1, "draft", () => sendJob(w), 1, {detail});
+            break;
+          }
+          if (j.payload.draft?.presentation === "mg") {
+            authorize({ ...w, settings:j.payload.settings }, 2, "draft", () => sendJob(w), 2,
+              {detail:"继续编排 MG 分镜。已生成的脚本会复用。"});
+            break;
+          }
           authorize(w, w.type === "article" && !j.partial ? 2 : 1, "draft", () => sendJob(w));
+          break;
+        }
+        if (j.stageImageSlots) {
+          authorize({ ...w, settings:j.payload.settings }, j.payload.items.length, "images", () => sendJob(w, owner));
           break;
         }
         if (j.payload.codeMotion) {
@@ -4671,7 +4695,7 @@ document.addEventListener("click", async (e) => {
       }
       case "abort-job": {
         const owner = v === "" || v == null ? w : w.blocks[Number(v)];
-        if (owner.job?.target === "write-draft") w.viewingSetup = true;
+        if (owner.job?.target === "write-draft" && !["produce","replan"].includes(owner.job.stageDraft)) w.viewingSetup = true;
         if (owner === w && portraitRejected(owner.job)) rememberRejectedFrame(w);
         const leaderId = owner.job?.referenceLeader ? owner.job.payload.id : "";
         if (leaderId) {

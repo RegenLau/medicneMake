@@ -359,24 +359,38 @@ const StudioAssets = (() => {
       <button type="button" class="primary" data-lib-draft="${esc(item.id)}">检查预览</button></div></div></article>`;
   }
 
+  function openMGPanel(options, title, body) {
+    if (!options.panel) {
+      openModal(title,body,"asset-form");
+      return dialogBody;
+    }
+    const panel = options.panel;
+    panel.innerHTML = `<div class="stage-mg-head"><h3>${esc(title)}</h3>
+      <button type="button" class="textbtn" data-close-mg>收起</button></div>${body}`;
+    panel.querySelector("[data-close-mg]").addEventListener("click",options.onClose);
+    if (panel.isConnected) panel.querySelector("textarea:not([readonly]), video")?.focus();
+    return panel;
+  }
+
   function showDraft(item, options = {}) {
-    openModal("待确认 MG 素材",`<div class="asset-form">
+    const container = openMGPanel(options,"待确认 MG 素材",`<div class="asset-form">
       <h3>${esc(item.name)}</h3><p class="small">${esc(item.useFor)}</p>
       <video class="motion-preview-video" src="${esc(item.previewUrl)}" poster="${esc(item.thumbnailUrl)}" controls muted playsinline preload="metadata"></video>
       <div class="asset-actions">
         <button type="button" class="primary" data-adopt-mg>采用入库</button>
         <button type="button" class="outline" data-revise-mg>补充要求后重新生成</button>
         <button type="button" class="textbtn danger" data-discard-mg>丢弃</button>
-      </div><p class="banner err" role="alert" hidden></p></div>`,"asset-form");
-    const panel=dialogBody.querySelector(".asset-form");
-    const buttons=[...panel.querySelectorAll("button")];
+      </div><p class="banner err" role="alert" hidden></p></div>`);
+    const panel=container.querySelector(".asset-form");
+    const buttons=[...container.querySelectorAll(".asset-form button, [data-close-mg]")];
     async function decide(adopt) {
       buttons.forEach(button => button.disabled = true);
       try {
         const result=await post("mg-decide",{id:item.id,adopt});
-        if (panel.isConnected) dialog.close();
+        if (options.panel) options.onClose();
+        else if (panel.isConnected) dialog.close();
         if (adopt) options.onAdopt?.(result.item);
-        if (route()[0] === "library") {
+        if (!options.panel && route()[0] === "library") {
           pageKind=adopt ? "mg" : "pending";
           render(true);
         }
@@ -397,7 +411,7 @@ const StudioAssets = (() => {
     if (!config.deepseekKeyPresent) return openApiKeys("deepseek");
     const modelList = Object.entries(config.textModels || {});
     const selected = options.parent?.model || resolveTextModel(current()?.settings || data.settings);
-    openModal(options.parent ? "重新生成 MG 素材" : "AI 制作 MG 素材",`<form class="asset-form">
+    const container = openMGPanel(options,options.parent ? "重新生成 MG 素材" : "AI 制作 MG 素材",`<form class="asset-form">
       <label class="field">动作描述<textarea name="description" required maxlength="200" rows="3"
         ${options.parent ? "readonly" : ""}>${esc(options.description || "")}</textarea></label>
       ${options.parent ? '<label class="field">补充要求<textarea name="revision" required maxlength="220" rows="3"></textarea></label>' : ""}
@@ -405,16 +419,19 @@ const StudioAssets = (() => {
       <label class="field">文本模型<select name="model">${opts(modelList,selected)}</select></label>
       <p class="small">DeepSeek 按 Token 计费。校验失败时最多修正两次。</p>
       <p role="status"></p><p class="banner err" role="alert" hidden></p>
-      <div class="asset-actions"><button type="submit" class="primary">生成草稿并计费</button></div></form>`,"asset-form");
-    const form=dialogBody.querySelector("form");
+      <div class="asset-actions"><button type="submit" class="primary">生成草稿并计费</button></div></form>`);
+    const form=container.querySelector("form");
     const button=form.querySelector('button[type="submit"]');
+    const close=options.panel?.querySelector("[data-close-mg]");
     const status=form.querySelector('[role="status"]');
     const errorBox=form.querySelector('[role="alert"]');
+    const isOpen=() => options.panel ? container.contains(form) : form.isConnected && dialog.open;
     let saved, signature, finished=false;
     form.addEventListener("submit",async event=>{
       event.preventDefault();
       if (button.disabled || finished) return;
       button.disabled=true;
+      if (close) close.disabled=true;
       errorBox.hidden=true;
       const mg={description:form.elements.description.value.trim(),revision:form.elements.revision?.value.trim() || "",
         theme:form.elements.theme.value,...(options.parent ? {parentId:options.parent.id} : {})};
@@ -427,15 +444,15 @@ const StudioAssets = (() => {
       }
       try {
         let result=await jsonRequest("/api/jobs",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(saved)});
-        while (["queued","running"].includes(result.status) && form.isConnected && dialog.open) {
+        while (["queued","running"].includes(result.status) && isOpen()) {
           status.textContent=result.progress || "正在制作 MG 草稿…";
           await new Promise(resolve=>setTimeout(resolve,750));
           result=await jsonRequest("/api/jobs/"+saved.id);
         }
-        if (!form.isConnected || !dialog.open) return;
+        if (!isOpen()) return;
         if (result.status !== "done") throw Error(result.error || "MG 草稿未制作完成。");
         finished=true;
-        if (route()[0] === "library") {
+        if (!options.panel && route()[0] === "library") {
           pageKind="pending";
           render(true);
         }
@@ -445,6 +462,7 @@ const StudioAssets = (() => {
         errorBox.hidden=false;
         status.textContent="";
         button.disabled=false;
+        if (close) close.disabled=false;
       }
     });
   }

@@ -242,7 +242,7 @@
   function modeSwitcherHtml(w, btnFn) {
     const motion = usesCodeMotion(w);
     const modes = [
-      ["template", "信息图模板讲解", "左侧药师栏 · 右侧科普信息图 · 底部字幕"],
+      ["template", "信息图模板讲解", "药师主讲 · 科普信息图 · 底部字幕"],
       ["storyboard", "AI 分镜动画", "6 种全屏画风 + Seedance 图生视频，适合纯视觉分镜表达"],
       ["svg", "SVG 演示动画", "信息图模板布局，右侧播放 SVG 动画"],
     ];

@@ -67,10 +67,10 @@ def stage_input(p, library, media_path):
     return layout, deck, shots, pictures, used
 
 
-def validate_shot_common(item):
+def validate_shot_common(item, *, allow_incomplete_text=False):
     item = mapping(item, "分镜格式无效。")
-    name = draft_content.string_field(item, "name", 60)
-    line = draft_content.string_field(item, "line", 450)
+    name = draft_content.string_field(item, "name", 60, optional=allow_incomplete_text)
+    line = draft_content.string_field(item, "line", 450, optional=allow_incomplete_text)
     chapter = item.get("chapterIndex", 0)
     if type(chapter) is not int or not 0 <= chapter <= 4:
         raise ValueError("分镜章节无效。")

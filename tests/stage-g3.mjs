@@ -38,9 +38,9 @@ try {
   const pending=async()=> (await fetch("/api/library/mg-pending")).items;
   const library=async()=> (await fetch("/api/library")).items;
   const ready=()=>page.locator("#stage-play:not([disabled])").waitFor();
-  const checkPreview=async()=>{
-    await dialog().getByRole("heading",{name:"待确认 MG 素材",exact:true}).waitFor();
-    const video=dialog().locator(".motion-preview-video");
+  const checkPreview=async(container=dialog())=>{
+    await container.getByRole("heading",{name:"待确认 MG 素材",exact:true}).waitFor();
+    const video=container.locator(".motion-preview-video");
     await video.waitFor();
     await video.evaluate(element=> !Number.isFinite(element.duration) ?
       new Promise((resolve,reject)=>{
@@ -115,14 +115,17 @@ try {
   assert.equal(await page.evaluate(()=>current().stagePlan.shots[0].content.kind),"scene");
   await save("G3-Mix保留备用方式");
   await button("可以用 AI 制作 MG 素材").click();
-  assert.equal(await dialog().locator('[name="description"]').inputValue(),"让药盒从左滑入并停在核对位置");
-  await modalButton("生成草稿并计费").click();
-  await checkPreview();
+  const stagePanel=page.locator("#stage-mg-panel");
+  assert.equal(await stagePanel.locator('[name="description"]').inputValue(),"让药盒从左滑入并停在核对位置");
+  await stagePanel.getByRole("button",{name:"生成草稿并计费",exact:true}).click();
+  await checkPreview(stagePanel);
+  assert(await page.locator("#stage-preview").isVisible());
+  assert.equal(await dialog().count(),0);
   const stageDraft=(await pending())[0];
   assert.equal(await page.evaluate(()=>current().stagePlan.shots[0].content.kind),"scene");
   assert(!(await library()).some(item=>item.originId===stageDraft.id));
   await save("G3-Mix草稿待确认");
-  await modalButton("采用入库").click();
+  await stagePanel.getByRole("button",{name:"采用入库",exact:true}).click();
   await ready();
   const stageArt=page.frameLocator("#stage-preview").locator(".stage-mg-art svg");
   await stageArt.waitFor();

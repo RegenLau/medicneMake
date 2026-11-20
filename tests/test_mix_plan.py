@@ -110,6 +110,155 @@ class MixPlanningTests(unittest.TestCase):
         self.assertEqual("card", result["shots"][0]["content"]["kind"])
         self.assertEqual(self.script["shots"][1:], result["shots"][1:])
 
+    def test_single_replan_accepts_unfinished_neighbors_without_changing_them(self):
+        for row, kind in zip(self.script["shots"], ("image", "scene", "card")):
+            row["content"] = {"kind": kind, "decidedBy": "user"}
+        self.script["shots"][0]["line"] = ""
+        self.script["shots"][2]["name"] = ""
+        self.item.update(script=self.script, targetIndex=1)
+        result, client = self.arrange([choice(self.script, 1, "svg")])
+        self.assertEqual([1], result["plannedIndices"])
+        self.assertEqual(self.script["shots"][::2], result["shots"][::2])
+        payload = json.loads(client.call_args.args[1]["messages"][1]["content"])
+        self.assertEqual(1, payload["remainingImageBudget"])
+        self.assertEqual("", payload["shots"][0]["line"])
+        for target in (None, 0, 2):
+            with self.subTest(target=target), self.assertRaises(ValueError):
+                mix_plan.validate_setup({**self.item, "targetIndex": target}, self.library)
+
+    def test_produce_shot_uses_selected_kind_and_only_passes_target_script(self):
+        shot = self.script["shots"][1]
+        examples = [
+            ("card", {"motionStyle": "auto"}, {"motionStyle": "spotlight"}),
+            ("scene", {"visual": "steps"}, {"visual": "mechanism", "motif": "pill"}),
+            ("svg", {"beats": [{"action": "carton", "line": "原包装药盒", "label": "药盒"}]},
+             {"beats": [{"action": "travel", "line": "放进随身包", "label": "放进随身包"}]}),
+        ]
+        original = copy.deepcopy(shot)
+        for kind, previous, params in examples:
+            with self.subTest(kind=kind):
+                reason = "把动作拆成观众容易看懂的画面。"
+                client = Mock(return_value=model_response({"plans": [{"params": params, "reason": reason}]}))
+                item = {**self.item, "presentation": kind, "produceShot": {
+                    "shot": shot, "previousParams": previous, "revision": "突出手边要核对的对象",
+                }}
+                result = mix_plan.produce_shot(client, "deepseek-flash", item, self.library)
+                self.assertEqual(kind, result["kind"])
+                self.assertEqual("user", result["decidedBy"])
+                self.assertEqual(reason, result["reason"])
+                self.assertEqual(params, {key: result[key] for key in params})
+                client.assert_called_once()
+                payload = json.loads(client.call_args.args[1]["messages"][1]["content"])
+                self.assertEqual(shot, payload["shot"])
+                self.assertEqual(previous, payload["previousParams"])
+                self.assertEqual("突出手边要核对的对象", payload["revision"])
+                self.assertEqual(original, shot)
+
+    def test_produce_scene_skips_color_only_and_uses_content_based_plan_in_one_request(self):
+        shot = self.script["shots"][1]
+        item = {**self.item, "presentation": "scene", "produceShot": {"shot": shot, "previousParams": {"visual": "steps"}}}
+        plans = [
+            {"params": {"visual": "steps", "tone": "warm"}, "reason": "使用暖色强调药盒。"},
+            {"params": {"visual": "compare"}, "reason": "并排比较两个对象。"},
+            {"params": {"visual": "mechanism", "motif": "bottle"}, "reason": "用药盒图形连接随身收纳要点。"},
+        ]
+        client = Mock(return_value=model_response({"plans": plans}))
+        content = mix_plan.produce_shot(client, "deepseek-flash", item, self.library)
+        self.assertEqual(("mechanism", "bottle"), (content["visual"], content["motif"]))
+        self.assertEqual(plans[2]["reason"], content["reason"])
+        client.assert_called_once()
+        request = json.loads(client.call_args.args[1]["messages"][1]["content"])
+        self.assertEqual("flow", request["currentPlan"]["motion"])
+        client.return_value = model_response({"plans": plans[:2]})
+        with self.assertRaisesRegex(ValueError, "保留原画面"):
+            mix_plan.produce_shot(client, "deepseek-flash", item, self.library)
+
+    def test_produce_rejects_cosmetic_or_equivalent_changes(self):
+        self.supports.append("mg")
+        asset = {"id": "builtin:lottie/box", "kind": "lottie", "name": "药盒", "tags": ["药盒"]}
+        self.library.items.return_value = [asset]
+        shot = self.script["shots"][1]
+        for kind, old, new in (
+            ("card", {"motionStyle": "auto"}, {"motionStyle": "flow"}),
+            ("scene", {"visual": "steps"}, {"visual": "steps", "motif": "pill"}),
+            ("svg", {"beats": [{"action": "travel", "line": shot["line"], "label": "装药"}]},
+             {"beats": [{"action": "travel", "line": shot["line"], "label": "随身装药"}]}),
+            ("mg", {"assetId": asset["id"]}, {"assetId": asset["id"], "fit": "hold", "overlay": "off"}),
+        ):
+            with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, "相同的画面结构"):
+                item = {**self.item, "presentation": kind, "produceShot": {"shot": shot, "previousParams": old}}
+                client = Mock(return_value=model_response({"plans": [{"params": new, "reason": "重新呈现本幕。"}]}))
+                mix_plan.produce_shot(client, "deepseek-flash", item, self.library)
+
+    def test_produce_shot_rejects_same_or_invalid_parameters(self):
+        shot = self.script["shots"][1]
+        item = {**self.item, "presentation": "scene", "produceShot": {
+            "shot": shot, "previousParams": {"visual": "steps"},
+        }}
+        reason = "用流程解释本幕。"
+        for params, error in [({"visual": "steps"}, "相同"), ({"visual": []}, "无效"),
+                              ({"kind": "image"}, "无效"), ({}, "无效")]:
+            with self.subTest(params=params), self.assertRaisesRegex(ValueError, error):
+                client = Mock(return_value=model_response({"params": params, "reason": reason}))
+                mix_plan.produce_shot(client, "deepseek-flash", item, self.library)
+        item["produceShot"]["shot"] = {**shot, "line": ""}
+        client = Mock()
+        with self.assertRaises(ValueError):
+            mix_plan.produce_shot(client, "deepseek-flash", item, self.library)
+        client.assert_not_called()
+
+    def test_produce_asset_can_change_motion_and_rejects_unknown_ids(self):
+        shot = self.script["shots"][0]
+        current = "builtin:svg/11"
+        item = {**self.item, "presentation": "asset", "produceShot": {
+            "shot": shot, "previousParams": {"assetId": current, "move": "still"},
+        }}
+        reply = {"params": {"assetId": current, "move": "zoom"}, "reason": "推近以突出药盒标签。"}
+        client = Mock(return_value=model_response(reply))
+        content = mix_plan.produce_shot(client, "deepseek-flash", item, self.library)
+        self.assertEqual((current, "zoom"), (content["assetId"], content["move"]))
+        payload = json.loads(client.call_args.args[1]["messages"][1]["content"])
+        self.assertEqual(current, payload["candidateAssets"][0]["id"])
+        reply["params"]["assetId"] = "unlisted"
+        client.return_value = model_response(reply)
+        with self.assertRaisesRegex(ValueError, "保留原画面"):
+            mix_plan.produce_shot(client, "deepseek-flash", item, self.library)
+
+    def test_produce_mg_suggestion_retains_the_current_animation(self):
+        self.supports.append("mg")
+        asset = {"id": "builtin:lottie/box", "kind": "lottie", "name": "药盒", "tags": ["药盒"]}
+        self.library.items.return_value = [asset]
+        item = {**self.item, "presentation": "mg", "produceShot": {
+            "shot": self.script["shots"][1], "previousParams": {"assetId": asset["id"], "fit": "hold", "overlay": "title"},
+        }}
+        suggestion = "药盒从左侧滑入，移进敞开的随身包，合上包口后停留。"
+        client = Mock(return_value=model_response({"params": {}, "mgRequest": suggestion, "reason": "展示收纳动作。"}))
+        content = mix_plan.produce_shot(client, "deepseek-flash", item, self.library)
+        self.assertEqual((asset["id"], "hold", "title", suggestion),
+                         (content["assetId"], content["fit"], content["overlay"], content["mgRequest"]))
+
+    def test_fixed_mg_uses_shot_candidates_or_an_unassigned_draft_suggestion(self):
+        self.supports.append("mg")
+        self.item["presentation"] = "mg"
+        asset = {"id": "builtin:lottie/clock", "kind": "lottie", "name": "时间动画", "tags": ["时间"]}
+        self.library.items.return_value = [asset, {"id": "pending:clock", "kind": "pending", "name": "时间", "tags": []}]
+        suggestion = "药盒标签在画面中央停住，框出需要查看的区域。"
+        result, client = self.arrange([
+            {"index": 0, "params": {}, "mgRequest": suggestion, "reason": "突出标签。"},
+            {"index": 1, "params": {"assetId": asset["id"]}, "reason": "误选其他幕的动画。"},
+            {"index": 2, "params": {"assetId": asset["id"], "overlay": "title", "fit": "hold"}, "reason": "时钟突出记录时间。"},
+        ])
+        contents = [row["content"] for row in result["shots"]]
+        self.assertEqual(["mg"] * 3, [content["kind"] for content in contents])
+        self.assertEqual(suggestion, contents[0]["mgRequest"])
+        self.assertNotIn("assetId", contents[0])
+        self.assertNotIn("assetId", contents[1])
+        self.assertIn("请选择", contents[1]["adjusted"])
+        self.assertEqual((asset["id"], "title", "hold"), (contents[2]["assetId"], contents[2]["overlay"], contents[2]["fit"]))
+        payload = json.loads(client.call_args.args[1]["messages"][1]["content"])
+        self.assertEqual([[], [], [asset]], [shot["candidateAssets"] for shot in payload["shots"]])
+        self.assertEqual([row["line"] for row in self.script["shots"]], [row["line"] for row in result["shots"]])
+
     def test_fixed_modes_force_kind_and_only_svg_requests_second_pass(self):
         beats = [[{"action": "carton", "line": row["line"], "label": row["name"]}] for row in self.script["shots"]]
         for mode in ("image", "card", "scene", "svg"):

@@ -3892,12 +3892,12 @@ dialog p b {
 /* 信息图视频分镜 */
 .stage-layout-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 8px; }
 .stage-layout-grid .mode-card { width: 100%; }
-.stage-layout-mini { position: relative; display: block; width: 100%; aspect-ratio: 16 / 9; overflow: hidden;
+.stage-layout-mini { position: relative; display: block; width: 100%; aspect-ratio: 16 / 9; overflow: hidden; container-type: inline-size;
   border-radius: var(--radius-sm); background: var(--brand-50); }
 .stage-layout-mini .layout-region { position: absolute; overflow: hidden; border: 1px solid var(--brand-50);
-  display: grid; place-items: center; background: var(--brand-200); color: var(--brand-900); border-radius: 4px; font-size: 11px; }
-.stage-layout-mini .region-header, .stage-layout-mini .region-subtitle { background: var(--brand-100); }
-.stage-layout-mini .region-presenter { background: var(--brand-300); }
+  display: grid; place-items: center; background: var(--brand-200); color: var(--brand-800); border-radius: 4px;
+  font-size: min(11px, 4.5cqi); line-height: 1; }
+.stage-layout-mini .region-header, .stage-layout-mini .region-subtitle, .stage-layout-mini .region-presenter { background: var(--brand-100); }
 .stage-layout-manage { align-self: stretch; min-height: 88px; text-align: center; }
 .asset-layout-thumb { position: relative; aspect-ratio: 16 / 9; overflow: hidden; }
 .asset-layout-thumb > .stage-layout-mini { border-radius: 0; }
@@ -3915,8 +3915,15 @@ dialog p b {
 .stage-rail { display: flex; gap: 8px; margin-top: 14px; padding-bottom: 5px; overflow: auto; }
 .stage-rail > * { flex: none; }
 .stage-fields { display: grid; gap: 10px; padding: 14px; }
+.stage-edit-fields { min-width: 0; margin: 0; border: 0; }
+.vstudio-actions.stage-edit-fields { padding: 0; }
 .stage-fields > .field { min-width: 0; }
 .stage-fields .shot-options { min-width: 0; }
+#stage-production-job { margin-top: 10px; }
+.stage-mg-production { border: 1px solid var(--line); border-radius: var(--radius-md); padding: 12px; }
+.stage-mg-production .asset-form { padding: 0; }
+.stage-mg-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 6px; margin-bottom: 8px; }
+.stage-mg-head h3 { margin: 0; font-size: 15px; }
 .stage-rail .scene-choice-title { display: block; font-weight: 650; }
 .stage-rail .scene-choice-meta { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
 

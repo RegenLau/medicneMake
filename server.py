@@ -3187,6 +3187,11 @@ def write_draft(p, job, save, record=None):
     if item["type"] == "video":
         settings = p["settings"]
         if item.get("videoMode") == "stage":
+            if "produceShot" in item:
+                job["progress"] = "按所选方式制作本幕画面"
+                save()
+                job["output"] = {"content": mix_plan.produce_shot(tracked_deepseek("单幕画面制作"), model, item, ASSETS)}
+                return
             script = item.get("script") or job.get("stageScript")
             if script is None:
                 job["progress"] = "撰写视频脚本"
@@ -3198,7 +3203,7 @@ def write_draft(p, job, save, record=None):
                 save()
             job["progress"] = "编排各幕呈现方式"
             save()
-            label = "Mix 编排呈现" if item["presentation"] == "mix" else "SVG 道具编排"
+            label = {"mix": "Mix 编排呈现", "svg": "SVG 道具编排", "mg": "MG 动画编排"}.get(item["presentation"])
             job["output"] = mix_plan.arrange(tracked_deepseek(label), model, item, script, ASSETS)
             return
         if item.get("videoMode") == "code-motion":
@@ -3475,6 +3480,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "codeMotionReady": code_motion_ready(),
                     "templateMotionSwitch": True,
                     "stageRender": STAGE_RENDER,
+                    "stageShotProduction": True,
                     "stageLayouts": ASSETS.layout_items(),
                     "layoutVariants": asset_library.LAYOUT_VARIANTS,
                     "stageCatalog": ASSETS.stage_catalog(),

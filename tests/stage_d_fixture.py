@@ -10,6 +10,24 @@ def fixture_deepseek(path, body=None, **kwargs):
         return {"data": [{"id": "deepseek-flash"}]}
     assert path == "/chat/completions"
     payload = json.loads(body["messages"][1]["content"])
+    if "previousParams" in payload:
+        kind = payload["kind"]
+        previous = payload["previousParams"]
+        revision = payload["revision"]
+        if revision == "测试重复画面":
+            params = previous
+        elif kind == "svg":
+            params = {"beats": [{"action": "carton" if revision else "travel",
+                                 "line": payload["shot"]["line"][:55], "label": "核对药盒"}]}
+        elif kind == "scene":
+            return model_response({"plans": [
+                {"params": {**previous, "tone": "warm"}, "reason": "用暖色标记药盒。"},
+                {"params": {"visual": "mechanism", "motion": "reveal", "motif": "bottle"},
+                 "reason": "用药盒图配合文字展示收纳要点。"},
+            ]})
+        else:
+            params = {"motionStyle": "flow"}
+        return model_response({"plans": [{"params": params, "reason": "把本幕要点集中在画面中。"}]})
     if "targetIndices" not in payload:
         return model_response(script_fixture())
     choices = []

@@ -10,7 +10,8 @@ const screenshots = resolve(output);
 await mkdir(screenshots,{recursive:true});
 const browser = await chromium.launch({channel:"chrome",headless:true});
 const classic = "builtin:layout/info-classic";
-const corner = "builtin:layout/corner-presenter";
+const right = "builtin:layout/corner-presenter";
+const rightName = "右栏主讲";
 const kinds = ["image","card","scene","svg","asset"];
 const posted = [];
 const changes = [];
@@ -42,7 +43,7 @@ try {
   const openLibrary = async () => {
     await button("素材库").click();
     await button("布局").click();
-    await page.getByRole("heading",{name:"主图与角落主讲",exact:true}).waitFor();
+    await page.getByRole("heading",{name:rightName,exact:true}).waitFor();
   };
   const setup = async () => {
     await page.goto(origin);
@@ -106,19 +107,27 @@ try {
 
   await setup();
   const before = await getDefinition(classic);
-  const alt = await getDefinition(corner);
-  assert(alt.regions.media.x !== before.regions.media.x);
+  const alt = await getDefinition(right);
+  for (const key of ["media", "presenter"]) {
+    const region = before.regions[key];
+    assert.deepEqual(alt.regions[key], {...region, x:100 - region.x - region.w});
+  }
+  assert.deepEqual(alt.regions.header,before.regions.header);
+  assert.deepEqual(alt.regions.subtitle,before.regions.subtitle);
   await save("01-新建选择两个内置布局");
   const firstId = await seed();
   await ready();
-  for (const [id,label] of [[classic,"02-左栏"],[corner,"03-角落"]]) {
+  for (const [id,label] of [[classic,"02-左栏"],[right,"03-右栏"]]) {
     await globalSettings();
     await layout(id).click();
     await ready();
     for (const [i,kind] of kinds.entries()) {
       await selectShot(i);
-      const slot = page.frameLocator("#stage-preview").locator(".media-slot");
+      const preview = page.frameLocator("#stage-preview");
+      const slot = preview.locator(".media-slot");
       assert.equal(Math.round(parseFloat(await slot.evaluate(el => el.style.left))),id === classic ? 288 : 32);
+      const presenter = await preview.locator(".pt-left").evaluate(el => [el.offsetLeft,el.offsetTop,el.offsetWidth,el.offsetHeight]);
+      assert.deepEqual(presenter,[id === classic ? 32 : 1016,80,232,540]);
       assert(await slot.locator("*").count() > 0);
       await save(`${label}-${kind}`);
     }
@@ -128,31 +137,30 @@ try {
   }
   await globalSettings();
   await button("管理布局").click();
-  await dialog().getByRole("heading",{name:"主图与角落主讲",exact:true}).waitFor();
-  const cornerCard = dialog().getByRole("article").filter({has:page.getByRole("heading",{name:"主图与角落主讲",exact:true})});
-  await cornerCard.getByRole("button",{name:"预览布局",exact:true}).click();
+  const rightCard = dialog().getByRole("article").filter({has:page.getByRole("heading",{name:rightName,exact:true})});
+  await rightCard.getByRole("button",{name:"预览布局",exact:true}).click();
   await frame().locator(".pt-frame.theme-medical").waitFor();
   await dialog().getByLabel("主题").selectOption("warm");
   await dialog().getByLabel("制作方式").selectOption("svg");
   await frame().locator(".pt-frame.theme-warm .stage-svg-drawing svg").waitFor();
   await save("04-暖色与SVG预览");
   await dialog().getByRole("button",{name:"返回管理布局"}).click();
-  await cornerCard.getByRole("button",{name:"复制为我的布局",exact:true}).click();
-  await dialog().getByLabel("布局名称").fill("角落布局副本");
+  await rightCard.getByRole("button",{name:"复制为我的布局",exact:true}).click();
+  await dialog().getByLabel("布局名称").fill("右栏布局副本");
   const x = dialog().locator('[data-region="media"][data-coordinate="x"]');
   await x.fill("5");
   await frame().locator('.media-slot[style*="left:64.000000px"]').waitFor();
   await save("05-复制并实时修改布局");
   await dialog().getByRole("button",{name:"另存布局"}).click();
-  const personal = dialog().getByRole("article").filter({has:page.getByRole("heading",{name:"角落布局副本",exact:true})});
+  const personal = dialog().getByRole("article").filter({has:page.getByRole("heading",{name:"右栏布局副本",exact:true})});
   await personal.waitFor();
   const items = (await get("/api/library")).items;
-  const cloned = items.find(entry => entry.name === "角落布局副本");
+  const cloned = items.find(entry => entry.name === "右栏布局副本");
   assert(cloned?.id.startsWith("user:"));
-  assert.equal(cloned.originId,corner);
+  assert.equal(cloned.originId,right);
   assert.equal((await getDefinition(cloned.id)).regions.media.x,5);
   assert.deepEqual(await getDefinition(classic),before);
-  assert.deepEqual(await getDefinition(corner),alt);
+  assert.deepEqual(await getDefinition(right),alt);
   await dialog().getByRole("button",{name:"关闭弹窗"}).click();
 
   await setup();
@@ -230,7 +238,7 @@ try {
   const compareFrames = [1,2,3,4,5].map(i => {
     const pixels = prefix => execFileSync("ffmpeg",["-v","error","-i",join(screenshots,`${prefix}-成片-抽帧${i}.png`),
       "-vf","crop=1000:540:10:80","-frames:v","1","-pix_fmt","rgb24","-f","rawvideo","-"],{maxBuffer:2_000_000});
-    const a = pixels("02-左栏"), b = pixels("03-角落");
+    const a = pixels("02-左栏"), b = pixels("03-右栏");
     return a.reduce((sum,value,k) => sum + Math.abs(value-b[k]),0) / a.length;
   });
   assert(compareFrames.every(diff => diff > 5));

@@ -5,7 +5,7 @@
   "regions": {
     "header": {"x": 0, "y": 0, "w": 100, "h": 11.11111111111111, "component": "header", "variant": "pill-title+chapter-rail"},
     "media": {"x": 2.5, "y": 11.11111111111111, "w": 75, "h": 75, "component": "media"},
-    "presenter": {"x": 79.375, "y": 45, "w": 18.125, "h": 40, "component": "presenter", "variant": "column-card"},
+    "presenter": {"x": 79.375, "y": 11.11111111111111, "w": 18.125, "h": 75, "component": "presenter", "variant": "column-card"},
     "subtitle": {"x": 0, "y": 86.11111111111111, "w": 100, "h": 13.88888888888889, "component": "subtitle", "variant": "band"}
   },
   "supports": ["image", "card", "scene", "svg", "asset"],

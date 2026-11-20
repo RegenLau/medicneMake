@@ -7,9 +7,10 @@ const StageStudio = (() => {
   const layoutLoads = new Map();
   const selected = new WeakMap();
   const inspector = new WeakMap();
+  const mgPanels = new WeakMap();
   const pointVisual = () => config.stageCatalog.pointVisuals;
   const copy = value => structuredClone(value);
-  const fixedKinds = Object.keys(kinds).filter(kind => !["asset","mg"].includes(kind));
+  const fixedKinds = Object.keys(kinds).filter(kind => kind !== "asset");
   const draftModes = [["mix","Mix 模式（推荐）"], ...fixedKinds.map(kind => [kind,kinds[kind]])];
   let soundContext;
   const decodedSounds = new Map();
@@ -208,40 +209,68 @@ const StageStudio = (() => {
     return layoutControls(w) + modeControls(w);
   }
 
-  function submitDraft(w, replan) {
-    const mode = w.stagePlan.mode;
+  function submitDraft(w, draft = {}, stageDraft = "stage", shotIndex) {
+    if (w.job) return;
     const job = createJob(w, "write-draft", [], {...w.settings, ratio:"16:9", duration:videoReferenceSeconds(w), textModel:resolveTextModel(w.settings)});
-    job.stageDraft = replan ? "replan" : "stage";
-    job.payload.draft = {type:"video", videoMode:"stage", presentation:mode, layoutId:w.stagePlan.layout.id,
-      imageBudget:imageBudget(w), topic:w.topic.trim(), drug:w.drug, ...replan};
+    job.stageDraft = stageDraft;
+    if (shotIndex !== undefined) job.stageShotIndex = shotIndex;
+    job.payload.draft = {type:"video", videoMode:"stage", presentation:w.stagePlan.mode, layoutId:w.stagePlan.layout.id,
+      imageBudget:imageBudget(w), topic:w.topic.trim(), drug:w.drug, ...draft};
     w.job = job;
     return sendJob(w);
   }
 
   function requestDraft(w) {
     const mode = w.stagePlan.mode;
-    const count = ["mix","svg"].includes(mode) ? 2 : 1;
+    const count = ["mix","svg","mg"].includes(mode) ? 2 : 1;
     const detail = mode === "mix" ? "先写脚本，再为每幕编排呈现方式。" :
-      mode === "svg" ? "先写脚本，再为每幕选择 SVG 道具动作。" : "生成口播、要点和字幕节拍。";
+      mode === "svg" ? "先写脚本，再为每幕选择 SVG 道具动作。" :
+      mode === "mg" ? "先写脚本，再为每幕匹配 MG 素材或给出草稿建议。制作新素材时另行确认。" : "生成口播、要点和字幕节拍。";
     const image = mode === "mix" ? `AI 出图上限 ${imageBudget(w)} 张，${imageEstimate(w,imageBudget(w))}。配图另行确认。` : "";
     return authorize(w, count, "draft", () => submitDraft(w), count, {detail, image});
   }
 
+  function showShotIssue(w, index, message, focus) {
+    selected.set(w, index);
+    inspector.set(w, "scene");
+    render(true);
+    $(`.stage-rail [data-action="stage-select"][data-val="${index}"]`)?.scrollIntoView({block:"nearest",inline:"nearest"});
+    $(focus)?.focus();
+    notify(message, "warn");
+  }
+
+  function checkShotText(w, indices) {
+    for (const index of indices) {
+      const {name, line} = w.stagePlan.shots[index];
+      if (name.trim() && line.trim()) continue;
+      const missing = !name.trim() && !line.trim() ? "标题和口播" : name.trim() ? "口播" : "标题";
+      const label = name.trim() ? `第 ${index + 1} 幕「${name.trim()}」` : `第 ${index + 1} 幕`;
+      showShotIssue(w, index, `${label}缺少${missing}，请补齐。`,
+        `[data-stage-field="${name.trim() ? "line" : "name"}"]`);
+      return false;
+    }
+    return true;
+  }
+
+  function shotScript({name, line, seconds, chapterIndex, points, cues}) {
+    return {name, line, seconds, chapterIndex, points, cues};
+  }
+
   function replan(w, targetIndex) {
     if (w.job || !w.stagePlan.shots.length) return;
-    if (!config.deepseekKeyPresent) return openApiKeys("deepseek");
-    if (w.stagePlan.shots.some(shot => !shot.name.trim() || !shot.line.trim())) return notify("请填写每幕标题和口播。", "warn");
     const p = w.stagePlan;
+    const indices = targetIndex !== undefined && config.stageShotProduction ? [targetIndex] : p.shots.map((_, index) => index);
+    if (!checkShotText(w, indices)) return;
+    if (!config.deepseekKeyPresent) return openApiKeys("deepseek");
     let overwrite = false;
     retryPayload = () => submitDraft(w, {
       targetIndex,
       // The checkbox updates before the dialog closes so its value is available in the callback.
       overwriteUser: overwrite,
       script: {title:w.title, shortTitle:p.shortTitle, chapters:p.chapters, shots:p.shots.map(shot => ({
-        name:shot.name, line:shot.line, seconds:shot.seconds, chapterIndex:shot.chapterIndex,
-        points:shot.points, cues:shot.cues, content:{kind:shot.content.kind, decidedBy:shot.content.decidedBy},
+        ...shotScript(shot), content:{kind:shot.content.kind, decidedBy:shot.content.decidedBy},
       }))},
-    });
+    }, "replan");
     openModal(targetIndex === undefined ? "重新编排全片" : "本幕重新判断",
       "<p>使用 DeepSeek 提交 1 次编排请求，按 Token 计费。保留已写好的脚本和各方式的素材。</p>" +
       (targetIndex === undefined ? '<label class="stage-overwrite"><input type="checkbox" id="stage-overwrite-user"> 同时重排我改过的幕</label>' : '') +
@@ -250,9 +279,29 @@ const StageStudio = (() => {
     $("#stage-overwrite-user")?.addEventListener("change", event => { overwrite = event.currentTarget.checked; });
   }
 
+  function produceShot(w, shot, index) {
+    if (!config.stageShotProduction || w.job || !checkShotText(w, [index])) return;
+    if (!config.deepseekKeyPresent) return openApiKeys("deepseek");
+    const kind = shot.content.kind;
+    if (kind === "image") return;
+    const options = config.stageCatalog.presenters[kind].options;
+    const previousParams = Object.fromEntries(Object.keys(options).filter(key => shot.content[key] !== undefined)
+      .map(key => [key, shot.content[key]]));
+    const title = productionTitle(shot.content);
+    retryPayload = () => submitDraft(w, {
+      presentation:kind, produceShot:{shot:shotScript(shot), previousParams, revision:$("#stage-production-revision").value.trim()},
+    }, "produce", index);
+    openModal(title, `<p>用 DeepSeek 按第 ${index + 1} 幕的口播和要点，用「${kinds[kind]}」设计新画面。保留口播、要点和其他幕。</p>
+      <label class="field">画面要求（选填）<textarea id="stage-production-revision" maxlength="200" rows="3" placeholder="想先展示哪个要点，或想演示哪个动作？"></textarea></label>
+      <p class="small">提交 1 次文本请求，按 Token 计费。</p>
+      <div class="actions dialog-actions">${btn("取消","close","secondary")}${btn("确认提交并计费","confirm-paid","primary")}</div>`, "confirm");
+  }
+
   function usePlan(shot, content) {
-    const saved = shot.variants[content.kind] || {};
-    const media = Object.fromEntries(["image","outroImage","focusRegions","libraryArtId","libraryArtName"]
+    const saved = shot.content.kind === content.kind ? shot.content : shot.variants[content.kind] || {};
+    const fields = ["image","outroImage","focusRegions","libraryArtId","libraryArtName"];
+    if (content.kind === "mg" && content.mgRequest && !content.assetId) fields.push("assetId","assetName","fit","overlay");
+    const media = Object.fromEntries(fields
       .filter(field => saved[field] !== undefined).map(field => [field,saved[field]]));
     shot.variants[shot.content.kind] = shot.content;
     const transition = content.transition ?? shot.content.transition;
@@ -261,7 +310,19 @@ const StageStudio = (() => {
     delete shot.presentationStale;
   }
 
-  function installDraft(w, mode, output) {
+  function installDraft(w, mode, output, job) {
+    if (mode === "produce") {
+      const index = job.stageShotIndex;
+      const shot = w.stagePlan.shots[index];
+      const expected = job.payload.draft.produceShot.shot;
+      if (shot?.content.kind === output.content.kind && shot.name === expected.name && shot.line === expected.line) {
+        usePlan(shot, output.content);
+        touch(w, true);
+        if (current() === w) notify(output.content.mgRequest ? `第 ${index + 1} 幕已准备 MG 草稿建议` : `第 ${index + 1} 幕画面已制作`, "ok");
+      }
+      selected.set(w, index);
+      return;
+    }
     if (output.notice) notify(output.notice, "warn");
     if (mode === "replan") {
       for (const index of output.plannedIndices) usePlan(w.stagePlan.shots[index], output.shots[index].content);
@@ -338,18 +399,13 @@ const StageStudio = (() => {
   function contentFields(shot) {
     const c = shot.content;
     const pair = list => list.map(({id,name}) => [id,name]);
-    if (c.kind === "image") return '<div class="asset-inline">' +
-      btn(c.image ? "从素材库换图" : "从素材库选图", "stage-choose", "outline", "image") +
-      btn(c.image ? "重新生成本幕图" : "生成本幕配图", "stage-images", "outline", "one") +
+    if (c.kind === "image") return (c.image ? '<div class="asset-inline">' +
       (c.image?.startsWith("/media/") ? btn("收入素材库", "stage-collect", "textbtn") : "") +
-      (c.image ? btn("移除配图", "stage-clear", "textbtn", "image") : '<span class="small">待生成配图</span>') + '</div>' +
+      btn("移除配图", "stage-clear", "textbtn", "image") + '</div>' : "") +
       text("配图描述", "imagePrompt", c.imagePrompt, 400);
-    if (c.kind === "asset") return '<div class="asset-inline">' + btn(esc(c.assetName || "选择图片或 SVG"), "stage-choose", "outline", "asset") +
-      (c.assetId ? btn("移除素材", "stage-clear", "textbtn", "asset") : "") + '</div>' +
+    if (c.kind === "asset") return (c.assetId ? '<div class="asset-inline">' + btn("移除素材", "stage-clear", "textbtn", "asset") + '</div>' : "") +
       select("素材运动", "move", [["still", "静止"], ["zoom", "缓慢推近"], ["pan", "平移"]], c.move);
-    if (c.kind === "mg") return '<div class="asset-inline">' +
-      btn(esc(c.assetName || "选择 MG 动画"),"stage-choose","outline","mg") +
-      (c.assetId ? btn("移除动画","stage-clear","textbtn","mg") : "") + '</div>' +
+    if (c.kind === "mg") return (c.assetId ? '<div class="asset-inline">' + btn("移除动画","stage-clear","textbtn","mg") + '</div>' : "") +
       select("文字叠加", "overlay", [["points","标题和要点"],["title","只显示标题"],["off","关闭"]], c.overlay || "points") +
       select("时长适配", "fit", [["auto","自动适配"],["hold","原速并定格"]], c.fit || "auto");
     if (c.kind === "card") return select("动效方式", "motionStyle", window.CODE_MOTION_MOTION_CHOICES, c.motionStyle);
@@ -363,6 +419,43 @@ const StageStudio = (() => {
       text("画面标签", "beat-label:" + index, beat.label, 10) + text("对应口播片段", "beat-line:" + index, beat.line, 55) +
       (c.beats.length > 1 ? btn("移除动作", "stage-beat-remove", "textbtn", index) : "") + '</fieldset>').join("") +
       (c.beats.length < 3 ? btn("添加动作", "stage-beat-add", "outline") : "");
+  }
+
+  const productionTitle = content => content.reason || content.assetId ? "重新制作本幕" : "制作本幕";
+
+  function hasProductionJob(w) {
+    return isActive(w) && Boolean(w.job?.stageImageSlots || w.job?.stageDraft === "produce");
+  }
+
+  function updateProductionJob(w) {
+    const area = $("#stage-production-job");
+    if (!area || !hasProductionJob(w)) return;
+    const job = w.job;
+    const subject = job.stageShotIndex === undefined ? "缺失配图" : `第 ${job.stageShotIndex + 1} 幕${job.stageImageSlots ? "配图" : "画面"}`;
+    area.hidden = false;
+    area.innerHTML = job.error
+      ? `<div class="banner err" role="alert">${subject}未制作完成。${esc(job.error)}<div class="banner-actions">` +
+        btn("继续此任务", "retry", "secondary") + btn("关闭提示", "abort-job", "textbtn") + '</div></div>'
+      : `<div class="inline-progress" role="status"><span class="spinner" aria-hidden="true"></span><span id="progress">${esc(job.progress || `正在制作${subject}…`)}</span></div>`;
+    app.querySelectorAll('[data-stage-production-lock], .stage-rail button').forEach(control => { control.disabled = true; });
+  }
+
+  function productionButtons(content) {
+    const {kind} = content;
+    let actions = "";
+    if (kind === "image") {
+      actions = btn(content.image ? "重新生成本幕图" : "生成本幕配图", "stage-images", "primary", "one") +
+        btn(content.image ? "从素材库换图" : "从素材库选图", "stage-choose", "outline", "image");
+    } else if (kind === "asset") {
+      actions = btn(esc(content.assetName || "选择图片或 SVG"), "stage-choose", "primary", "asset");
+    } else if (kind === "mg") {
+      actions = btn(esc(content.assetName || "选择 MG 动画"), "stage-choose", "primary", "mg") +
+        (config.mgGeneration ? btn(content.assetId ? "重新制作 MG 草稿" : "制作 MG 草稿", "stage-create-mg", "outline") : "");
+    }
+    if (kind !== "image" && config.stageShotProduction) {
+      actions += btn(productionTitle(content), "stage-produce", actions ? "outline" : "primary");
+    }
+    return actions ? '<div class="asset-inline">' + actions + '</div>' : "";
   }
 
   function soundControls(w) {
@@ -391,7 +484,7 @@ const StageStudio = (() => {
 
   function editor(w) {
     const shots = w.stagePlan.shots;
-    const index = Math.min(selected.get(w) || 0, shots.length - 1);
+    const index = Math.min(selected.get(w) ?? w.job?.stageShotIndex ?? 0, shots.length - 1);
     const shot = shots[index];
     if (!shot) return setup(w);
     selected.set(w, index);
@@ -407,14 +500,16 @@ const StageStudio = (() => {
       TemplateStudio.templateSetupHtml(w,data,esc,btn), renderMusicStudioCard(w, {showModeChips:true}), soundControls(w),
       select("全片字体", "font", [["", "默认"], ["builtin:font/noto-sans-sc", "Noto Sans SC"]], w.settings.fontId)].join("");
     const items = shot.points.items.map(item => [item.title,item.detail,item.tag].filter(Boolean).join("｜")).join("\n");
-    const decision = isMix ? '<div class="stage-decision">' +
+    const decision = isMix || shot.content.reason || shot.content.adjusted || shot.content.mgRequest ? '<div class="stage-decision">' +
       (shot.content.reason ? `<p>${esc(shot.content.reason)}</p>` : "") +
       (shot.content.adjusted ? `<p class="small stage-adjusted">${esc(shot.content.adjusted)}</p>` : "") +
-      '<p class="small" id="stage-stale"' + (shot.presentationStale ? "" : " hidden") + '>内容已改，可重新判断呈现方式</p>' +
-      btn("本幕重新判断", "stage-replan", "outline", "one") +
-      (shot.content.mgRequest && config.mgGeneration && (!support || support.includes("mg")) ? `<p class="small">${esc(shot.content.mgRequest)}</p>` +
+      (shot.content.kind === "mg" && shot.content.mgRequest ? `<p class="small">MG 草稿建议：${esc(shot.content.mgRequest)}</p>` : "") +
+      '<p class="small" id="stage-stale"' + (shot.presentationStale ? "" : " hidden") + '>口播或要点已更新，可重做画面。</p>' +
+      (isMix ? btn("本幕重新判断", "stage-replan", "outline", "one") : "") +
+      (isMix && shot.content.kind !== "mg" && shot.content.mgRequest && config.mgGeneration && (!support || support.includes("mg")) ? `<p class="small">${esc(shot.content.mgRequest)}</p>` +
         btn("可以用 AI 制作 MG 素材","stage-create-mg","outline") : "") + '</div>' : "";
-    const scene = '<span class="label">本幕制作方式</span><div class="chips">' + kindButtons + '</div>' + decision +
+    const scene = '<span class="label">本幕制作方式</span><div class="chips">' + kindButtons + '</div>' + productionButtons(shot.content) + decision +
+      '<div id="stage-mg-panel" hidden></div>' +
       (index ? select("幕间转场", "transition", Object.entries(config.stageCatalog.transitions || {fade:"淡入"}), shot.content.transition || "fade") : "") +
       text("本幕标题", "name", shot.name) + `<label class="field">本幕口播<textarea data-stage-field="line" maxlength="450" rows="3">${esc(shot.line)}</textarea></label>` +
       '<div class="tpl-two-col">' + text("预览时长（秒）", "seconds", shot.seconds, 4) +
@@ -437,9 +532,10 @@ const StageStudio = (() => {
     const strip = shots.map((s,i) => `<button type="button" class="scene-choice" data-action="stage-select" data-val="${i}" aria-pressed="${i === index}"${isMix && s.content.reason ? ` title="${esc(s.content.reason)}"` : ""}>
       <span class="scene-choice-title">${i + 1} ${esc(s.name)}</span><span class="scene-choice-meta"><span class="stage-kind-badge">${kinds[s.content.kind]}</span>${s.seconds} 秒${isMix && s.content.adjusted ? ' · 已调整' : ''}</span></button>`).join("");
     shell(w, "编辑视频分镜", 1, `<div class="vstudio"><div class="sheet vstudio-bar"><div class="vstudio-summary">
-      <span class="vstudio-metric">共 ${shots.length} 幕 · ${Math.round(shots.reduce((n,s)=>n+s.seconds,0))} 秒</span></div><div class="vstudio-actions">${actions}</div></div>
+      <span class="vstudio-metric">共 ${shots.length} 幕 · ${Math.round(shots.reduce((n,s)=>n+s.seconds,0))} 秒</span></div><fieldset class="vstudio-actions stage-edit-fields" data-stage-production-lock>${actions}</fieldset></div>
       <div class="vstudio-grid"><section class="sheet vstudio-stage-card"><div class="vstudio-stage-head"><strong>${esc(shot.name)}</strong>
       <span id="stage-preview-state" role="status">载入预览…</span></div><iframe id="stage-preview" src="/stage.html" title="分镜预览"></iframe>
+      <div id="stage-production-job" hidden></div>
       <div class="asset-inline"><button type="button" class="outline" id="stage-play" disabled>播放本幕</button>
       ${shot.content.kind === "svg" && w.settings.voice !== "无配音" ? btn("试听本幕口播","stage-speech","outline") : ""}
       ${soundSettings(w).pack !== "off" || shot.sfxId ? btn("试听音效","stage-audition","outline") : ""}
@@ -447,8 +543,15 @@ const StageStudio = (() => {
       <div class="stage-rail">${strip}${btn("添加一幕", "stage-add", "outline", "", shots.length >= 12 ? "disabled" : "")}</div></section>
       <aside class="sheet"><div class="vstudio-tabs" role="tablist" aria-label="分镜设置">${["scene","global"].map(id =>
         btn(id === "scene" ? "本幕内容" : "全片设置", "stage-inspector", "vstudio-tab", id, `role="tab" aria-selected="${id===tabs}"`)).join("")}</div>
-      <div class="stage-fields" role="tabpanel">${tabs === "scene" ? scene : settings}</div></aside></div></div>`);
+      <div role="tabpanel"><fieldset class="stage-fields stage-edit-fields" data-stage-production-lock>${tabs === "scene" ? scene : settings}</fieldset></div></aside></div></div>`);
     bindPreview(w, index);
+    updateProductionJob(w);
+    const panel = mgPanels.get(shot);
+    const host = $("#stage-mg-panel");
+    if (host && panel) {
+      host.append(panel);
+      host.hidden = false;
+    }
   }
 
   function bindPreview(w, index) {
@@ -647,6 +750,7 @@ const StageStudio = (() => {
     const p = w.stagePlan;
     const indices = mode === "one" ? [selected.get(w) || 0] : p.shots.flatMap((shot,i) => shot.content.kind === "image" && !shot.content.image ? [i] : []);
     if (!indices.length || w.job || indices.some(i => p.shots[i].content.kind !== "image")) return;
+    if (!checkShotText(w, indices)) return;
     if (p.mode === "mix" && countImages(w) > imageBudget(w)) return notify("请先调整 AI 出图上限。", "warn");
     return authorize(w, indices.length, "images", () => {
       const data = deck(w);
@@ -655,6 +759,7 @@ const StageStudio = (() => {
       delete job.payload.storyboard;
       Object.assign(job.payload, {template:true, styleReference:false});
       job.stageImageSlots = indices;
+      if (mode === "one") job.stageShotIndex = indices[0];
       w.job = job;
       return sendJob(w);
     });
@@ -701,9 +806,15 @@ const StageStudio = (() => {
     if (w.job) return;
     if (!config.codeMotionReady) return notify("合成需要 Node.js、Playwright、Chrome 和 FFmpeg。", "warn");
     const p = w.stagePlan;
-    if (p.shots.some(shot => !shot.name.trim() || !shot.line.trim())) return notify("请填写每幕标题和口播", "warn");
-    if (p.shots.some(shot => shot.content.kind === "image" && !shot.content.image)) return notify("请补齐 AI 完整图，或切换本幕方式。", "warn");
-    if (p.shots.some(shot => ["asset","mg"].includes(shot.content.kind) && !shot.content.assetId)) return notify("请选择每一幕的素材。", "warn");
+    if (!checkShotText(w, p.shots.map((_, index) => index))) return;
+    const missing = p.shots.findIndex(({content}) => content.kind === "image" ? !content.image
+      : ["asset","mg"].includes(content.kind) && !content.assetId);
+    if (missing !== -1) {
+      const {name, content:{kind}} = p.shots[missing];
+      const label = `第 ${missing + 1} 幕「${name.trim()}」`;
+      return showShotIssue(w, missing, `${label}缺少${kind === "image" ? "配图" : "素材"}，请补齐或切换制作方式。`,
+        kind === "image" ? '[data-action="stage-images"][data-val="one"]' : `[data-action="stage-choose"][data-val="${kind}"]`);
+    }
     const appearance = deck(w);
     const avatarMode = w.videoMode === "svg" ? "static"
       : w.videoMode === "code-motion" ? codeMotionAvatarMode(w) : resolveAvatarMode(w.settings.avatarMode);
@@ -765,12 +876,33 @@ const StageStudio = (() => {
     } else if (action === "stage-inspector") inspector.set(w, value);
     else if (action === "stage-select") { selected.set(w, Number(value)); inspector.set(w, "scene"); }
     else if (action === "stage-replan" && p.mode === "mix") { replan(w, value === "one" ? index : undefined); return true; }
-    else if (action === "stage-create-mg" && shot?.content.mgRequest) {
-      StudioAssets.generateMG({description:shot.content.mgRequest,workId:w.id,theme:w.templateTheme || "medical",
+    else if (action === "stage-produce" && shot) { produceShot(w, shot, index); return true; }
+    else if (action === "stage-create-mg" && shot && (shot.content.kind === "mg" || shot.content.mgRequest)) {
+      if (!config.deepseekKeyPresent) { openApiKeys("deepseek"); return true; }
+      const existing = mgPanels.get(shot);
+      if (existing) { existing.querySelector("textarea, video")?.focus(); return true; }
+      const host = $("#stage-mg-panel");
+      if (!host) return true;
+      const panel = document.createElement("section");
+      panel.className = "stage-mg-production";
+      mgPanels.set(shot, panel);
+      host.append(panel);
+      host.hidden = false;
+      const content = shot.content;
+      const description = content.mgRequest || (shot.line.trim()
+        ? `根据这段口播制作无字动画，按口播顺序展示动作：${shot.line.trim().slice(0,160)}` : "");
+      StudioAssets.generateMG({description,workId:w.id,theme:w.templateTheme || "medical",panel,
+        onClose:() => {
+          mgPanels.delete(shot);
+          if (panel.parentElement) panel.parentElement.hidden = true;
+          panel.replaceChildren();
+          panel.remove();
+        },
         onAdopt:item => {
-          if (w.stagePlan.shots[index] !== shot) return;
+          if (!w.stagePlan.shots.includes(shot) || shot.content !== content) return;
           selectKind(w,shot,"mg");
           Object.assign(shot.content,{assetId:item.id,assetName:item.name,decidedBy:"user"});
+          delete shot.content.adjusted;
           delete shot.presentationStale;
           touch(w,true);
           if (current() === w) render(true);
@@ -783,7 +915,7 @@ const StageStudio = (() => {
         return true;
       }
       selectKind(w, shot, value);
-      delete shot.content.reason;
+      if (shot.content.decidedBy !== "user") delete shot.content.reason;
       delete shot.content.adjusted;
       shot.content.decidedBy = "user";
       delete shot.presentationStale;
@@ -803,7 +935,11 @@ const StageStudio = (() => {
       const content = shot.content;
       StudioAssets.pick(value === "sfx" ? ["sfx"] : value === "image" ? ["image"] : value === "mg" ? ["lottie","mg"] : ["image", "svg"], item => {
         if (value === "image") content.image = item.url;
-        else if (value === "asset" || value === "mg") { content.assetId=item.id; content.assetName=item.name; }
+        else if (value === "asset" || value === "mg") {
+          content.assetId=item.id;
+          content.assetName=item.name;
+          delete content.adjusted;
+        }
         else if (value === "sfx") { shot.sfxId=item.id; shot.sfxName=item.name; }
         else { content.libraryArtId=item.id; content.libraryArtName=item.name; }
         shot.variants[content.kind] = content;
@@ -829,5 +965,5 @@ const StageStudio = (() => {
     return true;
   }
 
-  return {applies,isActive,normalizeWork,initWork,setupControls,samplePlan,requestDraft,installDraft,installImages,installSpeech,editor,handleInput,handleAction};
+  return {applies,isActive,normalizeWork,initWork,setupControls,samplePlan,requestDraft,installDraft,installImages,installSpeech,editor,hasProductionJob,updateProductionJob,handleInput,handleAction};
 })();
