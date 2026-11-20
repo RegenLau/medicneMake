@@ -674,30 +674,72 @@
 
 .cm-steps-track {
   position: relative;
+  display: grid;
   height: 46px;
   width: 100%;
   flex: none;
 }
 
-.cm-steps-track svg {
+.cm-steps-track.count-2,
+.cm-steps-cards.count-2 { --st-n: 2; --st-gap: 22px; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--st-gap); }
+.cm-steps-track.count-3,
+.cm-steps-cards.count-3 { --st-n: 3; --st-gap: 14px; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--st-gap); }
+.cm-steps-track.count-4,
+.cm-steps-cards.count-4 { --st-n: 4; --st-gap: 11px; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--st-gap); }
+
+.cm-st-rail {
   position: absolute;
-  inset: 0;
+  --st-inset: calc((100% - (var(--st-n) - 1) * var(--st-gap)) / (2 * var(--st-n)));
+  left: var(--st-inset);
+  right: var(--st-inset);
+  top: 50%;
+  height: 5px;
+  transform: translateY(-50%);
+  border-radius: 99px;
+  overflow: hidden;
+  z-index: 1;
+}
+
+.cm-st-rail svg {
   width: 100%;
   height: 100%;
   display: block;
 }
 
+.cm-st-cell {
+  position: relative;
+  height: 100%;
+}
+
+.cm-st-node {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 28px;
+  height: 28px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--v-card-bg);
+  border: 4px solid var(--cm-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+}
+
+.cm-st-node-fill {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--cm-accent);
+}
+
 .cm-steps-cards {
   display: grid;
-  gap: 14px;
   max-height: 264px;
   min-height: 212px;
   align-items: stretch;
 }
-
-.cm-steps-cards.count-2 { grid-template-columns: 1fr 1fr; gap: 22px; }
-.cm-steps-cards.count-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.cm-steps-cards.count-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 11px; }
 
 .cm-step-card {
   padding: 18px 18px 16px;
@@ -1273,3 +1315,305 @@
   background: var(--v-rail-bg);
   color: var(--v-ink);
 }
+
+/* ---- Content-size adaptation for non-classic layout media slots ---- */
+
+/* Shallow slots (h <= 420, e.g. qa-chat 1120x388) */
+.pt-slot-shallow .cm-scene { padding: 12px 24px; gap: 8px; }
+.pt-slot-shallow .cm-header { min-height: 32px; gap: 10px; }
+.pt-slot-shallow .cm-heading { font-size: 24px; }
+.pt-slot-shallow .cm-inline-motif { width: 36px; height: 36px; border-radius: 10px; }
+.pt-slot-shallow .cm-inline-motif svg { width: 28px; height: 28px; }
+.pt-slot-shallow .cm-takeaway { padding: 7px 14px; font-size: 15.5px; border-radius: 10px; }
+
+.pt-slot-shallow .cm-hook-wrap { gap: 20px; padding: 0; }
+.pt-slot-shallow .cm-hook-motif-box { width: 176px; height: 176px; border-radius: 18px; }
+.pt-slot-shallow .cm-hook-motif-box svg { width: 154px; height: 154px; }
+.pt-slot-shallow .cm-hook-copy { gap: 10px; }
+.pt-slot-shallow .cm-hook-question { font-size: 27px; }
+.pt-slot-shallow .cm-hook-answer { padding: 11px 16px; font-size: 18px; border-radius: 12px; }
+.pt-slot-shallow .cm-hook-pill { padding: 6px 12px; font-size: 14px; border-radius: 10px; }
+
+.pt-slot-shallow .cm-mech-split { grid-template-columns: 168px 40px 1fr; }
+.pt-slot-shallow .cm-mech-motif { height: 192px; border-radius: 16px; }
+.pt-slot-shallow .cm-mech-motif svg { width: 150px; height: 150px; }
+.pt-slot-shallow .cm-mech-links { width: 40px; height: 192px; }
+.pt-slot-shallow .cm-mech-stack { gap: 8px; }
+.pt-slot-shallow .cm-mech-grid { gap: 9px; }
+.pt-slot-shallow .cm-mech-card { padding: 9px 14px; gap: 3px; border-radius: 13px; }
+.pt-slot-shallow .cm-mech-index { width: 24px; height: 24px; font-size: 13px; border-radius: 7px; }
+.pt-slot-shallow .cm-mech-card h3 { font-size: 17px; }
+.pt-slot-shallow .cm-mech-card p { font-size: 13.5px; line-height: 1.32; padding-left: 34px; }
+.pt-slot-shallow .cm-mech-grid.count-3 .cm-mech-card p { padding-left: 0; }
+
+.pt-slot-shallow .cm-compare-wrap { max-height: none; gap: 16px; }
+.pt-slot-shallow .cm-compare-col { min-height: 0; padding: 12px 16px; gap: 8px; border-radius: 14px; }
+.pt-slot-shallow .cm-compare-chip { font-size: 16px; padding: 4px 12px; }
+.pt-slot-shallow .cm-compare-list { gap: 5px; }
+.pt-slot-shallow .cm-compare-list li { font-size: 14.5px; line-height: 1.34; gap: 7px; }
+.pt-slot-shallow .cm-compare-single { font-size: 15px; line-height: 1.38; margin-top: 2px; }
+
+.pt-slot-shallow .cm-steps-wrap { gap: 6px; }
+.pt-slot-shallow .cm-steps-track { height: 28px; }
+.pt-slot-shallow .cm-st-node { width: 20px; height: 20px; border-width: 3px; }
+.pt-slot-shallow .cm-st-node-fill { width: 8px; height: 8px; }
+.pt-slot-shallow .cm-steps-cards { min-height: 0; max-height: none; }
+.pt-slot-shallow .cm-step-card { padding: 10px 13px; gap: 5px; border-radius: 13px; }
+.pt-slot-shallow .cm-step-num { font-size: 12px; padding: 2px 9px; }
+.pt-slot-shallow .cm-step-card h3 { font-size: 16.5px; }
+.pt-slot-shallow .cm-step-card p { font-size: 13.5px; line-height: 1.32; }
+.pt-slot-shallow .cm-step-tag { padding: 4px 8px; font-size: 12px; }
+
+.pt-slot-shallow .cm-timeline-wrap { gap: 4px; }
+.pt-slot-shallow .cm-timeline-axis { height: 32px; }
+.pt-slot-shallow .cm-tl-cell { height: 32px; }
+.pt-slot-shallow .cm-tl-track { top: 11.5px; }
+.pt-slot-shallow .cm-tl-node { top: 14px; width: 18px; height: 18px; border-width: 3px; }
+.pt-slot-shallow .cm-tl-node-fill { width: 7px; height: 7px; }
+.pt-slot-shallow .cm-tl-drop { top: 18px; height: 14px; }
+.pt-slot-shallow .cm-time-pill { padding: 4px 12px; font-size: 13.5px; }
+.pt-slot-shallow .cm-time-card { min-height: 0; padding: 10px 13px; gap: 4px; border-radius: 13px; }
+.pt-slot-shallow .cm-time-card h3 { font-size: 16.5px; }
+.pt-slot-shallow .cm-time-card p { font-size: 13.5px; line-height: 1.32; }
+
+.pt-slot-shallow .cm-check-layout { gap: 18px; }
+.pt-slot-shallow .cm-check-motif { width: 156px; height: 188px; border-radius: 16px; }
+.pt-slot-shallow .cm-check-motif svg { width: 136px; height: 136px; }
+.pt-slot-shallow .cm-check-head { padding: 7px 14px; font-size: 15.5px; }
+.pt-slot-shallow .cm-check-row { padding: 7px 14px; gap: 10px; }
+.pt-slot-shallow .cm-check-box { width: 24px; height: 24px; }
+.pt-slot-shallow .cm-check-text strong { font-size: 16.5px; }
+.pt-slot-shallow .cm-check-text span { font-size: 13px; line-height: 1.28; }
+
+.pt-slot-shallow .cm-warn-grid { gap: 10px; }
+.pt-slot-shallow .cm-warn-grid.count-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.pt-slot-shallow .cm-warn-card { padding: 10px 14px; gap: 10px; border-radius: 13px; }
+.pt-slot-shallow .cm-warn-icon { width: 36px; height: 36px; border-radius: 10px; }
+.pt-slot-shallow .cm-warn-card h3 { font-size: 16.5px; }
+.pt-slot-shallow .cm-warn-card p { font-size: 13.5px; line-height: 1.32; margin-top: 2px; }
+
+.pt-slot-shallow .cm-summary-split { gap: 18px; }
+.pt-slot-shallow .cm-summary-side { width: 156px; height: 188px; border-radius: 16px; }
+.pt-slot-shallow .cm-summary-side svg { width: 136px; height: 136px; }
+.pt-slot-shallow .cm-summary-emblem { width: 168px; height: 168px; }
+.pt-slot-shallow .cm-summary-emblem svg { width: 154px; height: 154px; }
+.pt-slot-shallow .cm-summary-list { gap: 6px; }
+.pt-slot-shallow .cm-summary-row { padding: 8px 14px; gap: 10px; border-radius: 12px; }
+.pt-slot-shallow .cm-summary-num { width: 28px; height: 28px; font-size: 14px; border-radius: 8px; }
+.pt-slot-shallow .cm-summary-copy strong { font-size: 16.5px; }
+.pt-slot-shallow .cm-summary-copy span { font-size: 13px; line-height: 1.28; }
+
+.pt-slot-shallow .cm-scene.cm-art-scene { padding: 14px 20px; gap: 20px; }
+.pt-slot-shallow .cm-art-panel { flex: 0 0 36%; border-radius: 18px; }
+.pt-slot-shallow .cm-art-copy { gap: 8px; }
+.pt-slot-shallow .cm-heading.cm-art-heading { font-size: 24px; }
+.pt-slot-shallow .cm-art-answer { padding: 9px 14px; font-size: 18px; }
+.pt-slot-shallow .cm-art-list { gap: 6px; }
+.pt-slot-shallow .cm-art-list.count-4 { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.pt-slot-shallow .cm-art-item { padding: 8px 12px; gap: 10px; border-radius: 12px; }
+.pt-slot-shallow .cm-art-marker { width: 28px; height: 28px; font-size: 14px; }
+.pt-slot-shallow .cm-art-text strong { font-size: 16.5px; }
+.pt-slot-shallow .cm-art-text span { font-size: 13px; line-height: 1.28; }
+.pt-slot-shallow .cm-takeaway.cm-art-takeaway { font-size: 14.5px; padding: 7px 12px; }
+
+.pt-slot-shallow .stage-media-title { top: 4%; font-size: 29px; }
+.pt-slot-shallow .stage-mg-overlay { inset: 4% 4% auto; }
+.pt-slot-shallow .stage-mg-overlay h2 { font-size: 26px; padding: 4px 10px; }
+.pt-slot-shallow .stage-mg-overlay ul { margin-top: 6px; gap: 6px; }
+.pt-slot-shallow .stage-mg-overlay li { font-size: 16px; padding: 4px 9px; }
+
+/* Ultra-wide non-shallow slots (aspect >= 2.2, h > 420, e.g. broadcast 1280x504) */
+.pt-slot-ultrawide:not(.pt-slot-shallow) .cm-scene { padding: 20px 32px 18px; gap: 12px; }
+.pt-slot-ultrawide:not(.pt-slot-shallow) .cm-warn-grid.count-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.pt-slot-ultrawide:not(.pt-slot-shallow) .cm-scene.cm-art-scene { padding: 20px 28px; gap: 26px; }
+.pt-slot-ultrawide:not(.pt-slot-shallow) .cm-art-panel { flex: 0 0 38%; }
+.pt-slot-ultrawide:not(.pt-slot-shallow) .stage-media-title { top: 6%; font-size: 36px; }
+.pt-slot-ultrawide:not(.pt-slot-shallow) .stage-mg-overlay h2 { font-size: 36px; }
+.pt-slot-ultrawide:not(.pt-slot-shallow) .stage-mg-overlay li { font-size: 20px; }
+
+/* Compact slots (720 < w <= 860 or 420 < h <= 480, e.g. takeaway 820x460) */
+.pt-slot-compact .cm-scene { padding: 16px 22px 14px; gap: 10px; }
+.pt-slot-compact .cm-header { min-height: 36px; gap: 10px; }
+.pt-slot-compact .cm-heading { font-size: 25px; }
+.pt-slot-compact .cm-inline-motif { width: 40px; height: 40px; }
+.pt-slot-compact .cm-inline-motif svg { width: 32px; height: 32px; }
+.pt-slot-compact .cm-takeaway { padding: 9px 14px; font-size: 16.5px; }
+
+.pt-slot-compact .cm-hook-motif-box { width: 196px; height: 196px; }
+.pt-slot-compact .cm-hook-motif-box svg { width: 174px; height: 174px; }
+.pt-slot-compact .cm-hook-question { font-size: 29px; }
+.pt-slot-compact .cm-hook-answer { padding: 13px 18px; font-size: 19px; }
+
+.pt-slot-compact .cm-mech-split { grid-template-columns: 176px 40px 1fr; }
+.pt-slot-compact .cm-mech-motif { height: 224px; }
+.pt-slot-compact .cm-mech-motif svg { width: 168px; height: 168px; }
+.pt-slot-compact .cm-mech-links { width: 40px; height: 224px; }
+.pt-slot-compact .cm-mech-stack { gap: 10px; }
+.pt-slot-compact .cm-mech-card { padding: 11px 14px; gap: 4px; }
+.pt-slot-compact .cm-mech-card h3 { font-size: 17.5px; }
+.pt-slot-compact .cm-mech-card p { font-size: 14px; line-height: 1.36; }
+
+.pt-slot-compact .cm-compare-wrap { max-height: none; gap: 14px; }
+.pt-slot-compact .cm-compare-col { min-height: 0; padding: 14px 16px; gap: 10px; }
+.pt-slot-compact .cm-compare-chip { font-size: 16.5px; padding: 5px 12px; }
+.pt-slot-compact .cm-compare-list li { font-size: 15px; }
+
+.pt-slot-compact .cm-steps-wrap { gap: 9px; }
+.pt-slot-compact .cm-steps-track { height: 36px; }
+.pt-slot-compact .cm-st-node { width: 22px; height: 22px; }
+.pt-slot-compact .cm-st-node-fill { width: 9px; height: 9px; }
+.pt-slot-compact .cm-steps-cards { min-height: 0; max-height: none; }
+.pt-slot-compact .cm-step-card { padding: 12px 13px; gap: 6px; }
+.pt-slot-compact .cm-step-card h3 { font-size: 17px; }
+.pt-slot-compact .cm-step-card p { font-size: 13.5px; line-height: 1.38; }
+
+.pt-slot-compact .cm-time-card { min-height: 0; padding: 12px 12px; gap: 5px; }
+.pt-slot-compact .cm-time-card h3 { font-size: 17px; }
+.pt-slot-compact .cm-time-card p { font-size: 13.5px; line-height: 1.38; }
+
+.pt-slot-compact .cm-check-motif,
+.pt-slot-compact .cm-summary-side { width: 164px; height: 202px; }
+.pt-slot-compact .cm-check-motif svg,
+.pt-slot-compact .cm-summary-side svg { width: 144px; height: 144px; }
+.pt-slot-compact .cm-check-head { padding: 9px 14px; font-size: 16px; }
+.pt-slot-compact .cm-check-row { padding: 9px 14px; gap: 11px; }
+.pt-slot-compact .cm-check-text strong,
+.pt-slot-compact .cm-summary-copy strong { font-size: 17px; }
+.pt-slot-compact .cm-check-text span,
+.pt-slot-compact .cm-summary-copy span { font-size: 13.5px; }
+.pt-slot-compact .cm-summary-list { gap: 8px; }
+.pt-slot-compact .cm-summary-row { padding: 9px 14px; gap: 11px; }
+.pt-slot-compact .cm-summary-num { width: 30px; height: 30px; font-size: 15px; }
+
+.pt-slot-compact .cm-warn-grid { gap: 10px; }
+.pt-slot-compact .cm-warn-card { padding: 12px 14px; gap: 11px; }
+.pt-slot-compact .cm-warn-icon { width: 38px; height: 38px; }
+.pt-slot-compact .cm-warn-card h3 { font-size: 17px; }
+.pt-slot-compact .cm-warn-card p { font-size: 14px; }
+
+.pt-slot-compact .cm-scene.cm-art-scene { padding: 16px 20px; gap: 18px; }
+.pt-slot-compact .cm-art-panel { flex: 0 0 40%; border-radius: 20px; }
+.pt-slot-compact .cm-art-copy { gap: 10px; }
+.pt-slot-compact .cm-heading.cm-art-heading { font-size: 25px; }
+.pt-slot-compact .cm-art-item { padding: 9px 12px; gap: 10px; }
+.pt-slot-compact .cm-art-marker { width: 30px; height: 30px; font-size: 15px; }
+.pt-slot-compact .cm-art-text strong { font-size: 17.5px; }
+.pt-slot-compact .cm-art-text span { font-size: 13.5px; }
+.pt-slot-compact .cm-takeaway.cm-art-takeaway { font-size: 15.5px; }
+
+.pt-slot-compact .stage-media-title { font-size: 34px; }
+.pt-slot-compact .stage-mg-overlay h2 { font-size: 32px; }
+.pt-slot-compact .stage-mg-overlay li { font-size: 18px; }
+
+/* Narrow slots (w <= 720, e.g. headline 642x510) */
+.pt-slot-narrow .cm-scene { padding: 16px 18px 14px; gap: 10px; }
+.pt-slot-narrow .cm-header { min-height: 34px; gap: 10px; }
+.pt-slot-narrow .cm-heading { font-size: 23px; }
+.pt-slot-narrow .cm-inline-motif { width: 36px; height: 36px; border-radius: 10px; }
+.pt-slot-narrow .cm-inline-motif svg { width: 28px; height: 28px; }
+.pt-slot-narrow .cm-takeaway { padding: 8px 12px; font-size: 15.5px; border-radius: 11px; }
+
+.pt-slot-narrow .cm-hook-wrap { flex-direction: column; gap: 12px; text-align: center; }
+.pt-slot-narrow .cm-hook-motif-box { width: 144px; height: 144px; border-radius: 18px; }
+.pt-slot-narrow .cm-hook-motif-box svg { width: 124px; height: 124px; }
+.pt-slot-narrow .cm-hook-copy { align-items: center; gap: 10px; }
+.pt-slot-narrow .cm-hook-question { font-size: 26px; }
+.pt-slot-narrow .cm-hook-answer { padding: 12px 16px; font-size: 17.5px; }
+.pt-slot-narrow .cm-hook-pills { justify-content: center; gap: 8px; }
+.pt-slot-narrow .cm-hook-pill { padding: 6px 12px; font-size: 14px; }
+
+.pt-slot-narrow .cm-mech-split { grid-template-columns: 1fr; }
+.pt-slot-narrow .cm-mech-motif,
+.pt-slot-narrow .cm-mech-links { display: none; }
+.pt-slot-narrow .cm-mech-stack { gap: 10px; }
+.pt-slot-narrow .cm-mech-grid { gap: 9px; }
+.pt-slot-narrow .cm-mech-grid.count-3 { grid-template-columns: 1fr; }
+.pt-slot-narrow .cm-mech-card { padding: 11px 14px; gap: 4px; }
+.pt-slot-narrow .cm-mech-card h3 { font-size: 17.5px; }
+.pt-slot-narrow .cm-mech-card p { font-size: 14px; line-height: 1.38; padding-left: 36px; }
+.pt-slot-narrow .cm-mech-grid.count-3 .cm-mech-card p { padding-left: 36px; margin-top: 0; }
+
+.pt-slot-narrow .cm-compare-wrap { max-height: none; gap: 12px; }
+.pt-slot-narrow .cm-compare-wrap.count-2 { gap: 12px; }
+.pt-slot-narrow .cm-compare-wrap.count-3 { grid-template-columns: 1fr; gap: 7px; }
+.pt-slot-narrow .cm-compare-wrap.count-3 .cm-compare-col { padding: 9px 12px; gap: 5px; }
+.pt-slot-narrow .cm-compare-wrap.count-3 .cm-compare-list { flex-direction: row; flex-wrap: wrap; gap: 4px 12px; }
+.pt-slot-narrow .cm-compare-wrap.count-3 .cm-compare-list li { font-size: 13px; line-height: 1.3; gap: 5px; }
+.pt-slot-narrow .cm-compare-col { min-height: 0; padding: 12px 14px; gap: 8px; border-radius: 14px; }
+.pt-slot-narrow .cm-compare-chip { font-size: 15.5px; padding: 4px 11px; }
+.pt-slot-narrow .cm-compare-list { gap: 6px; }
+.pt-slot-narrow .cm-compare-list li { font-size: 14px; line-height: 1.38; gap: 7px; }
+.pt-slot-narrow .cm-compare-single { font-size: 14.5px; }
+
+.pt-slot-narrow .cm-steps-wrap { gap: 8px; }
+.pt-slot-narrow .cm-steps-track { height: 34px; }
+.pt-slot-narrow .cm-steps-track.count-2,
+.pt-slot-narrow .cm-steps-cards.count-2 { --st-gap: 12px; }
+.pt-slot-narrow .cm-steps-track.count-3,
+.pt-slot-narrow .cm-steps-cards.count-3 { --st-gap: 9px; }
+.pt-slot-narrow .cm-steps-track.count-4 { display: none; }
+.pt-slot-narrow .cm-steps-cards { min-height: 0; max-height: none; }
+.pt-slot-narrow .cm-steps-cards.count-4 { grid-template-columns: 1fr 1fr; gap: 9px; }
+.pt-slot-narrow .cm-st-node { width: 22px; height: 22px; }
+.pt-slot-narrow .cm-st-node-fill { width: 9px; height: 9px; }
+.pt-slot-narrow .cm-step-card { padding: 11px 12px; gap: 6px; border-radius: 13px; }
+.pt-slot-narrow .cm-step-num { font-size: 12px; padding: 2px 8px; }
+.pt-slot-narrow .cm-step-card h3 { font-size: 16px; }
+.pt-slot-narrow .cm-step-card p { font-size: 13px; line-height: 1.36; }
+
+.pt-slot-narrow .cm-timeline-wrap { gap: 6px; }
+.pt-slot-narrow .cm-timeline-tags.count-2,
+.pt-slot-narrow .cm-timeline-axis.count-2,
+.pt-slot-narrow .cm-timeline-cards.count-2 { --tl-gap: 14px; }
+.pt-slot-narrow .cm-timeline-tags.count-3,
+.pt-slot-narrow .cm-timeline-axis.count-3,
+.pt-slot-narrow .cm-timeline-cards.count-3 { --tl-gap: 10px; }
+.pt-slot-narrow .cm-timeline-tags.count-4,
+.pt-slot-narrow .cm-timeline-axis.count-4,
+.pt-slot-narrow .cm-timeline-cards.count-4 { --tl-gap: 8px; }
+.pt-slot-narrow .cm-time-pill { padding: 4px 10px; font-size: 13px; }
+.pt-slot-narrow .cm-timeline-tags.count-4 .cm-time-pill { padding: 4px 7px; font-size: 12px; }
+.pt-slot-narrow .cm-time-card { min-height: 0; padding: 11px 9px; gap: 5px; border-radius: 13px; }
+.pt-slot-narrow .cm-time-card h3 { font-size: 16px; }
+.pt-slot-narrow .cm-timeline-cards.count-4 .cm-time-card h3 { font-size: 14px; }
+.pt-slot-narrow .cm-time-card p { font-size: 13px; line-height: 1.36; }
+.pt-slot-narrow .cm-timeline-cards.count-4 .cm-time-card p { font-size: 12px; line-height: 1.32; }
+
+.pt-slot-narrow .cm-check-motif,
+.pt-slot-narrow .cm-summary-side { display: none; }
+.pt-slot-narrow .cm-check-head { padding: 9px 14px; font-size: 16px; }
+.pt-slot-narrow .cm-check-row { padding: 9px 14px; gap: 10px; }
+.pt-slot-narrow .cm-check-text strong,
+.pt-slot-narrow .cm-summary-copy strong { font-size: 17px; }
+.pt-slot-narrow .cm-check-text span,
+.pt-slot-narrow .cm-summary-copy span { font-size: 13.5px; }
+.pt-slot-narrow .cm-summary-list { gap: 8px; }
+.pt-slot-narrow .cm-summary-row { padding: 10px 13px; gap: 10px; }
+.pt-slot-narrow .cm-summary-num { width: 30px; height: 30px; font-size: 15px; }
+
+.pt-slot-narrow .cm-warn-grid { gap: 9px; }
+.pt-slot-narrow .cm-warn-grid.count-2 { gap: 10px; }
+.pt-slot-narrow .cm-warn-card { padding: 11px 13px; gap: 10px; }
+.pt-slot-narrow .cm-warn-icon { width: 36px; height: 36px; }
+.pt-slot-narrow .cm-warn-card h3 { font-size: 16.5px; }
+.pt-slot-narrow .cm-warn-card p { font-size: 13.5px; }
+
+/* In narrow slots (headline 642x510), stack art panel on top (606x198) so neither art nor text is cramped */
+.pt-slot-narrow .cm-scene.cm-art-scene { flex-direction: column; padding: 16px 18px; gap: 10px; }
+.pt-slot-narrow .cm-art-panel { flex: 0 0 198px; width: 100%; border-radius: 18px; }
+.pt-slot-narrow .cm-art-copy { gap: 7px; justify-content: flex-start; }
+.pt-slot-narrow .cm-heading.cm-art-heading { font-size: 21px; }
+.pt-slot-narrow .cm-art-answer { padding: 8px 12px; font-size: 17px; }
+.pt-slot-narrow .cm-art-list { gap: 5px; }
+.pt-slot-narrow .cm-art-list.count-4 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.pt-slot-narrow .cm-art-item { padding: 7px 11px; gap: 9px; border-radius: 11px; }
+.pt-slot-narrow .cm-art-marker { width: 26px; height: 26px; font-size: 13.5px; }
+.pt-slot-narrow .cm-art-text strong { font-size: 15.5px; }
+.pt-slot-narrow .cm-art-text span { font-size: 12.5px; line-height: 1.28; }
+.pt-slot-narrow .cm-takeaway.cm-art-takeaway { font-size: 14px; padding: 6px 10px; }
+
+.pt-slot-narrow .stage-media-title { top: 6%; font-size: 28px; }
+.pt-slot-narrow .stage-mg-overlay { inset: 4% 5% auto; }
+.pt-slot-narrow .stage-mg-overlay h2 { font-size: 24px; padding: 4px 10px; }
+.pt-slot-narrow .stage-mg-overlay ul { margin-top: 6px; gap: 5px; }
+.pt-slot-narrow .stage-mg-overlay li { font-size: 15px; padding: 4px 9px; }

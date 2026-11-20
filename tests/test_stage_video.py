@@ -122,6 +122,50 @@ class StageVideoTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "结论语气"):
             stage_video.stage_input(bad_tone, server.ASSETS, server.media_path)
 
+    def test_layout_media_spec_and_resolve_image_size_cover_all_layouts(self):
+        import work_costs
+
+        expected = {
+            "builtin:layout/info-classic": (960, 540, "16:9", "standard", "left"),
+            "builtin:layout/corner-presenter": (960, 540, "16:9", "standard", "left"),
+            "builtin:layout/chapter-nav": (944, 512, "1.84:1", "standard", "left"),
+            "builtin:layout/broadcast": (1280, 504, "2.54:1", "ultrawide", "left"),
+            "builtin:layout/takeaway": (820, 460, "16:9", "compact", "left"),
+            "builtin:layout/qa-chat": (1120, 388, "2.89:1", "shallow-wide", "left"),
+            "builtin:layout/headline": (642, 510, "1.26:1", "narrow", "top"),
+        }
+        items_by_id = {row["id"]: row for row in server.ASSETS.layout_items()}
+        for lid, (w, h, ratio_label, shape, art_place) in expected.items():
+            with self.subTest(layout=lid):
+                self.assertIn("canvas", items_by_id[lid])
+                layout_def, layout_item, _ = server.ASSETS.layout(lid)
+                spec = stage_video.layout_media_spec(layout_def, layout_item)
+                self.assertEqual((w, h, ratio_label, shape), (spec["w"], spec["h"], spec["ratioLabel"], spec["shape"]))
+                self.assertEqual(art_place, spec["art"]["placement"])
+                for tier, (min_px, max_px) in (("1K", (921_600, 2_610_000)),
+                                               ("2K", (3_686_400, 4_624_220)),
+                                               ("4K", (10_000_000, 16_777_216))):
+                    resolved = server.resolve_image_size({
+                        "imageSize": tier, "ratio": spec["arkRatio"], "targetSize": {"w": w, "h": h},
+                    })
+                    pw, ph = (int(part) for part in resolved.split("x"))
+                    self.assertEqual(0, pw % 16)
+                    self.assertEqual(0, ph % 16)
+                    self.assertTrue(min_px <= pw * ph <= max_px, f"{lid} {tier} -> {resolved}")
+                    ar_err = abs((pw / ph) - (w / h)) / (w / h)
+                    self.assertLess(ar_err, 0.02, f"{lid} {tier} -> {resolved}")
+                    # Verify cost calculation accepts every resolved custom pixel size.
+                    model = "doubao-seedream-5-5-261028" if tier in ("1K", "2K") else "doubao-seedream-5-0-260128"
+                    cost = work_costs.image_cost(model, resolved, 0, 0)
+                    self.assertIsNotNone(cost["amount"], f"unbilled size {resolved} for {model}")
+
+        # Without targetSize, resolve_image_size preserves exact preset SIZES.
+        self.assertEqual(server.SIZES["2K"]["16:9"], server.resolve_image_size({"imageSize": "2K", "ratio": "16:9"}))
+        # Invalid targetSize values are rejected.
+        for bad in ({"w": 10, "h": 10}, {"w": 1000, "h": 100}, {"w": "1280", "h": 504}, "1280x504"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                server.parse_target_size(bad)
+
 
 if __name__ == "__main__":
     unittest.main()

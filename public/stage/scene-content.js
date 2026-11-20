@@ -443,19 +443,19 @@
       </div>`;
     } else if (visual === "steps") {
       const stepCount = Math.max(2, Math.min(4, count));
-      const centers = Array.from({ length: stepCount }, (_, i) => ((i + 0.5) * 896) / stepCount);
-      const railStart = centers[0];
-      const railEnd = centers[stepCount - 1];
-      const trackSvg = `<svg viewBox="0 0 896 46" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
-        <line x1="${railStart}" y1="23" x2="${railEnd}" y2="23" stroke="var(--v-card-border)" stroke-width="5" stroke-linecap="round"/>
-        <line data-cm-progress-rail x1="${railStart}" y1="23" x2="${railEnd}" y2="23" stroke="var(--cm-accent)" stroke-width="5" stroke-linecap="round" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"/>
-        ${centers.map((cx, i) => `
-          <circle data-cm-node="${i}" cx="${cx}" cy="23" r="14" fill="var(--v-card-bg)" stroke="var(--cm-accent)" stroke-width="4"/>
-          <circle data-cm-node-fill="${i}" cx="${cx}" cy="23" r="6.5" fill="var(--cm-accent)"/>
-        `).join("")}
+      const railSvg = `<svg viewBox="0 0 100 5" preserveAspectRatio="none" aria-hidden="true">
+        <line x1="0" y1="2.5" x2="100" y2="2.5" stroke="var(--v-card-border)" stroke-width="5"/>
+        <line data-cm-progress-rail x1="0" y1="2.5" x2="100" y2="2.5" stroke="var(--cm-accent)" stroke-width="5" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"/>
       </svg>`;
+      const stepNodes = Array.from({ length: stepCount }, (_, i) => `
+        <div class="cm-st-cell">
+          <span class="cm-st-node" data-cm-node="${i}"><span class="cm-st-node-fill" data-cm-node-fill="${i}"></span></span>
+        </div>`).join("");
       bodyHtml = `<div class="cm-steps-wrap">
-        <div class="cm-steps-track">${trackSvg}</div>
+        <div class="cm-steps-track count-${stepCount}">
+          <div class="cm-st-rail" data-cm-steps-rail>${railSvg}</div>
+          ${stepNodes}
+        </div>
         <div class="cm-steps-cards count-${stepCount}">${items.slice(0, stepCount).map((it, i) => `
           <div class="cm-item cm-step-card" data-cm-item="${i}">
             <span class="cm-item-accent-bar" data-cm-bar="${i}"></span>

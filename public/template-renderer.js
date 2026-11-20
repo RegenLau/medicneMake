@@ -1954,9 +1954,117 @@
       .join("；");
   }
 
-  function gridRuleForType(slideOrType) {
+  function resolveMediaSlot(layoutOrSlot) {
+    if (layoutOrSlot && global.LayoutEngine?.describeMediaSlot) {
+      return global.LayoutEngine.describeMediaSlot(layoutOrSlot);
+    }
+    return {
+      w: 960, h: 540, aspect: 16 / 9, ratioLabel: "16:9", arkRatio: "16:9",
+      shape: "standard", hasAnswer: false, hasHeadline: false, hasKeypoints: false, isFlush: false, hasNavPanel: false,
+    };
+  }
+
+  function themePromptRule(deck, themeDef, forOutro = false) {
+    const themeId = themeDef?.id || deck.themeId || "";
+    const vars = themeDef?.vars || deck.themeVars;
+    const isDark = Boolean(themeId === "builtin:theme/night" || (vars && global.LayoutEngine?.isDarkTheme?.({ themeVars: vars })));
+    const subject = forOutro ? "结尾卡片" : "科普信息图";
+    if (isDark) {
+      return `视觉风格：深色夜间护眼医学${subject}，整张画布采用深藏青夜幕无缝满铺底色（#0f1828 至 #172236），浅灰蓝柔和分组卡片（#1a2740），主文字用高对比度纯白/浅云白（#eef4ff），搭配柔和天蓝（#62b4ff）、薄荷绿（#5ee2a0）与暖珊瑚（#ff7d6b）点缀，画面干净高级、留白充足。`;
+    }
+    if (themeId === "builtin:theme/mint") {
+      return `视觉风格：清爽临床薄荷医学${subject}，整张画布采用柔和薄荷浅白无缝满铺底色（#f4fbf8 至 #ffffff），浅薄荷/柔青色分组卡片与干净扁平医学矢量插画；深墨绿藏青主文字（#12322d），临床青绿（#0d9488）与安心绿（#15803d）强调重点。`;
+    }
+    if (themeId === "builtin:theme/illus") {
+      return `视觉风格：温润手绘插画风医学${subject}，整张画布采用柔和暖米白无缝满铺底色（#fffbf2 至 #fdf4e3），细腻手绘描边分组卡片与亲切扁平医学插画；深咖炭色主文字（#2d241c），暖砖红（#cf5228）与草绿（#5c9145）点缀分区。`;
+    }
+    if (themeId === "builtin:theme/photo") {
+      return `视觉风格：现代杂志编辑风医疗${subject}，整张画布采用清透浅灰白/冰白无缝满铺底色（#f3f8fc 至 #ffffff），轻盈通透的浅色分组卡片与精致医学扁平插画；深藏青主文字（#122d4c）、医学蓝（#1a73e8）与少量珊瑚橙强调重点。`;
+    }
+    if (deck.theme === "warm") {
+      return forOutro
+        ? "视觉风格：暖色手绘医学结尾卡片，整张画布采用柔和暖米白无缝满铺底色（#fffdf9 至 #fdf5e7），深炭蓝细描边（#2c3e50）与暖砖红（#cf5228）、柔和草绿（#5c9145）点缀，画面温暖亲切、留白充足。"
+        : "视觉风格：暖色手绘医学信息图，整张画布采用柔和暖米白无缝满铺底色（#fffdf9 至 #fdf5e7），深炭蓝细描边（#2c3e50）分组卡片与亲切扁平手绘医学插画；暖砖红（#cf5228）、柔和草绿（#5c9145）与淡琥珀色点缀分区。";
+    }
+    return forOutro
+      ? "视觉风格：现代清爽医疗白蓝科普结尾卡片，整张画布采用极浅白蓝或纯白无缝满铺底色（#ffffff 至 #f3f9ff），深藏青色主文字（#122d4c）、医学蓝（#1466cc）与柔和安心绿（#1e8e5a）点缀，画面温暖安心、留白充足。"
+      : "视觉风格：现代清爽医疗白蓝科普信息图，整张画布采用极浅白蓝或纯白无缝满铺底色（#ffffff 至 #f7fbff），浅蓝/淡琥珀分组信息卡片与干净扁平矢量医学插画；深藏青色主文字（#122d4c）、医学蓝（#1466cc）与少量珊瑚橙（#e6592d）强调重点。";
+  }
+
+  function gridRuleForType(slideOrType, layoutOrSlot) {
     const slide = slideOrType && typeof slideOrType === "object" ? slideOrType : { type: slideOrType };
     const type = slide.type || "explain";
+    const slot = layoutOrSlot ? resolveMediaSlot(layoutOrSlot) : null;
+
+    if (slot && slot.shape === "shallow-wide") {
+      // e.g. qa-chat 1120x388 (2.89:1) inside answer bubble — top header & verdict already shown above
+      if (type === "compare") {
+        const count = Math.min(3, Math.max(2, Array.isArray(slide.columns) ? slide.columns.length : 2));
+        return `扁宽单排构图（高度浅、横向宽，上方气泡已展示问题与结论）：不画顶部大标题栏和底部横条，主体 12%–88% 横向等宽并排 ${count} 张圆角对比卡片，三边呼吸留白均匀。`;
+      }
+      if (type === "steps") {
+        const count = Math.min(4, Math.max(2, Array.isArray(slide.steps) ? slide.steps.length : 3));
+        return `扁宽单排构图（高度浅、横向宽）：不画顶部大标题栏和底部横条，主体 12%–88% 从左到右单排展开 ${count} 张等高圆角步骤卡，用轻箭头串联，每张卡仅保留短标题与 1 枚小图标。`;
+      }
+      if (type === "warning") {
+        const count = Math.min(4, Math.max(1, Array.isArray(slide.warnings) ? slide.warnings.length : 2));
+        return `扁宽单排构图（高度浅、横向宽）：不画顶部大标题栏，主体 12%–88% 横向并排 ${count} 张醒目圆角警示卡（严禁纵向堆成三四行把底排裁断），文字大而精炼。`;
+      }
+      const pts = Array.isArray(slide.points) ? slide.points.length : 2;
+      return `扁宽单排构图（高度浅、横向宽，上方气泡已展示药师提问与结论）：严禁上下三层堆叠和底部深色长条；主体 12%–88% 采用左右横向布局——左侧约 26% 放 1 组简洁医学扁平插画，右侧约 70% 单排横向（或 2×2 紧凑格）展示 ${Math.max(1, Math.min(4, pts))} 条精炼圆角词条卡，上下各留 ≥10% 透明安全区。`;
+    }
+
+    if (slot && slot.shape === "ultrawide") {
+      // e.g. broadcast 1280x504 (2.54:1) full-bleed banner
+      if (type === "compare") {
+        const count = Math.min(3, Math.max(2, Array.isArray(slide.columns) ? slide.columns.length : 2));
+        return `超宽横幅构图（宽:高 = ${slot.ratioLabel}）：顶部 8%–22% 居中精简 1 行标题（严禁顶到画布上沿）；主体 26%–88% 横向等宽并排 ${count} 张圆角对比卡片；底部 88%–100% 保持干净留白，不画贴底深色横条。`;
+      }
+      if (type === "steps") {
+        const count = Math.min(4, Math.max(2, Array.isArray(slide.steps) ? slide.steps.length : 3));
+        return `超宽横幅构图（宽:高 = ${slot.ratioLabel}）：顶部 8%–22% 居中精简 1 行标题；主体 26%–88% 单排横向等宽排布 ${count} 张圆角步骤卡片，左右舒展均衡；底部 88%–100% 保持干净留白。`;
+      }
+      if (type === "warning") {
+        const count = Math.min(4, Math.max(1, Array.isArray(slide.warnings) ? slide.warnings.length : 2));
+        return `超宽横幅构图（宽:高 = ${slot.ratioLabel}）：顶部 8%–22% 居中精简 1 行警示标题；主体 26%–86% 单排横向排布 ${count} 张圆角警示卡片（含清晰警示图标与简短就医行动词条），底部留 ≥12% 安全留白。`;
+      }
+      const pts = Array.isArray(slide.points) ? slide.points.length : 2;
+      return `超宽横幅构图（宽:高 = ${slot.ratioLabel}）：顶部 8%–22% 居中精简 1 行标题（留足上安全区）；主体 26%–88% 采用宽屏横向布局——左侧约 28% 放简洁医学主视觉插画，右侧约 68% 横向单排（或 2×2 宽松格）排布 ${Math.max(1, Math.min(4, pts))} 张圆角要点卡；底部 88%–100% 保持干净留白，不画贴边深色底条。`;
+    }
+
+    if (slot && slot.shape === "narrow") {
+      // e.g. headline 642x510 (1.26:1) — left poster already shows big headline + lead
+      const leadRule = slot.hasHeadline
+        ? "偏方紧凑构图（左侧海报已展示大标题与导语，图内不重复大号主标题）："
+        : `偏方紧凑构图（宽:高 = ${slot.ratioLabel}）：`;
+      if (type === "compare") {
+        const count = Math.min(3, Math.max(2, Array.isArray(slide.columns) ? slide.columns.length : 2));
+        return count === 3
+          ? `${leadRule}主体 8%–92% 纵向齐平排布 3 条横向对比卡片（避免三列过窄挤压文字），每条左侧用彩色标签区分。`
+          : `${leadRule}主体 8%–92% 左右等宽并列 2 张高颜值对比卡片，留白舒适。`;
+      }
+      if (type === "steps") {
+        const count = Math.min(4, Math.max(2, Array.isArray(slide.steps) ? slide.steps.length : 3));
+        const layoutDesc = count >= 4
+          ? "2×2 对称四格步骤卡片（严禁 4 列横排挤成窄条）"
+          : count === 3
+            ? "纵向齐平的 3 条横向步骤卡（左侧步骤编号徽章，右侧简洁图文）"
+            : "上下或左右均衡的 2 张步骤卡片";
+        return `${leadRule}主体 8%–92% 为${layoutDesc}，步骤顺序一目了然。`;
+      }
+      if (type === "warning") {
+        const count = Math.min(4, Math.max(1, Array.isArray(slide.warnings) ? slide.warnings.length : 2));
+        return `${leadRule}主体 8%–80% 为${count >= 4 ? "2×2 四格" : `纵向 ${count} 条`}醒目圆角警示卡片；底部 82%–94% 为居中简洁行动提示条。`;
+      }
+      const pts = Array.isArray(slide.points) ? slide.points.length : 2;
+      return `${leadRule}主体 8%–92% 采用视觉聚焦布局——上方或中央放 1 组清晰医学扁平主插画，配 ${Math.max(1, Math.min(4, pts))} 块${pts >= 4 ? "2×2 对称" : "简洁分层"}短词条卡片，字大清晰、四周留足安全区。`;
+    }
+
+    if (slot && slot.shape === "compact" && slot.hasKeypoints) {
+      // e.g. takeaway 820x460 (1.78:1) — right panel already shows keypoints & takeaway quote
+      return `紧凑横屏视觉构图（右侧要点栏已列出完整文字清单与底端金句，画面以直观医学示意和精炼图卡为主）：顶部 6%–20% 放精简 1 行标题；主体 23%–92% 聚焦 1 组清晰核心医学机制/场景扁平插画配简短图示标注（不堆砌密集长文字列表，不重复画底部金句条）。`;
+    }
+
     if (type === "compare") {
       const count = Math.min(3, Math.max(2, Array.isArray(slide.columns) ? slide.columns.length : 2));
       return count === 3
@@ -1996,32 +2104,57 @@
     return "清晰分区构图：上半部 6%–42% 居中排布大字问题与结论卡片；下半部 44%–93% 放 1 组简洁医学主视觉插画与精简短词标签。";
   }
 
-  function buildCardImagePrompt(rawDeck, slideIndex, customPrompt, drug) {
+  function buildCardImagePrompt(rawDeck, slideIndex, customPrompt, drug, layoutOrSlot, themeDef) {
     const deck = normalizeDeck(rawDeck);
     const slide = deck.slides[slideIndex] || deck.slides[0];
-    const themeRule = deck.theme === "warm"
-      ? "视觉风格：暖色手绘医学信息图，整张画布采用柔和暖米白无缝满铺底色（#fffdf9 至 #fdf5e7），深炭蓝细描边（#2c3e50）分组卡片与亲切扁平手绘医学插画；暖砖红（#cf5228）、柔和草绿（#5c9145）与淡琥珀色点缀分区。"
-      : "视觉风格：现代清爽医疗白蓝科普信息图，整张画布采用极浅白蓝或纯白无缝满铺底色（#ffffff 至 #f7fbff），浅蓝/淡琥珀分组信息卡片与干净扁平矢量医学插画；深藏青色主文字（#122d4c）、医学蓝（#1466cc）与少量珊瑚橙（#e6592d）强调重点。";
+    const slot = layoutOrSlot ? resolveMediaSlot(layoutOrSlot) : null;
+    const isClassic = !slot || (slot.w === 960 && slot.h === 540 && !slot.hasAnswer && !slot.hasHeadline && !slot.hasKeypoints && !slot.isFlush);
+    const ratioText = slot ? slot.ratioLabel : "16:9";
+    const themeRule = themePromptRule(deck, themeDef, false);
     const desc = String(customPrompt !== undefined ? customPrompt : slide.imagePrompt || "").trim();
     const visualLabels = summarizeSlideVisualLabels(slide);
     const headline = slide.headline || slide.name || deck.title;
-    const footer = slide.footerNote && slide.footerNote !== deck.disclaimer && !slide.footerNote.includes("科普内容仅供参考")
+    const suppressFooter = Boolean(slot && (slot.shape === "shallow-wide" || slot.shape === "ultrawide" || slot.hasKeypoints));
+    const footer = !suppressFooter && slide.footerNote && slide.footerNote !== deck.disclaimer && !slide.footerNote.includes("科普内容仅供参考")
       ? slide.footerNote.slice(0, 42)
       : "";
 
+    const purposeLine = isClassic
+      ? "用途：严格 16:9 横屏医院药师用药科普整张信息图（宽:高 = 16:9，直接平铺填入视频右侧 16:9 恒定内容区，对应模板标准 1360×765 / 2560×1440），手机小屏播放必须清晰大字易读。"
+      : `用途：医院药师用药科普整张信息图，严格按当前模板内容区比例（宽:高 = ${ratioText}，渲染尺寸 ${slot.w}×${slot.h}）构图并直接铺满该内容区，手机小屏播放必须清晰大字易读。`;
+    const safeEdgeRule = slot && (slot.shape === "shallow-wide" || slot.shape === "ultrawide")
+      ? `画幅与铺满要求：严格锁定 ${ratioText} 超宽横幅比例，底色与画面 100% 满画幅平铺至最外四边，严禁画外边框、画中画或套框白卡；所有文字、卡片与主图形距上下边缘保持 ≥9%、距左右边缘保持 ≥4% 的透明安全区，绝对避免贴顶、贴底或被裁切。`
+      : isClassic
+        ? "画幅与铺满要求：严格锁定 16:9 宽屏比例，底色与画面构图 100% 满画幅平铺至最外四边，整张图本身就是完整内容页；严禁在画布外圈画外边框、上下/左右装饰留边条、浅蓝底框、投影画框或悬浮圆角大白卡套框（绝不做画中画/卡中卡）；仅让文字与核心图标距画布四边保持约 4%（1360×765 约 56px）的透明内安全区，避免贴边。"
+        : `画幅与铺满要求：严格锁定 ${ratioText} 画幅比例（对应内容区 ${slot.w}×${slot.h}），底色与画面构图 100% 满画幅平铺至最外四边，严禁在画布外圈画外边框、装饰留边条、投影画框或悬浮大白卡套框；让文字与核心图标距画布四边保持约 5% 的透明内安全区，避免贴边。`;
+    const textRule = slot && (slot.hasAnswer || slot.hasHeadline)
+      ? "文字精简铁律：坚持「简洁扁平医学图标/插画 + 最多 3–4 条极短词条（每条不超过 10 个中文字）」，不重复模板外部已显示的大标题或问句结论，字号大、留白足，严禁在卡片内写大段小字或抄写口播正文。"
+      : "文字精简铁律：坚持「1 句主标题（大字号、最多两行）+ 1 组简洁扁平医学图标/插画 + 最多 3–4 条极短词条（每条不超过 10 个中文字）」，字号大、行距宽、留白足，严禁在卡片内写大段解释性小字或抄写口播正文。";
+    const defaultDesign = slot?.hasAnswer
+      ? `画面与排版设计：围绕「${headline}」以横向单排图卡直观呈现核心词条与简洁医学插画，不重复画顶部标题栏或结论横幅。`
+      : slot?.hasHeadline
+        ? `画面与排版设计：呼应左侧大标题「${headline}」，以紧凑直观的医学视觉图解与精炼短词条卡片呈现核心内容，图内不重复大号标题。`
+        : slot?.hasKeypoints
+          ? `画面与排版设计：围绕「${headline}」突出 1 组清晰直观的医学机制/场景示意插画与简明标注，不重复堆叠整列文字要点。`
+          : `画面与排版设计：顶部居中醒目大标题「${headline}」，按上述固定网格清晰排布本页核心词条与扁平医学图标。`;
+    const extraBan = [
+      slot?.hasAnswer && "不要重复画患者提问气泡、药师回答栏或结论胶囊",
+      slot?.hasHeadline && "不要在图内顶部重复大号主标题",
+      slot?.hasKeypoints && "不要在图内重复画右侧要点清单或底部金句条",
+      slot?.isFlush && "顶部与底部不要画贴边深色标题栏或页脚横条",
+    ].filter(Boolean).join("，");
+
     return [
-      "用途：严格 16:9 横屏医院药师用药科普整张信息图（宽:高 = 16:9，直接平铺填入视频右侧 16:9 恒定内容区，对应模板标准 1360×765 / 2560×1440），手机小屏播放必须清晰大字易读。",
-      "画幅与铺满要求：严格锁定 16:9 宽屏比例，底色与画面构图 100% 满画幅平铺至最外四边，整张图本身就是完整内容页；严禁在画布外圈画外边框、上下/左右装饰留边条、浅蓝底框、投影画框或悬浮圆角大白卡套框（绝不做画中画/卡中卡）；仅让文字与核心图标距画布四边保持约 4%（1360×765 约 56px）的透明内安全区，避免贴边。",
-      gridRuleForType(slide),
-      "文字精简铁律：坚持「1 句主标题（大字号、最多两行）+ 1 组简洁扁平医学图标/插画 + 最多 3–4 条极短词条（每条不超过 10 个中文字）」，字号大、行距宽、留白足，严禁在卡片内写大段解释性小字或抄写口播正文。",
+      purposeLine,
+      safeEdgeRule,
+      gridRuleForType(slide, slot),
+      textRule,
       themeRule,
-      desc
-        ? `画面与排版设计：${desc}`
-        : `画面与排版设计：顶部居中醒目大标题「${headline}」，按上述固定网格清晰排布本页核心词条与扁平医学图标。`,
+      desc ? `画面与排版设计：${desc}` : defaultDesign,
       visualLabels && `图内核心词条（保持精简）：${visualLabels.slice(0, 200)}`,
       footer && slide.type !== "summary" && `底部单行提示条：${footer}`,
       drug && `涉及药品：${drug}（通用外观，不画品牌名、商品Logo与价格）。`,
-      "禁用元素：不要画医生或主讲人头像，不要画顶部章节导航栏，不要画底部视频字幕，不要在图内写「科普内容仅供参考」等免责声明，不出现英文乱码、水印或红十字标志。",
+      `禁用元素：不要画医生或主讲人头像，不要画顶部章节导航栏，不要画底部视频字幕，${extraBan ? extraBan + "，" : ""}不要在图内写「科普内容仅供参考」等免责声明，不出现英文乱码、水印或红十字标志。`,
     ].filter(Boolean).join("\n").slice(0, 2100);
   }
 
@@ -2031,23 +2164,26 @@
     );
   }
 
-  function buildOutroImagePrompt(rawDeck, slideIndex, customPrompt, drug) {
+  function buildOutroImagePrompt(rawDeck, slideIndex, customPrompt, drug, layoutOrSlot, themeDef) {
     const deck = normalizeDeck(rawDeck);
     const slide = deck.slides[slideIndex] || deck.slides[deck.slides.length - 1] || deck.slides[0];
-    const themeRule = deck.theme === "warm"
-      ? "视觉风格：暖色手绘医学结尾卡片，整张画布采用柔和暖米白无缝满铺底色（#fffdf9 至 #fdf5e7），深炭蓝细描边（#2c3e50）与暖砖红（#cf5228）、柔和草绿（#5c9145）点缀，画面温暖亲切、留白充足。"
-      : "视觉风格：现代清爽医疗白蓝科普结尾卡片，整张画布采用极浅白蓝或纯白无缝满铺底色（#ffffff 至 #f3f9ff），深藏青色主文字（#122d4c）、医学蓝（#1466cc）与柔和安心绿（#1e8e5a）点缀，画面温暖安心、留白充足。";
+    const slot = layoutOrSlot ? resolveMediaSlot(layoutOrSlot) : null;
+    const ratioText = slot ? slot.ratioLabel : "16:9";
+    const themeRule = themePromptRule(deck, themeDef, true);
     const desc = String(customPrompt !== undefined ? customPrompt : slide.outroImagePrompt || "").trim();
     const note = slide.outroNote
       || (Array.isArray(slide.points) && slide.points.length
         ? slide.points.map((pt) => pt.title).filter(Boolean).slice(0, 2).join("，")
         : "按说明书和医嘱规律服药，有异常及时就医问药师");
     const shortTopic = deck.shortTitle || deck.title;
+    const isWide = Boolean(slot && (slot.shape === "shallow-wide" || slot.shape === "ultrawide"));
 
     return [
-      "用途：严格 16:9 横屏医院药师用药科普视频「结尾收口定格卡片」（宽:高 = 16:9，直接平铺填入视频右侧 16:9 恒定内容区），结尾停留 1–2 秒，一眼记住唯一核心提醒。",
-      "画幅与铺满要求：严格锁定 16:9 宽屏比例，底色与画面构图 100% 满画幅平铺至最外四边；严禁外边框、上下/左右装饰留边条、悬浮大白卡套框或卡中卡；仅留约 4% 透明内安全边距。",
-      "构图与精简铁律：上方放 1 枚简洁医疗守护主视觉图标/温暖扁平插画（如安心盾牌、勾选药盒或家庭健康守护意象），居中以超大醒目工整简体中文字体呈现核心行动金句（最多两行），画面克制干净，绝不堆砌多条小字列表。",
+      `用途：严格 ${ratioText} 医院药师用药科普视频「结尾收口定格卡片」（宽:高 = ${ratioText}${slot ? `，内容区 ${slot.w}×${slot.h}` : ""}，直接平铺填入视频内容区），结尾停留 1–2 秒，一眼记住唯一核心提醒。`,
+      `画幅与铺满要求：严格锁定 ${ratioText} 比例，底色与画面构图 100% 满画幅平铺至最外四边；严禁外边框、上下/左右装饰留边条、悬浮大白卡套框或卡中卡；四周留足透明内安全边距。`,
+      isWide
+        ? "构图与精简铁律：采用横向单排收口构图——左侧放 1 枚简洁医疗守护主视觉图标/温暖扁平插画（如安心盾牌或勾选药盒），右侧以超大醒目工整简体中文字体呈现核心行动金句（最多两行），画面克制干净，绝不堆砌多条小字列表。"
+        : "构图与精简铁律：上方放 1 枚简洁医疗守护主视觉图标/温暖扁平插画（如安心盾牌、勾选药盒或家庭健康守护意象），居中以超大醒目工整简体中文字体呈现核心行动金句（最多两行），画面克制干净，绝不堆砌多条小字列表。",
       themeRule,
       desc
         ? `画面与排版设计：${desc}`

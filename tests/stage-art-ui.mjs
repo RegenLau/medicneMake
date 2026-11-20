@@ -65,18 +65,19 @@ try {
   assert.equal(await page.getByLabel("插画描述").inputValue(), ART);
   await button("生成缺失插画").waitFor();
 
-  // One paid square illustration per shot, with a text-free prompt.
+  // One paid illustration matching info-classic's 3:4 art panel, with a text-free prompt.
   await page.evaluate(() => { config.keyPresent = true; });
   imageResult = {status:"running", progress:"正在生成测试插画"};
   await button("生成本幕插画").click();
-  await page.getByRole("dialog").getByText("画幅 1:1").waitFor();
+  await page.getByRole("dialog").getByText(/画幅 3:4/).waitFor();
   await confirm();
   await production.getByText("正在生成测试插画", {exact:true}).waitFor();
   imageResult = {status:"done", output:{images:["/media/a1a1a1a1.png"]}};
   await finishedShot();
   const job = submitted.at(-1);
   assert.equal(job.kind, "images");
-  assert.equal(job.settings.ratio, "1:1");
+  assert.equal(job.settings.ratio, "3:4");
+  assert.deepEqual(job.settings.targetSize, { w: 371, h: 492 });
   assert.equal(job.items.length, 1);
   assert(job.items[0].prompt.includes(ART));
   assert(job.items[0].prompt.includes("不出现任何文字"));

@@ -143,7 +143,7 @@ const StageStudio = (() => {
     shot.content = shot.variants[kind] || initialContent(kind, shot);
     shot.content.kind = kind;
     if (artKinds.has(kind) && artKinds.has(from.kind) && !shot.content.art && !shot.content.artPrompt) {
-      for (const key of ["art", "artName", "artPrompt"]) if (from[key]) shot.content[key] = from[key];
+      for (const key of ["art", "artName", "artPrompt", "artMediaSize"]) if (from[key]) shot.content[key] = from[key];
     }
     if (transition !== undefined) shot.content.transition = transition;
     shot.variants[kind] = shot.content;
@@ -171,10 +171,34 @@ const StageStudio = (() => {
     return themeLoads.get(themeId);
   }
 
+  const layoutResolved = new Map();
   const activeLayouts = () => (config.stageLayouts || []).filter(item => item.aspect === "16:9");
   const activeThemes = () => config.stageThemes || [];
   const defaultThemeId = w => w.templateTheme === "warm" ? "builtin:theme/warm" : "builtin:theme/medical";
   const themeIdFor = w => w.stagePlan?.themeId || defaultThemeId(w);
+  const currentThemeDef = w => activeThemes().find(item => item.id === themeIdFor(w)) || null;
+  const currentLayoutDef = w => {
+    const id = w.stagePlan?.layout?.id || CLASSIC;
+    return activeLayouts().find(item => item.id === id) || layoutResolved.get(id) || null;
+  };
+  async function resolveWorkLayout(w) {
+    const cached = currentLayoutDef(w);
+    if (cached?.regions) return cached;
+    const id = w.stagePlan?.layout?.id || CLASSIC;
+    try {
+      const loaded = await getLayout(id);
+      layoutResolved.set(id, loaded);
+      return loaded;
+    } catch {
+      return cached;
+    }
+  }
+  function mediaRatioMismatched(savedSize, currentSlot) {
+    if (!savedSize?.w || !savedSize?.h || !currentSlot?.w || !currentSlot?.h) return false;
+    const savedAr = savedSize.w / savedSize.h;
+    const slotAr = currentSlot.w / currentSlot.h;
+    return Math.abs(savedAr - slotAr) / slotAr > 0.12;
+  }
   const themeName = w => {
     const id = themeIdFor(w);
     return activeThemes().find(item => item.id === id)?.name
@@ -490,13 +514,17 @@ const StageStudio = (() => {
     return `<label class="field">${name}<input data-stage-field="${field}" value="${esc(value || "")}" maxlength="${max}"></label>`;
   }
 
-  function contentFields(shot) {
+  function contentFields(shot, slot) {
     const c = shot.content;
     const pair = list => list.map(({id,name}) => [id,name]);
-    if (c.kind === "image") return (c.image ? '<div class="asset-inline">' +
-      (c.image?.startsWith("/media/") ? btn("收入素材库", "stage-collect", "textbtn") : "") +
-      btn("移除配图", "stage-clear", "textbtn", "image") + '</div>' : "") +
-      text("配图描述", "imagePrompt", c.imagePrompt, 400);
+    if (c.kind === "image") {
+      const sizeHint = slot ? `<p class="small">当前模板内容区 ${slot.w}×${slot.h}（${esc(slot.ratioLabel)}），生成配图将自动匹配该尺寸。` +
+        (c.image && mediaRatioMismatched(c.imageMediaSize, slot) ? "当前配图与现布局比例不同，建议重新生成以铺满画幅。" : "") + "</p>" : "";
+      return (c.image ? '<div class="asset-inline">' +
+        (c.image?.startsWith("/media/") ? btn("收入素材库", "stage-collect", "textbtn") : "") +
+        btn("移除配图", "stage-clear", "textbtn", "image") + '</div>' : "") +
+        text("配图描述", "imagePrompt", c.imagePrompt, 400) + sizeHint;
+    }
     if (c.kind === "asset") return (c.assetId ? '<div class="asset-inline">' + btn("移除素材", "stage-clear", "textbtn", "asset") + '</div>' : "") +
       select("素材运动", "move", [["still", "静止"], ["zoom", "缓慢推近"], ["pan", "平移"]], c.move);
     if (c.kind === "mg") return (c.assetId ? '<div class="asset-inline">' + btn("移除动画","stage-clear","textbtn","mg") + '</div>' : "") +
@@ -520,9 +548,16 @@ const StageStudio = (() => {
   const missingArt = w => w.stagePlan.shots.flatMap((shot, i) =>
     artKinds.has(shot.content.kind) && shot.content.artPrompt?.trim() && !shot.content.art ? [i] : []);
 
-  function artFields(c) {
-    const note = c.art ? (c.artName ? `已选素材：${esc(c.artName)}。` : "已生成插画。") + "画面左侧显示插画，右侧逐条显示要点。"
-      : "生成后，画面左侧显示插画，右侧逐条显示要点。插画由火山方舟按张计费。";
+  function artFields(c, slot) {
+    const art = slot?.art;
+    const placeText = art?.placement === "top"
+      ? "画面上方显示横幅插画，下方逐条显示要点。"
+      : "画面左侧显示插画，右侧逐条显示要点。";
+    const sizeText = art ? `插画区 ${art.w}×${art.h}（${esc(art.ratioLabel)}）。` : "";
+    const mismatch = c.art && art && mediaRatioMismatched(c.artMediaSize, art)
+      ? "当前插画与现布局比例不同，建议重新生成。" : "";
+    const note = (c.art ? (c.artName ? `已选素材：${esc(c.artName)}。` : "已生成插画。") : "生成后，") +
+      placeText + sizeText + mismatch + (c.art ? "" : "插画由火山方舟按张计费。");
     return '<fieldset class="svg-beat-fields stage-art-fields"><legend>本幕插画</legend>' +
       `<label class="field">插画描述<textarea data-stage-field="artPrompt" maxlength="300" rows="3" placeholder="例如：妈妈用带刻度的量杯给孩子倒退烧药混悬液">${esc(c.artPrompt || "")}</textarea></label>` +
       '<div class="asset-inline">' + btn(c.art ? "重新生成插画" : "生成本幕插画", "stage-art", c.art ? "outline" : "primary", "one") +
@@ -532,17 +567,36 @@ const StageStudio = (() => {
       `<p class="small">${note}</p></fieldset>`;
   }
 
-  function illustrationPrompt(w, shot) {
-    const warm = (w.templateTheme || "medical") === "warm";
+  function illustrationPrompt(w, shot, layout, themeDef) {
+    const slot = LayoutEngine.describeMediaSlot(layout || currentLayoutDef(w));
+    const art = slot.art;
+    const theme = themeDef || currentThemeDef(w);
+    const themeId = theme?.id || themeIdFor(w);
+    const isDark = themeId === "builtin:theme/night" || Boolean(theme?.vars && LayoutEngine.isDarkTheme({ themeVars: theme.vars }));
+    const warm = (w.templateTheme || "medical") === "warm" || themeId === "builtin:theme/illus";
     const items = shot.points.items.map(item => item.title).filter(Boolean).join("、");
     const subject = shot.content.artPrompt?.trim() || `表现「${shot.name}」：${items || shot.line.slice(0, 80)}`;
+    const orientLabel = art.orientation === "landscape" ? "横幅" : art.orientation === "portrait" ? "竖幅" : "方形";
+    const placeLine = art.placement === "top"
+      ? `插画放在画面上方的${orientLabel}区域（${art.w}×${art.h}，比例 ${art.ratioLabel}），文字由程序另外叠加在下方`
+      : `插画放在画面左侧的${orientLabel}区域（${art.w}×${art.h}，比例 ${art.ratioLabel}），文字由程序另外叠加在右侧`;
+    const styleLine = isDark
+      ? "风格：深色护眼扁平矢量医学插画，深蓝灰纯色背景（#162236），柔和天蓝（#62b4ff）、薄荷绿（#5ee2a0）与暖珊瑚（#ff7d6b）点缀，线条清晰干净、对比柔和。"
+      : themeId === "builtin:theme/mint"
+        ? "风格：清新临床薄荷扁平矢量医学插画，淡薄荷浅绿纯色背景（#edf8f4），以青绿（#0d9488）与深墨绿（#12322d）为主色，柔和暖橙点缀，线条圆润干净。"
+        : warm
+          ? "风格：温暖亲切的扁平手绘医学插画，柔和暖米白纯色背景（#fdf5e7），深炭蓝细描边（#2c3e50），暖砖红（#cf5228）、柔和草绿（#5c9145）与淡琥珀色点缀，色块干净，轻微纸张质感。"
+          : "风格：现代清爽的扁平矢量医学插画，极浅蓝纯色背景（#eef5fd），以医学蓝（#1466cc）和深藏青（#122d4c）为主色，少量珊瑚橙（#e6592d）点缀，柔和渐变与轻阴影，线条圆润干净。";
+    const compLine = art.orientation === "landscape"
+      ? `构图：严格 ${art.ratioLabel} 横幅构图，核心主体居中或微偏中舒展排布，高度占画幅 65%–75%，左右留出均匀空白；背景纯色铺满，不画边框、卡片、画框或分栏。`
+      : art.orientation === "portrait"
+        ? `构图：严格 ${art.ratioLabel} 竖幅构图，一个清晰主体位于画面中央，约占画面 60%–65%，上下与左右留出均匀安全空白；背景纯色铺满，不画边框、卡片、画框或分栏。`
+        : `构图：严格 ${art.ratioLabel} 方形构图，一个清晰主体位于中央，约占画面 60%，四周留出均匀空白；背景纯色铺满，不画边框、卡片、画框或分栏。`;
     return [
-      "用途：医院药师用药科普短视频的配图插画。插画放在画面左侧的方形区域，文字由程序另外叠加在右侧，插画本身不含任何文字。",
+      `用途：医院药师用药科普短视频的配图插画。${placeLine}，插画本身不含任何文字。`,
       `画面内容：${subject}`,
-      warm
-        ? "风格：温暖亲切的扁平手绘医学插画，柔和暖米白纯色背景（#fdf5e7），深炭蓝细描边（#2c3e50），暖砖红（#cf5228）、柔和草绿（#5c9145）与淡琥珀色点缀，色块干净，轻微纸张质感。"
-        : "风格：现代清爽的扁平矢量医学插画，极浅蓝纯色背景（#eef5fd），以医学蓝（#1466cc）和深藏青（#122d4c）为主色，少量珊瑚橙（#e6592d）点缀，柔和渐变与轻阴影，线条圆润干净。",
-      "构图：1:1 方形，一个清晰主体位于中央，约占画面 60%，四周留出均匀空白；背景纯色铺满，不画边框、卡片、画框或分栏。",
+      styleLine,
+      compLine,
       w.drug && `涉及药品：${w.drug}（通用外观，不画品牌名、商品 Logo 和价格）。`,
       "禁止：画面中不出现任何文字、汉字、字母、数字、标签、对话框文字、品牌名、Logo 或水印；不画医生或主讲人头像；不画红十字标志；不做信息图排版。",
     ].filter(Boolean).join("\n").slice(0, 2100);
@@ -566,7 +620,7 @@ const StageStudio = (() => {
     app.querySelectorAll('[data-stage-production-lock], .stage-rail button').forEach(control => { control.disabled = true; });
   }
 
-  function productionButtons(content) {
+  function productionButtons(content, slot) {
     const {kind} = content;
     let actions = "";
     if (kind === "image") {
@@ -581,7 +635,7 @@ const StageStudio = (() => {
     if (kind !== "image" && config.stageShotProduction) {
       actions += btn(productionTitle(content), "stage-produce", actions ? "outline" : "primary");
     }
-    return (actions ? '<div class="asset-inline">' + actions + '</div>' : "") + (artKinds.has(kind) ? artFields(content) : "");
+    return (actions ? '<div class="asset-inline">' + actions + '</div>' : "") + (artKinds.has(kind) ? artFields(content, slot) : "");
   }
 
   function soundControls(w) {
@@ -615,7 +669,8 @@ const StageStudio = (() => {
     if (!shot) return setup(w);
     selected.set(w, index);
     const tabs = inspector.get(w) || "scene";
-    const layoutMeta = activeLayouts().find(item => item.id === w.stagePlan.layout.id);
+    const layoutMeta = currentLayoutDef(w);
+    const slotDesc = LayoutEngine.describeMediaSlot(layoutMeta);
     const support = layoutMeta?.supports;
     const layoutId = w.stagePlan.layout.id;
     const isQaLayout = layoutId === "builtin:layout/qa-chat" || layoutMeta?.regions?.header?.variant === "question" || Boolean(layoutMeta?.regions?.answer);
@@ -650,7 +705,7 @@ const StageStudio = (() => {
       (isMix ? btn("本幕重新判断", "stage-replan", "outline", "one") : "") +
       (isMix && shot.content.kind !== "mg" && shot.content.mgRequest && config.mgGeneration && (!support || support.includes("mg")) ? `<p class="small">${esc(shot.content.mgRequest)}</p>` +
         btn("可以用 AI 制作 MG 素材","stage-create-mg","outline") : "") + '</div>' : "";
-    const scene = '<span class="label">本幕制作方式</span><div class="chips">' + kindButtons + '</div>' + productionButtons(shot.content) + decision +
+    const scene = '<span class="label">本幕制作方式</span><div class="chips">' + kindButtons + '</div>' + productionButtons(shot.content, slotDesc) + decision +
       '<div id="stage-mg-panel" hidden></div>' +
       (index ? select("幕间转场", "transition", Object.entries(config.stageCatalog.transitions || {fade:"淡入"}), shot.content.transition || "fade") : "") +
       text("本幕标题", "name", shot.name) + `<label class="field">本幕口播<textarea data-stage-field="line" maxlength="450" rows="3">${esc(shot.line)}</textarea></label>` +
@@ -664,7 +719,7 @@ const StageStudio = (() => {
       `<details class="shot-options"><summary>字幕节拍（${shot.cues.length}）</summary>${shot.cues.map((cue,i) =>
         '<div class="tpl-two-col">' + text("字幕", "cue-text:"+i, cue.text, 240) +
         select("聚焦", "cue-focus:"+i, [["all","全幕"],["0","第一项"],["1","第二项"],["2","第三项"],["3","第四项"],["top","上方"],["bottom","下方"],["question","问题"],["answer","答复"],["action","行动"],["outro","片尾"]], cue.focus || "all") + '</div>').join("")}</details>` +
-      contentFields(shot) + '<div class="asset-inline">' + btn("本幕前移", "stage-move", "outline", "-1", index === 0 ? "disabled" : "") +
+      contentFields(shot, slotDesc) + '<div class="asset-inline">' + btn("本幕前移", "stage-move", "outline", "-1", index === 0 ? "disabled" : "") +
       btn("本幕后移", "stage-move", "outline", 1, index === shots.length - 1 ? "disabled" : "") +
       btn("删除本幕", "stage-remove", "textbtn danger", "", shots.length === 1 ? "disabled" : "") + '</div><div class="asset-inline">' +
       btn(esc(shot.sfxName || "选出场音效"),"stage-choose","outline","sfx") +
@@ -900,16 +955,25 @@ const StageStudio = (() => {
     return true;
   }
 
-  function prepareImages(w, mode) {
+  async function prepareImages(w, mode) {
     const p = w.stagePlan;
     const indices = mode === "one" ? [selected.get(w) || 0] : p.shots.flatMap((shot,i) => shot.content.kind === "image" && !shot.content.image ? [i] : []);
     if (!indices.length || w.job || indices.some(i => p.shots[i].content.kind !== "image")) return;
     if (!checkShotText(w, indices)) return;
     if (p.mode === "mix" && countImages(w) > imageBudget(w)) return notify("请先调整 AI 出图上限。", "warn");
-    return authorize(w, indices.length, "images", () => {
-      const data = deck(w);
-      const items = indices.map((index,i) => ({prompt:TemplateVideo.buildCardImagePrompt(data,index,p.shots[index].content.imagePrompt,w.drug), variant:i + 1}));
-      const job = createJob(w, "stage-images", items, {...w.settings, ratio:"16:9"});
+    const layout = await resolveWorkLayout(w);
+    const themeDef = currentThemeDef(w);
+    const slot = LayoutEngine.describeMediaSlot(layout);
+    const pxSize = LayoutEngine.imagePixelSize(w.settings.imageSize, slot.w, slot.h);
+    const settings = { ...w.settings, ratio: slot.arkRatio, targetSize: { w: slot.w, h: slot.h } };
+    const authSettings = { ...settings, sizeLabel: `${slot.ratioLabel} · ${pxSize}` };
+    return authorize({ ...w, settings: authSettings }, indices.length, "images", () => {
+      const data = deck(w, themeDef);
+      const items = indices.map((index,i) => ({
+        prompt: TemplateVideo.buildCardImagePrompt(data, index, p.shots[index].content.imagePrompt, w.drug, layout, themeDef),
+        variant: i + 1,
+      }));
+      const job = createJob(w, "stage-images", items, settings);
       delete job.payload.storyboard;
       Object.assign(job.payload, {template:true, styleReference:false});
       job.stageImageSlots = indices;
@@ -919,14 +983,20 @@ const StageStudio = (() => {
     });
   }
 
-  function prepareArt(w, mode) {
+  async function prepareArt(w, mode) {
     const p = w.stagePlan;
     const indices = mode === "one" ? [selected.get(w) || 0] : missingArt(w);
     if (!indices.length || w.job || indices.some(i => !artKinds.has(p.shots[i].content.kind))) return;
     if (!checkShotText(w, indices)) return;
-    const settings = {...w.settings, ratio:"1:1"};
-    return authorize({...w, settings}, indices.length, "images", () => {
-      const items = indices.map((index,i) => ({prompt:illustrationPrompt(w, p.shots[index]), variant:i + 1}));
+    const layout = await resolveWorkLayout(w);
+    const themeDef = currentThemeDef(w);
+    const slot = LayoutEngine.describeMediaSlot(layout);
+    const art = slot.art;
+    const pxSize = LayoutEngine.imagePixelSize(w.settings.imageSize, art.w, art.h);
+    const settings = { ...w.settings, ratio: art.arkRatio, targetSize: { w: art.w, h: art.h } };
+    const authSettings = { ...settings, sizeLabel: `${art.ratioLabel} · ${pxSize}` };
+    return authorize({ ...w, settings: authSettings }, indices.length, "images", () => {
+      const items = indices.map((index,i) => ({prompt:illustrationPrompt(w, p.shots[index], layout, themeDef), variant:i + 1}));
       const job = createJob(w, "stage-images", items, settings);
       delete job.payload.storyboard;
       Object.assign(job.payload, {template:true, styleReference:false});
@@ -940,14 +1010,19 @@ const StageStudio = (() => {
 
   function installImages(w, indices, output, job) {
     const art = Boolean(job?.stageArt);
+    const targetSize = job?.payload?.settings?.targetSize;
     indices.forEach((index,i) => {
       const shot = w.stagePlan.shots[index];
       const fits = art ? artKinds.has(shot?.content.kind) : shot?.content.kind === "image";
       if (fits && output.images[i]) {
         if (art) {
           shot.content.art = output.images[i];
+          if (targetSize) shot.content.artMediaSize = { w: targetSize.w, h: targetSize.h };
           delete shot.content.artName;
-        } else shot.content.image = output.images[i];
+        } else {
+          shot.content.image = output.images[i];
+          if (targetSize) shot.content.imageMediaSize = { w: targetSize.w, h: targetSize.h };
+        }
         shot.variants[shot.content.kind] = shot.content;
       }
     });
@@ -1080,7 +1155,10 @@ const StageStudio = (() => {
       const content = shot.content;
       const description = content.mgRequest || (shot.line.trim()
         ? `根据这段口播制作无字动画，按口播顺序展示动作：${shot.line.trim().slice(0,160)}` : "");
-      StudioAssets.generateMG({description,workId:w.id,theme:w.templateTheme || "medical",panel,
+      const slot = LayoutEngine.describeMediaSlot(currentLayoutDef(w));
+      StudioAssets.generateMG({
+        description, workId: w.id, theme: w.templateTheme || "medical", panel,
+        mediaSize: { w: slot.w, h: slot.h }, ratioLabel: slot.ratioLabel,
         onClose:() => {
           mgPanels.delete(shot);
           if (panel.parentElement) panel.parentElement.hidden = true;
@@ -1122,9 +1200,15 @@ const StageStudio = (() => {
       }
     } else if (action === "stage-choose" && shot) {
       const content = shot.content;
+      const slot = LayoutEngine.describeMediaSlot(currentLayoutDef(w));
+      const hints = {
+        topic: w.topic,
+        style: w.templateTheme || "medical",
+        ratio: value === "art-image" ? slot.art.ratioLabel : slot.ratioLabel,
+      };
       StudioAssets.pick(value === "sfx" ? ["sfx"] : value === "image" || value === "art-image" ? ["image"] : value === "mg" ? ["lottie","mg"] : ["image", "svg"], item => {
-        if (value === "image") content.image = item.url;
-        else if (value === "art-image") { content.art = item.url; content.artName = item.name; }
+        if (value === "image") { content.image = item.url; delete content.imageMediaSize; }
+        else if (value === "art-image") { content.art = item.url; content.artName = item.name; delete content.artMediaSize; }
         else if (value === "asset" || value === "mg") {
           content.assetId=item.id;
           content.assetName=item.name;
@@ -1134,17 +1218,19 @@ const StageStudio = (() => {
         else { content.libraryArtId=item.id; content.libraryArtName=item.name; }
         shot.variants[content.kind] = content;
         touch(w,true); render(true);
-      });
+      }, hints);
       return true;
     } else if (action === "stage-clear" && shot) {
       if (value === "sfx") { delete shot.sfxId; delete shot.sfxName; }
-      for (const key of ({image:["image"],asset:["assetId","assetName"],mg:["assetId","assetName"],art:["libraryArtId","libraryArtName"],"art-image":["art","artName"]}[value] || [])) delete shot.content[key];
+      for (const key of ({image:["image","imageMediaSize"],asset:["assetId","assetName"],mg:["assetId","assetName"],art:["libraryArtId","libraryArtName"],"art-image":["art","artName","artMediaSize"]}[value] || [])) delete shot.content[key];
       touch(w,true);
     } else if (action === "stage-collect" && value === "art" && shot?.content.art) {
-      StudioAssets.collect(shot.content.art,{name:shot.name,topic:w.topic,ratio:"1:1",style:w.templateTheme || "medical",prompt:shot.content.artPrompt || ""});
+      const slot = LayoutEngine.describeMediaSlot(currentLayoutDef(w));
+      StudioAssets.collect(shot.content.art,{name:shot.name,topic:w.topic,ratio:slot.art.ratioLabel,style:w.templateTheme || "medical",prompt:shot.content.artPrompt || ""});
       return true;
     } else if (action === "stage-collect" && shot?.content.image) {
-      StudioAssets.collect(shot.content.image,{name:shot.name,topic:w.topic,ratio:"16:9",style:w.templateTheme || "medical",prompt:shot.content.imagePrompt || ""});
+      const slot = LayoutEngine.describeMediaSlot(currentLayoutDef(w));
+      StudioAssets.collect(shot.content.image,{name:shot.name,topic:w.topic,ratio:slot.ratioLabel,style:w.templateTheme || "medical",prompt:shot.content.imagePrompt || ""});
       return true;
     } else if (action === "stage-beat-add" && shot?.content.beats?.length < 3) {
       shot.content.beats.push({action:"log",label:"核对记录",line:shot.line.slice(-55) || "核对记录"}); touch(w,true);

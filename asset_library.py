@@ -399,8 +399,8 @@ class LocalLibrary:
             if item["kind"] != "layout":
                 continue
             definition, _, _ = self.layout(item["id"])
-            layouts.append({**item, "aspect": definition["aspect"], "supports": layout_supports(definition, item),
-                            "regions": definition["regions"]})
+            layouts.append({**item, "aspect": definition["aspect"], "canvas": definition["canvas"],
+                            "supports": layout_supports(definition, item), "regions": definition["regions"]})
         return layouts
 
     def copy_layout(self, payload):
@@ -541,6 +541,8 @@ class LocalLibrary:
         asset = motion_asset.mg_package(json.dumps(generated["spec"], ensure_ascii=False).encode("utf-8"), clean_svg)
         preview_renderer({**asset, "theme": generated["theme"]}, directory)
         record = {key: generated[key] for key in ("name", "useFor", "description", "revision", "theme", "repairCount", "repairReasons")}
+        if generated.get("mediaSize"):
+            record["mediaSize"] = generated["mediaSize"]
         prefix = "/library-pending/" + quote(draft_id, safe="")
         record.update(id=draft_id, kind="mg", status="pending", model=model, duration=asset["duration"],
                       thumbnailUrl=prefix + "/poster.jpg", previewUrl=prefix + "/preview.mp4", parentId=parent_id)
@@ -578,6 +580,9 @@ class LocalLibrary:
                     source = {"name":record["name"], "license":"AI 生成 · 已人工确认", "credit":"希息药事工作台",
                               "tags": ", ".join(dict.fromkeys(tag_titles)), "model":record["model"],
                               "prompt": record["description"] + ("\n" + record["revision"] if record["revision"] else "")}
+                    if record.get("mediaSize"):
+                        mw, mh = record["mediaSize"]["w"], record["mediaSize"]["h"]
+                        source["ratio"] = f"{mw / mh:.2f}:1" if mw >= mh else f"1:{mh / mw:.2f}"
                     cache_key = hashlib.sha256(draft_id.encode()).hexdigest()
                     preview = self.root / "previews" / cache_key
                     preview.mkdir(parents=True, exist_ok=True)
@@ -585,8 +590,11 @@ class LocalLibrary:
                         temp = preview / (filename + ".tmp")
                         temp.write_bytes((directory / filename).read_bytes())
                         temp.replace(preview / filename)
-                    item = self.add("mg", raw, source, None, "ai", extra={"originId":draft_id, "useFor":record["useFor"],
-                                    "markers":motion["markers"], "previewDigest":cache_key, "palette":{}})
+                    extra = {"originId":draft_id, "useFor":record["useFor"],
+                             "markers":motion["markers"], "previewDigest":cache_key, "palette":{}}
+                    if record.get("mediaSize"):
+                        extra["mediaSize"] = record["mediaSize"]
+                    item = self.add("mg", raw, source, None, "ai", extra=extra)
                 record.update(status="confirmed", assetId=item["id"])
             else:
                 record["status"] = "discarded"

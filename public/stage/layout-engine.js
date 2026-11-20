@@ -280,8 +280,156 @@
 
   function mediaSize(layout, stage = "explain") {
     if (!layout) return { w: 960, h: 540 };
-    const region = regionsFor(layout, stage).media;
-    return { w: region.w * layout.canvas.w / 100, h: region.h * layout.canvas.h / 100 };
+    const canvas = layout.canvas || { w: 1280, h: 720 };
+    const region = regionsFor(layout, stage)?.media;
+    if (!region) return { w: 960, h: 540 };
+    return { w: region.w * canvas.w / 100, h: region.h * canvas.h / 100 };
+  }
+
+  const NAMED_RATIOS = [
+    ["16:9", 16 / 9],
+    ["4:3", 4 / 3],
+    ["1:1", 1],
+    ["3:4", 3 / 4],
+    ["9:16", 9 / 16],
+  ];
+  const ARK_RATIOS = [
+    ["16:9", 16 / 9],
+    ["1:1", 1],
+    ["3:4", 3 / 4],
+    ["9:16", 9 / 16],
+  ];
+  const IMAGE_PRESETS = {
+    "1K": ["1424x800", "800x1424", "864x1152", "1024x1024"],
+    "2K": ["2848x1600", "1600x2848", "1728x2304", "2048x2048"],
+    "4K": ["5504x3040", "3040x5504", "3520x4704", "4096x4096"],
+  };
+  const IMAGE_TIERS = {
+    "1K": [1120000, 950000, 2500000, 2048],
+    "2K": [4194304, 3720000, 4600000, 4096],
+    "4K": [14500000, 10500000, 16700000, 6192],
+  };
+
+  function formatRatioLabel(w, h) {
+    const ar = h ? w / h : 16 / 9;
+    for (const [label, target] of NAMED_RATIOS) {
+      if (Math.abs(ar - target) / target <= 0.025) return label;
+    }
+    return ar >= 1 ? `${ar.toFixed(2)}:1` : `1:${(1 / ar).toFixed(2)}`;
+  }
+
+  function nearestArkRatio(w, h) {
+    const ar = h ? w / h : 16 / 9;
+    let best = "16:9";
+    let bestDiff = Infinity;
+    for (const [label, target] of ARK_RATIOS) {
+      const diff = Math.abs(Math.log(ar / target));
+      if (diff < bestDiff) { bestDiff = diff; best = label; }
+    }
+    return best;
+  }
+
+  function imagePixelSize(tier, w, h) {
+    const presets = IMAGE_PRESETS[tier] || IMAGE_PRESETS["2K"];
+    const [targetPx, minPx, maxPx, maxSide] = IMAGE_TIERS[tier] || IMAGE_TIERS["2K"];
+    const ar = h ? w / h : 16 / 9;
+    for (const preset of presets) {
+      const [pw, ph] = preset.split("x").map(Number);
+      if (Math.abs(ar - pw / ph) / ar <= 0.015) return preset;
+    }
+    const maxAligned = Math.floor(maxSide / 16) * 16;
+    let rawW = Math.sqrt(targetPx * ar);
+    let rawH = Math.sqrt(targetPx / ar);
+    if (Math.max(rawW, rawH) > maxAligned) {
+      const scale = maxAligned / Math.max(rawW, rawH);
+      rawW *= scale;
+      rawH *= scale;
+    }
+    let pw = Math.min(maxAligned, Math.max(64, Math.round(rawW / 16) * 16));
+    let ph = Math.min(maxAligned, Math.max(64, Math.round(rawH / 16) * 16));
+    while (pw * ph > maxPx && (pw > 64 || ph > 64)) {
+      const cand = [];
+      if (pw > 64) cand.push([Math.abs((pw - 16) / ph - ar), pw - 16, ph]);
+      if (ph > 64) cand.push([Math.abs(pw / (ph - 16) - ar), pw, ph - 16]);
+      cand.sort((a, b) => a[0] - b[0]);
+      [, pw, ph] = cand[0];
+    }
+    while (pw * ph < minPx && (pw < maxAligned || ph < maxAligned)) {
+      const cand = [];
+      if (pw + 16 <= maxAligned) cand.push([Math.abs((pw + 16) / ph - ar), pw + 16, ph]);
+      if (ph + 16 <= maxAligned) cand.push([Math.abs(pw / (ph + 16) - ar), pw, ph + 16]);
+      if (!cand.length) break;
+      cand.sort((a, b) => a[0] - b[0]);
+      [, pw, ph] = cand[0];
+    }
+    return `${pw}x${ph}`;
+  }
+
+  function describeMediaSlot(layoutOrSlot, stage = "explain") {
+    if (layoutOrSlot && typeof layoutOrSlot === "object" && Number.isFinite(layoutOrSlot.w) && Number.isFinite(layoutOrSlot.h) && layoutOrSlot.art) {
+      return layoutOrSlot;
+    }
+    const layout = layoutOrSlot && typeof layoutOrSlot === "object" ? layoutOrSlot : null;
+    const regions = regionsFor(layout, stage) || {};
+    const raw = mediaSize(layout, stage);
+    const w = Math.max(64, Math.round(raw.w));
+    const h = Math.max(64, Math.round(raw.h));
+    const aspect = Number((w / h).toFixed(4));
+    const shape = aspect < 0.85 ? "portrait"
+      : aspect >= 2.2 && h <= 420 ? "shallow-wide"
+        : aspect >= 2.2 ? "ultrawide"
+          : w <= 720 ? "narrow"
+            : h <= 420 ? "shallow"
+              : (w <= 860 || h <= 480) ? "compact"
+                : "standard";
+
+    let artPlacement = "left", artW, artH;
+    if (w <= 720) {
+      artPlacement = "top";
+      artW = Math.max(120, w - 36);
+      artH = Math.max(120, Math.min(200, Math.round(h * 0.39)));
+    } else if (h <= 420) {
+      artW = Math.max(120, Math.round((w - 40) * 0.36));
+      artH = Math.max(120, h - 28);
+    } else if (aspect >= 2.2) {
+      artW = Math.max(120, Math.round((w - 56) * 0.38));
+      artH = Math.max(120, h - 40);
+    } else if (w <= 860 || h <= 480) {
+      artW = Math.max(120, Math.round((w - 40) * 0.40));
+      artH = Math.max(120, h - 32);
+    } else {
+      artW = Math.max(120, Math.round((w - 54) * 0.41));
+      artH = Math.max(120, h - 48);
+    }
+    const artAspect = Number((artW / artH).toFixed(4));
+    const artOrientation = artAspect > 1.15 ? "landscape" : artAspect < 0.87 ? "portrait" : "square";
+
+    const sizeClasses = [];
+    if (w <= 720) sizeClasses.push("pt-slot-narrow");
+    else if (w <= 860 || (h <= 480 && h > 420)) sizeClasses.push("pt-slot-compact");
+    if (h <= 420) sizeClasses.push("pt-slot-shallow");
+    if (aspect >= 2.2) sizeClasses.push("pt-slot-ultrawide");
+    if (aspect < 0.85) sizeClasses.push("pt-slot-portrait");
+
+    return {
+      w, h, aspect,
+      ratioLabel: formatRatioLabel(w, h),
+      arkRatio: nearestArkRatio(w, h),
+      shape,
+      sizeClasses,
+      hasAnswer: Boolean(regions.answer),
+      hasHeadline: Boolean(regions.headline),
+      hasKeypoints: Boolean(regions.keypoints),
+      isFlush: regions.media?.variant === "flush",
+      hasNavPanel: regions.chapters?.variant === "nav-panel",
+      art: {
+        w: artW, h: artH, aspect: artAspect,
+        ratioLabel: formatRatioLabel(artW, artH),
+        arkRatio: nearestArkRatio(artW, artH),
+        placement: artPlacement,
+        orientation: artOrientation,
+      },
+    };
   }
 
   function placement(layout, region) {
@@ -640,6 +788,14 @@
     const mediaClasses = ["pt-media-slot", "media-slot"];
     if (media?.variant === "flush") mediaClasses.push("pt-media-flush");
     if (regions?.answer) mediaClasses.push("pt-media-in-answer");
+    const slotDesc = describeMediaSlot(layout, opts.stage || effectiveLayout);
+    const nonClassicMedia = isV2 || slotDesc.w !== 960 || slotDesc.h !== 540;
+    if (nonClassicMedia && slotDesc.sizeClasses.length) {
+      mediaClasses.push(...slotDesc.sizeClasses);
+    }
+    const mediaAttrs = nonClassicMedia
+      ? ` data-media-w="${slotDesc.w}" data-media-h="${slotDesc.h}"`
+      : "";
 
     let bodyHtml;
     let bodyPlacement = "";
@@ -657,7 +813,7 @@
         : "";
       bodyHtml = `
         ${inlinePresenter}
-        <section class="${mediaClasses.join(" ")}"${attach("media")}>
+        <section class="${mediaClasses.join(" ")}"${mediaAttrs}${attach("media")}>
           ${mediaHtml}
           ${opts.contentTitle ? `<h2 class="stage-media-title">${xmlEsc(opts.contentTitle)}</h2>` : ""}
         </section>
@@ -815,5 +971,8 @@
     if (pending.length) return Promise.all(pending);
   }
 
-  global.LayoutEngine = { render, update, mediaSize, renderAvatarProgress, isDarkTheme, safeThemeVars, safeColor, fitPosterHeadline };
+  global.LayoutEngine = {
+    render, update, mediaSize, describeMediaSlot, imagePixelSize, formatRatioLabel,
+    renderAvatarProgress, isDarkTheme, safeThemeVars, safeColor, fitPosterHeadline,
+  };
 })(globalThis);

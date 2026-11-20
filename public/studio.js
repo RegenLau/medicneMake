@@ -2954,7 +2954,7 @@ function authorize(w, count, kind, fn, voicedCount = count, draftOptions) {
       '</span><span class="pill">' +
       esc(kind === "video" ? w.settings.resolution : w.settings.imageSize) +
       '</span><span class="pill">画幅 ' +
-      esc(w.settings.ratio) +
+      esc(w.settings.sizeLabel || w.settings.ratio) +
       "</span></div>"
   );
   const speechSummary = usesSpeech

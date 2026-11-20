@@ -573,14 +573,22 @@ const StudioAssets = (() => {
     }
     panel.querySelector("[data-adopt-mg]").addEventListener("click",()=>decide(true));
     panel.querySelector("[data-discard-mg]").addEventListener("click",()=>decide(false));
-    panel.querySelector("[data-revise-mg]").addEventListener("click",()=>generateMG({...options,parent:item,description:item.description,theme:item.theme}));
+    panel.querySelector("[data-revise-mg]").addEventListener("click",()=>generateMG({
+      ...options, parent: item, description: item.description, theme: item.theme,
+      mediaSize: item.mediaSize || options.mediaSize,
+    }));
   }
 
   function generateMG(options = {}) {
     if (!config.deepseekKeyPresent) return openApiKeys("deepseek");
     const modelList = Object.entries(config.textModels || {});
     const selected = options.parent?.model || resolveTextModel(current()?.settings || data.settings);
+    const mediaSize = options.mediaSize || options.parent?.mediaSize || null;
+    const sizeNote = mediaSize
+      ? `<p class="small">适配当前模板内容尺寸：${mediaSize.w}×${mediaSize.h}${options.ratioLabel ? `（${esc(options.ratioLabel)}）` : ""}。</p>`
+      : "";
     const container = openMGPanel(options,options.parent ? "重新生成 MG 素材" : "AI 制作 MG 素材",`<form class="asset-form">
+      ${sizeNote}
       <label class="field">动作描述<textarea name="description" required maxlength="200" rows="3"
         ${options.parent ? "readonly" : ""}>${esc(options.description || "")}</textarea></label>
       ${options.parent ? '<label class="field">补充要求<textarea name="revision" required maxlength="220" rows="3"></textarea></label>' : ""}
@@ -603,7 +611,9 @@ const StudioAssets = (() => {
       if (close) close.disabled=true;
       errorBox.hidden=true;
       const mg={description:form.elements.description.value.trim(),revision:form.elements.revision?.value.trim() || "",
-        theme:form.elements.theme.value,...(options.parent ? {parentId:options.parent.id} : {})};
+        theme:form.elements.theme.value,
+        ...(mediaSize ? {mediaSize} : {}),
+        ...(options.parent ? {parentId:options.parent.id} : {})};
       const textModel=form.elements.model.value;
       const identity=JSON.stringify([mg,textModel]);
       if (identity !== signature) {

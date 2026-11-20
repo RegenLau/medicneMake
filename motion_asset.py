@@ -181,7 +181,7 @@ MG_TRACK_FIELDS = {"part", "prop", "from", "to", "start", "end", "ease"}
 PART_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,31}")
 
 
-def mg_package(data, clean_svg):
+def mg_package(data, clean_svg, expected_ratio=None):
     import xml.etree.ElementTree as ET
 
     if not 0 < len(data) <= MG_LIMIT:
@@ -203,9 +203,14 @@ def mg_package(data, clean_svg):
         canvas = [float(value) for value in bounds]
     except ValueError:
         canvas = []
-    if (len(canvas) != 4 or not all(number(x, -4000, 4000) for x in canvas)
-            or min(canvas[2:]) <= 0 or abs(canvas[2] / canvas[3] - 16 / 9) > .02):
-        raise ValueError("MG 素材需要 16:9 的 SVG viewBox，例如 0 0 800 450。")
+    if len(canvas) != 4 or not all(number(x, -4000, 4000) for x in canvas) or min(canvas[2:]) <= 0:
+        raise ValueError("MG 素材需要有效的 SVG viewBox，例如 0 0 800 450。")
+    ratio = canvas[2] / canvas[3]
+    if expected_ratio is not None:
+        if abs(ratio - expected_ratio) / expected_ratio > .05:
+            raise ValueError(f"MG 素材的 SVG viewBox 宽高比应匹配目标画幅（约 {expected_ratio:.2f}:1）。")
+    elif not .45 <= ratio <= 4.0:
+        raise ValueError("MG 素材的 SVG viewBox 宽高比应在 0.45 到 4.0 之间。")
     nodes = list(root.iter())
     parts = [element.get("data-part") for element in nodes if element.get("data-part")]
     if not parts or len(parts) != len(set(parts)) or len(nodes) > 300:
@@ -239,4 +244,5 @@ def mg_package(data, clean_svg):
     ):
         raise ValueError("MG 音效事件必须有有效的 type 和 0 到 1 的时间，最多 12 项。")
     return {"kind": "mg", "svg": svg.decode("utf-8"), "tracks": tracks, "events": events, "duration": duration,
+            "viewBox": {"w": canvas[2], "h": canvas[3]},
             "markers": [{"name": "sfx:" + row["type"], "t": row["t"] * duration, "d": 0} for row in events]}

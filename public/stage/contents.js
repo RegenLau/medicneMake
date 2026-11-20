@@ -13,14 +13,42 @@
     return cues.find((cue) => time < cue.end) || cues.at(-1);
   }
 
+  const imageAspects = new Map();
+
+  function probeAspect(src) {
+    if (!src || imageAspects.has(src)) return Promise.resolve();
+    return new Promise((resolve) => {
+      const img = new Image();
+      const finish = () => {
+        if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+          imageAspects.set(src, img.naturalWidth / img.naturalHeight);
+        }
+        resolve();
+      };
+      img.onload = finish;
+      img.onerror = () => resolve();
+      img.src = src;
+      if (img.complete) finish();
+    });
+  }
+
   const image = {
-    html(slide, { mapSrc, focus, hasOutroImage, imageFocus = false, theme }) {
+    async prepare(shot, { slide, mapSrc }) {
+      const urls = [slide?.contentImage, slide?.outroImage].filter(Boolean).map((u) => (mapSrc ? mapSrc(u) : u));
+      await Promise.all(urls.map(probeAspect));
+    },
+    html(slide, { mapSrc, focus, hasOutroImage, imageFocus = false, theme, size, compatibility }) {
       const url = hasOutroImage ? slide.outroImage : slide.contentImage;
       if (!url) return TemplateVideo.renderFallbackCard(slide, "all");
-      const box = imageFocus && TemplateVideo.resolveFocusBox(slide, focus);
+      const mapped = mapSrc(url);
+      const natAr = imageAspects.get(mapped);
+      const slotAr = size && size.w > 0 && size.h > 0 ? size.w / size.h : null;
+      const useContain = Boolean(!compatibility && natAr && slotAr && Math.abs(natAr - slotAr) / slotAr > 0.12);
+      const box = !useContain && imageFocus && TemplateVideo.resolveFocusBox(slide, focus);
       const scale = box ? 1.045 : 1;
       const style = box ? ` style="transform:scale(${scale});transform-origin:${box.x + box.w / 2}% ${box.y + box.h / 2}%"` : "";
-      return `<img class="pt-media-img" src="${attr(mapSrc(url))}" alt=""${style} />` +
+      const cls = useContain ? "pt-media-img is-contain" : "pt-media-img";
+      return `<img class="${cls}" src="${attr(mapped)}" alt=""${style} />` +
         (box ? TemplateVideo.renderSpotlightSvg(slide, focus, theme) : "");
     },
     mount(slot) { return { slot }; },
@@ -91,16 +119,16 @@
   };
 
   const svg = {
-    html(shot, progress, theme, includeHeading = true, deck = null) { return StageSvgContent.content(shot, clamp(progress), theme, includeHeading, deck); },
+    html(shot, progress, theme, includeHeading = true, deck = null, size = null) { return StageSvgContent.content(shot, clamp(progress), theme, includeHeading, deck, size); },
     mount(slot, shot, { layoutTitle }) {
       const drawing = slot.ownerDocument.createElement("div");
       drawing.className = "stage-svg-drawing";
       slot.append(drawing);
       return { slot: drawing, includeHeading: !layoutTitle };
     },
-    draw(dom, shot, time, { slide, theme, deck }) {
+    draw(dom, shot, time, { slide, theme, deck, size }) {
       const duration = shot.motionSeconds ?? shot.end - shot.start;
-      dom.slot.innerHTML = svg.html(slide, duration > 0 ? time / duration : 1, theme, dom.includeHeading, deck);
+      dom.slot.innerHTML = svg.html(slide, duration > 0 ? time / duration : 1, theme, dom.includeHeading, deck, size);
     },
     events: shot => StageSvgContent.events(shot),
   };

@@ -1726,3 +1726,129 @@
 .pt-frame.is-dark .pt-card-fallback.pt-has-focus .pt-fb-tip-bar.is-focused {
   color: var(--v-band);
 }
+
+.pt-media-img.is-contain {
+  object-fit: contain;
+}
+
+/* ---- Responsive fallback infographic cards by media slot dimensions ---- */
+
+/* Shallow slots (h <= 420, e.g. qa-chat 1120x388) */
+.pt-slot-shallow .pt-card-fallback { padding: 12px 22px; }
+.pt-slot-shallow .pt-fb-headline { font-size: 23px; line-height: 1.2; }
+.pt-slot-shallow .pt-fb-explain-lead { font-size: 14.5px; margin-top: 3px; }
+.pt-slot-shallow .pt-fb-cover { gap: 10px; padding: 6px 12px; }
+.pt-slot-shallow .pt-fb-cover-title { font-size: 28px; }
+.pt-slot-shallow .pt-fb-cover-lead { font-size: 15.5px; line-height: 1.38; }
+.pt-slot-shallow .pt-fb-pill { padding: 7px 13px; font-size: 14px; }
+.pt-slot-shallow .pt-fb-explain-grid { margin: 8px 0 6px; gap: 10px; }
+.pt-slot-shallow .pt-fb-explain-grid.is-three { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.pt-slot-shallow .pt-fb-explain-card { padding: 10px 14px; gap: 10px; border-radius: 13px; }
+.pt-slot-shallow .pt-fb-explain-grid.is-one .pt-fb-explain-card { padding: 18px 24px; }
+.pt-slot-shallow .pt-fb-explain-grid.is-two .pt-fb-explain-card { padding: 14px 18px; gap: 8px; }
+.pt-slot-shallow .pt-fb-explain-icon { width: 34px; height: 34px; border-radius: 10px; }
+.pt-slot-shallow .pt-fb-explain-card h3 { font-size: 16.5px; }
+.pt-slot-shallow .pt-fb-explain-card p { font-size: 13.5px; line-height: 1.34; margin-top: 3px; }
+.pt-slot-shallow .pt-fb-compare-grid { margin: 8px 0 6px; gap: 12px; }
+.pt-slot-shallow .pt-fb-compare-col { padding: 11px 14px; border-radius: 14px; }
+.pt-slot-shallow .pt-fb-chip { font-size: 16px; padding: 4px 12px; }
+.pt-slot-shallow .pt-fb-points { margin-top: 8px; gap: 6px; }
+.pt-slot-shallow .pt-fb-points li { font-size: 14px; line-height: 1.34; gap: 7px; }
+.pt-slot-shallow .pt-fb-compare-foot { margin-top: 8px; padding: 6px 10px; font-size: 13px; }
+.pt-slot-shallow .pt-fb-steps-row { margin: 8px 0 6px; gap: 10px; }
+.pt-slot-shallow .pt-fb-step-tile { padding: 10px 12px; gap: 5px; border-radius: 13px; }
+.pt-slot-shallow .pt-fb-step-badge { font-size: 12px; padding: 2px 9px; }
+.pt-slot-shallow .pt-fb-step-tile h3 { font-size: 16.5px; }
+.pt-slot-shallow .pt-fb-step-tile p { font-size: 13px; line-height: 1.34; }
+.pt-slot-shallow .pt-fb-check-strip { padding: 7px 10px; gap: 8px; }
+.pt-slot-shallow .pt-fb-check-cell { font-size: 13px; }
+.pt-slot-shallow .pt-fb-warn-grid { margin: 8px 0 6px; gap: 10px; }
+.pt-slot-shallow .pt-fb-warn-grid.is-three { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.pt-slot-shallow .pt-fb-warn-tile { padding: 10px 14px; gap: 10px; border-radius: 13px; }
+.pt-slot-shallow .pt-fb-warn-icon { width: 36px; height: 36px; border-radius: 10px; }
+.pt-slot-shallow .pt-fb-warn-tile h3 { font-size: 16.5px; margin-bottom: 2px; }
+.pt-slot-shallow .pt-fb-warn-tile p { font-size: 13.5px; line-height: 1.34; }
+.pt-slot-shallow .pt-fb-summary-list { margin: 8px 0 6px; gap: 6px; }
+.pt-slot-shallow .pt-fb-summary-list.is-four { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pt-slot-shallow .pt-fb-summary-row { padding: 8px 14px; gap: 11px; border-radius: 12px; }
+.pt-slot-shallow .pt-fb-summary-num { width: 28px; height: 28px; font-size: 14.5px; border-radius: 8px; }
+.pt-slot-shallow .pt-fb-summary-text strong { font-size: 16.5px; }
+.pt-slot-shallow .pt-fb-summary-text span { font-size: 13px; line-height: 1.3; }
+.pt-slot-shallow .pt-fb-tip-bar { padding: 7px 14px; font-size: 13.5px; }
+
+/* Ultra-wide non-shallow slots (e.g. broadcast 1280x504) */
+.pt-slot-ultrawide:not(.pt-slot-shallow) .pt-card-fallback { padding: 18px 30px; }
+.pt-slot-ultrawide:not(.pt-slot-shallow) .pt-fb-explain-grid.is-three,
+.pt-slot-ultrawide:not(.pt-slot-shallow) .pt-fb-warn-grid.is-three { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+
+/* Compact slots (e.g. takeaway 820x460) */
+.pt-slot-compact .pt-card-fallback { padding: 16px 22px 14px; }
+.pt-slot-compact .pt-fb-headline { font-size: 25px; }
+.pt-slot-compact .pt-fb-explain-lead { font-size: 15.5px; }
+.pt-slot-compact .pt-fb-cover-title { font-size: 31px; }
+.pt-slot-compact .pt-fb-cover-lead { font-size: 16.5px; }
+.pt-slot-compact .pt-fb-explain-grid,
+.pt-slot-compact .pt-fb-compare-grid,
+.pt-slot-compact .pt-fb-steps-row,
+.pt-slot-compact .pt-fb-warn-grid,
+.pt-slot-compact .pt-fb-summary-list { margin: 10px 0 8px; gap: 10px; }
+.pt-slot-compact .pt-fb-explain-card,
+.pt-slot-compact .pt-fb-warn-tile { padding: 12px 15px; gap: 11px; }
+.pt-slot-compact .pt-fb-explain-card h3,
+.pt-slot-compact .pt-fb-step-tile h3,
+.pt-slot-compact .pt-fb-warn-tile h3,
+.pt-slot-compact .pt-fb-summary-text strong { font-size: 17px; }
+.pt-slot-compact .pt-fb-explain-card p,
+.pt-slot-compact .pt-fb-step-tile p,
+.pt-slot-compact .pt-fb-warn-tile p,
+.pt-slot-compact .pt-fb-summary-text span { font-size: 13.5px; line-height: 1.38; }
+.pt-slot-compact .pt-fb-step-tile { padding: 12px 12px; gap: 6px; }
+.pt-slot-compact .pt-fb-compare-col { padding: 13px 15px; }
+.pt-slot-compact .pt-fb-chip { font-size: 16.5px; padding: 5px 12px; }
+.pt-slot-compact .pt-fb-points li { font-size: 14.5px; }
+.pt-slot-compact .pt-fb-summary-row { padding: 9px 14px; gap: 12px; }
+.pt-slot-compact .pt-fb-summary-num { width: 32px; height: 32px; font-size: 15.5px; }
+.pt-slot-compact .pt-fb-tip-bar { padding: 8px 14px; font-size: 14px; }
+
+/* Narrow slots (w <= 720, e.g. headline 642x510) */
+.pt-slot-narrow .pt-card-fallback { padding: 16px 18px 14px; }
+.pt-slot-narrow .pt-fb-headline { font-size: 22px; line-height: 1.24; }
+.pt-slot-narrow .pt-fb-explain-lead { font-size: 14.5px; margin-top: 4px; }
+.pt-slot-narrow .pt-fb-cover { gap: 12px; padding: 6px; }
+.pt-slot-narrow .pt-fb-cover-title { font-size: 28px; }
+.pt-slot-narrow .pt-fb-cover-lead { font-size: 15.5px; }
+.pt-slot-narrow .pt-fb-pill { padding: 7px 12px; font-size: 14px; }
+.pt-slot-narrow .pt-fb-explain-grid,
+.pt-slot-narrow .pt-fb-compare-grid,
+.pt-slot-narrow .pt-fb-steps-row,
+.pt-slot-narrow .pt-fb-warn-grid,
+.pt-slot-narrow .pt-fb-summary-list { margin: 10px 0 8px; gap: 9px; }
+.pt-slot-narrow .pt-fb-steps-row.is-four { grid-template-columns: 1fr 1fr !important; gap: 9px; }
+.pt-slot-narrow .pt-fb-compare-grid.is-three { grid-template-columns: 1fr !important; gap: 7px; margin: 7px 0; }
+.pt-slot-narrow .pt-fb-compare-grid.is-three .pt-fb-compare-col { padding: 9px 12px; }
+.pt-slot-narrow .pt-fb-compare-grid.is-three .pt-fb-points { flex-direction: row; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; }
+.pt-slot-narrow .pt-fb-compare-grid.is-three .pt-fb-points li { font-size: 13px; line-height: 1.3; gap: 5px; }
+.pt-slot-narrow .pt-fb-compare-grid.is-three .pt-fb-chip { font-size: 14.5px; padding: 3px 10px; }
+.pt-slot-narrow .pt-fb-check-strip { grid-template-columns: 1fr 1fr !important; gap: 6px; padding: 8px 10px; }
+.pt-slot-narrow .pt-fb-check-cell { font-size: 13px; }
+.pt-slot-narrow .pt-fb-explain-card,
+.pt-slot-narrow .pt-fb-warn-tile { padding: 11px 13px; gap: 10px; border-radius: 13px; }
+.pt-slot-narrow .pt-fb-explain-icon,
+.pt-slot-narrow .pt-fb-warn-icon { width: 34px; height: 34px; border-radius: 10px; }
+.pt-slot-narrow .pt-fb-explain-card h3,
+.pt-slot-narrow .pt-fb-step-tile h3,
+.pt-slot-narrow .pt-fb-warn-tile h3,
+.pt-slot-narrow .pt-fb-summary-text strong { font-size: 16.5px; }
+.pt-slot-narrow .pt-fb-explain-card p,
+.pt-slot-narrow .pt-fb-step-tile p,
+.pt-slot-narrow .pt-fb-warn-tile p,
+.pt-slot-narrow .pt-fb-summary-text span { font-size: 13px; line-height: 1.36; }
+.pt-slot-narrow .pt-fb-step-tile { padding: 11px 11px; gap: 5px; border-radius: 13px; }
+.pt-slot-narrow .pt-fb-step-badge { font-size: 12px; padding: 2px 8px; }
+.pt-slot-narrow .pt-fb-compare-col { padding: 12px 13px; border-radius: 14px; }
+.pt-slot-narrow .pt-fb-chip { font-size: 15.5px; padding: 4px 11px; }
+.pt-slot-narrow .pt-fb-points { margin-top: 8px; gap: 6px; }
+.pt-slot-narrow .pt-fb-points li { font-size: 13.5px; line-height: 1.36; }
+.pt-slot-narrow .pt-fb-summary-row { padding: 9px 13px; gap: 10px; border-radius: 12px; }
+.pt-slot-narrow .pt-fb-summary-num { width: 30px; height: 30px; font-size: 14.5px; }
+.pt-slot-narrow .pt-fb-tip-bar { padding: 7px 12px; font-size: 13.5px; }

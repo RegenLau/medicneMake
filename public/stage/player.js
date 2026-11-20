@@ -42,7 +42,10 @@
       if (bgImg.decode) await bgImg.decode().catch(() => {});
     }
     await Promise.all(input.shots.map((shot,index) =>
-      Contents[shot.kind].prepare?.(shot, {deck, theme:deck.theme, slide:deck.slides[index], index})));
+      Contents[shot.kind].prepare?.(shot, {
+        deck, theme: deck.theme, slide: deck.slides[index], index,
+        mapSrc, layout: input.layout, size: LayoutEngine.mediaSize(input.layout, "explain"),
+      })));
   }
 
   const mapSrc = (url) => imgMap.get(url) || url || "";
@@ -125,6 +128,7 @@
     const context = {
       size: LayoutEngine.mediaSize(plan.layout, stage),
       theme: deck.theme,
+      compatibility: plan.compatibility,
       imageFocus: plan.imageFocus === true,
       focus, slide, imgMap, mapSrc, deck, index: current, total: plan.shots.length,
       layoutTitle: shot.kind === "svg" && !plan.compatibility,

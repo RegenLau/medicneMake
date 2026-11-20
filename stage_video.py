@@ -1,5 +1,6 @@
 """Validated workbench input for the shared video stage."""
 
+import math
 from urllib.parse import unquote
 
 import asset_library
@@ -18,6 +19,110 @@ VERDICT_TONES = frozenset(("ok", "no", "warn"))
 SLIDE_FIELDS = frozenset(("type", "layoutMode", "headline", "lead", "accentPhrase", "question", "answer",
                           "verdictTone", "items", "points", "pills", "steps", "warnings", "columns", "checks",
                           "takeaway", "listTitle", "footerNote", "outroNote", "highlightWords", "leftTop"))
+_NAMED_RATIOS = (
+    ("16:9", 16 / 9),
+    ("4:3", 4 / 3),
+    ("1:1", 1.0),
+    ("3:4", 3 / 4),
+    ("9:16", 9 / 16),
+)
+_ARK_RATIOS = (
+    ("16:9", 16 / 9),
+    ("1:1", 1.0),
+    ("3:4", 3 / 4),
+    ("9:16", 9 / 16),
+)
+
+
+def format_ratio_label(w, h):
+    ar = w / h if h else 16 / 9
+    for label, target in _NAMED_RATIOS:
+        if abs(ar - target) / target <= 0.025:
+            return label
+    return f"{ar:.2f}:1" if ar >= 1 else f"1:{(1 / ar):.2f}"
+
+
+def nearest_ark_ratio(w, h):
+    ar = w / h if h else 16 / 9
+    return min(_ARK_RATIOS, key=lambda pair: abs(math.log(ar / pair[1])))[0]
+
+
+def layout_media_spec(layout, layout_item=None, stage="explain"):
+    """Describe the active layout's media region, art slot, and outer-frame regions."""
+    layout = layout if isinstance(layout, dict) else {}
+    canvas = layout.get("canvas") if isinstance(layout.get("canvas"), dict) else {}
+    cw = float(canvas.get("w") or 1280)
+    ch = float(canvas.get("h") or 720)
+    stages = layout.get("stages") if isinstance(layout.get("stages"), dict) else {}
+    stage_regions = stages.get(stage, {}).get("regions") if isinstance(stages.get(stage), dict) else None
+    regions = stage_regions if isinstance(stage_regions, dict) else (layout.get("regions") if isinstance(layout.get("regions"), dict) else {})
+    media = regions.get("media") if isinstance(regions.get("media"), dict) else None
+    w = max(64, round(float(media["w"]) * cw / 100)) if media and "w" in media else 960
+    h = max(64, round(float(media["h"]) * ch / 100)) if media and "h" in media else 540
+    aspect = round(w / h, 4)
+
+    if aspect < 0.85:
+        shape = "portrait"
+    elif aspect >= 2.2 and h <= 420:
+        shape = "shallow-wide"
+    elif aspect >= 2.2:
+        shape = "ultrawide"
+    elif w <= 720:
+        shape = "narrow"
+    elif h <= 420:
+        shape = "shallow"
+    elif w <= 860 or h <= 480:
+        shape = "compact"
+    else:
+        shape = "standard"
+
+    if w <= 720:
+        art_placement = "top"
+        art_w = max(120, w - 36)
+        art_h = max(120, min(200, round(h * 0.39)))
+    elif h <= 420:
+        art_placement = "left"
+        art_w = max(120, round((w - 40) * 0.36))
+        art_h = max(120, h - 28)
+    elif aspect >= 2.2:
+        art_placement = "left"
+        art_w = max(120, round((w - 56) * 0.38))
+        art_h = max(120, h - 40)
+    elif w <= 860 or h <= 480:
+        art_placement = "left"
+        art_w = max(120, round((w - 40) * 0.40))
+        art_h = max(120, h - 32)
+    else:
+        art_placement = "left"
+        art_w = max(120, round((w - 54) * 0.41))
+        art_h = max(120, h - 48)
+
+    art_aspect = round(art_w / art_h, 4)
+    art_orientation = "landscape" if art_aspect > 1.15 else "portrait" if art_aspect < 0.87 else "square"
+
+    return {
+        "w": w,
+        "h": h,
+        "aspect": aspect,
+        "ratioLabel": format_ratio_label(w, h),
+        "arkRatio": nearest_ark_ratio(w, h),
+        "shape": shape,
+        "layoutName": (layout_item or {}).get("name") or "",
+        "hasAnswer": "answer" in regions,
+        "hasHeadline": "headline" in regions,
+        "hasKeypoints": "keypoints" in regions,
+        "isFlush": isinstance(media, dict) and media.get("variant") == "flush",
+        "hasNavPanel": isinstance(regions.get("chapters"), dict) and regions["chapters"].get("variant") == "nav-panel",
+        "art": {
+            "w": art_w,
+            "h": art_h,
+            "aspect": art_aspect,
+            "ratioLabel": format_ratio_label(art_w, art_h),
+            "arkRatio": nearest_ark_ratio(art_w, art_h),
+            "placement": art_placement,
+            "orientation": art_orientation,
+        },
+    }
 
 
 def mapping(value, message):

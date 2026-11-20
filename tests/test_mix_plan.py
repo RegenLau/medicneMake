@@ -396,6 +396,33 @@ class MixPlanningTests(unittest.TestCase):
         self.assertNotIn("accentPhrase", p2)  # > 8 chars dropped
         self.assertEqual("warn", p2["verdictTone"])
 
+    def test_prompts_and_payloads_include_layout_media_dimensions(self):
+        import server
+
+        for lid, expected_size, expected_shape in (
+            ("builtin:layout/broadcast", "1280×504", "ultrawide"),
+            ("builtin:layout/qa-chat", "1120×388", "shallow-wide"),
+            ("builtin:layout/headline", "642×510", "narrow"),
+            ("builtin:layout/takeaway", "820×460", "compact"),
+        ):
+            with self.subTest(layout=lid):
+                raw = copy.deepcopy(self.script)
+                client = Mock(return_value=model_response(raw))
+                mix_plan.write_script(client, "deepseek-flash", {**self.item, "layoutId": lid}, 45, CATALOG, library=server.ASSETS)
+                script_prompt = client.call_args.args[1]["messages"][0]["content"]
+                self.assertIn(expected_size, script_prompt)
+
+                rows = [choice(self.script, i, "scene") for i in range(3)]
+                arrange_client = Mock(return_value=model_response({"shots": rows}))
+                mix_plan.arrange(arrange_client, "deepseek-flash", {**self.item, "layoutId": lid}, self.script, server.ASSETS)
+                arrange_sys = arrange_client.call_args.args[1]["messages"][0]["content"]
+                arrange_payload = json.loads(arrange_client.call_args.args[1]["messages"][1]["content"])
+                self.assertIn(expected_size, arrange_sys)
+                self.assertEqual(expected_shape, arrange_payload["layoutMedia"]["shape"])
+                if lid == "builtin:layout/headline":
+                    self.assertEqual("top", arrange_payload["layoutMedia"]["art"]["placement"])
+                    self.assertIn("顶部横向插画区", arrange_sys)
+
 
 if __name__ == "__main__":
     unittest.main()

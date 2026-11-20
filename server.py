@@ -118,6 +118,65 @@ SIZES = {
         "1:1": "4096x4096",
     },
 }
+IMAGE_SIZE_TIERS = {
+    "1K": (1_120_000, 950_000, 2_500_000, 2048),
+    "2K": (4_194_304, 3_720_000, 4_600_000, 4096),
+    "4K": (14_500_000, 10_500_000, 16_700_000, 6192),
+}
+
+
+def parse_target_size(target):
+    if target is None:
+        return None
+    if not isinstance(target, dict):
+        raise ValueError("目标出图尺寸格式无效")
+    tw, th = target.get("w"), target.get("h")
+    if type(tw) not in (int, float) or type(th) not in (int, float) or not (math.isfinite(tw) and math.isfinite(th)):
+        raise ValueError("目标出图尺寸必须为有效数字")
+    tw, th = float(tw), float(th)
+    if not (64 <= tw <= 4096 and 64 <= th <= 4096 and 0.25 <= tw / th <= 4.0):
+        raise ValueError("目标出图尺寸超出支持范围")
+    return tw, th
+
+
+def resolve_image_size(settings):
+    tier = settings["imageSize"]
+    target = settings.get("targetSize")
+    if not target:
+        return SIZES[tier][settings["ratio"]]
+    tw, th = parse_target_size(target)
+    ar = tw / th
+    for preset in SIZES[tier].values():
+        pw, ph = (int(part) for part in preset.split("x"))
+        if abs(ar - pw / ph) / ar <= 0.015:
+            return preset
+    target_px, min_px, max_px, max_side = IMAGE_SIZE_TIERS[tier]
+    max_aligned = (max_side // 16) * 16
+    raw_w = math.sqrt(target_px * ar)
+    raw_h = math.sqrt(target_px / ar)
+    if max(raw_w, raw_h) > max_aligned:
+        scale = max_aligned / max(raw_w, raw_h)
+        raw_w *= scale
+        raw_h *= scale
+    pw = min(max_aligned, max(64, round(raw_w / 16) * 16))
+    ph = min(max_aligned, max(64, round(raw_h / 16) * 16))
+    while pw * ph > max_px and (pw > 64 or ph > 64):
+        cand = []
+        if pw > 64:
+            cand.append((abs((pw - 16) / ph - ar), pw - 16, ph))
+        if ph > 64:
+            cand.append((abs(pw / (ph - 16) - ar), pw, ph - 16))
+        _, pw, ph = min(cand)
+    while pw * ph < min_px and (pw < max_aligned or ph < max_aligned):
+        cand = []
+        if pw + 16 <= max_aligned:
+            cand.append((abs((pw + 16) / ph - ar), pw + 16, ph))
+        if ph + 16 <= max_aligned:
+            cand.append((abs(pw / (ph + 16) - ar), pw, ph + 16))
+        if not cand:
+            break
+        _, pw, ph = min(cand)
+    return f"{pw}x{ph}"
 STYLE = [
     "手绘动画风",
     "清新写实风",
@@ -1119,6 +1178,8 @@ def setting_valid(p):
         raise ValueError("图片模型或清晰度无效")
     if s["ratio"] not in SIZES["2K"] or not isinstance(s["watermark"], bool):
         raise ValueError("画幅或水印参数无效")
+    if p["kind"] == "images" and "targetSize" in s:
+        parse_target_size(s["targetSize"])
     if (
         s["videoModel"] not in VIDEO_MODELS
         or s["resolution"] not in VIDEO_MODELS[s["videoModel"]][1]
@@ -1172,7 +1233,7 @@ def image_references(p, item):
 
 def image_item(p, item, index, record=None):
     s = p["settings"]
-    size = SIZES[s["imageSize"]][s["ratio"]]
+    size = resolve_image_size(s)
     body = {
         "model": s["imageModel"],
         "prompt": item["prompt"],
@@ -2967,10 +3028,19 @@ def render_motion_preview(asset, destination):
         scratch = Path(tmp)
         manifest = scratch / "preview.json"
         slide = {"name": "动画预览", "line": "", "type": "explain", "layoutMode": "explain", "seconds": duration}
+        vb = asset.get("viewBox") or (asset.get("animation") if isinstance(asset.get("animation"), dict) else None)
+        ar = (float(vb["w"]) / float(vb["h"])) if vb and vb.get("w") and vb.get("h") else 16 / 9
+        if abs(ar - 16 / 9) / (16 / 9) <= 0.02:
+            media_region = {"x": 0, "y": 0, "w": 100, "h": 100, "component": "media"}
+        elif ar > 16 / 9:
+            h_pct = (1280 / ar) / 720 * 100
+            media_region = {"x": 0, "y": (100 - h_pct) / 2, "w": 100, "h": h_pct, "component": "media"}
+        else:
+            w_pct = (720 * ar) / 1280 * 100
+            media_region = {"x": (100 - w_pct) / 2, "y": 0, "w": w_pct, "h": 100, "component": "media"}
         plan = {
             "fps": fps, "frames": round(duration * fps), "fontId": None, "images": {},
-            "layout": {"canvas": {"w": 1280, "h": 720}, "regions": {
-                "media": {"x": 0, "y": 0, "w": 100, "h": 100, "component": "media"}}},
+            "layout": {"canvas": {"w": 1280, "h": 720}, "regions": {"media": media_region}},
             "deck": {"title": "动画预览", "theme": asset.get("theme", "medical"), "presenter": "none",
                      "chapters": ["预览", "结束"], "slides": [slide]},
             "shots": [{"name": "动画预览", "line": "", "kind": "mg", "start": 0, "end": duration, "captions": [],
@@ -3227,6 +3297,7 @@ def write_draft(p, job, save, record=None):
                 save()
                 script = mix_plan.write_script(
                     tracked_deepseek("视频脚本"), model, item, settings.get("duration"), ASSETS.stage_catalog(),
+                    library=ASSETS,
                 )
                 job["stageScript"] = script
                 save()
@@ -3368,7 +3439,7 @@ def job_costs(job):
     if legacy and p["kind"] == "draft" and job.get("output") and not any(k.startswith("text:") for k in recorded):
         rows.append(work_costs.entry("历史文字生成", "", "缺少 Token 用量", None))
     elif legacy and p["kind"] == "images" and p["mode"] == "ark":
-        size = SIZES[settings["imageSize"]][settings["ratio"]]
+        size = resolve_image_size(settings)
         for index, item in enumerate(p["items"][:len(job.get("results", []))]):
             if not any(k.startswith(f"image:{index}:") for k in recorded):
                 rows.append(work_costs.image_cost(settings["imageModel"], size, len(image_references(p, item)), index))
