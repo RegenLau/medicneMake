@@ -180,7 +180,11 @@ class LocalLibrary:
         return json.loads(catalog.read_text(encoding="utf-8")) if catalog.is_file() else []
 
     def items(self):
-        return [self.public(item) for item in (*self._builtins(), *self._read_user()) if not item.get("archived")]
+        return [self.public(item) for item in (*self._builtins(), *self._read_user())
+                if item.get("file") and not item.get("archived")]
+
+    def stage_catalog(self):
+        return next(item["data"] for item in self._builtins() if item["id"] == "builtin:stage-config/v1")
 
     @staticmethod
     def public(item):
@@ -192,7 +196,7 @@ class LocalLibrary:
         user = USER_ID.fullmatch(asset_id)
         entries = self._read_user() if user else self._builtins()
         item = next((item for item in entries if item["id"] == asset_id), None)
-        if not item or (kinds and item["kind"] not in kinds):
+        if not item or not item.get("file") or (kinds and item["kind"] not in kinds):
             raise ValueError("找不到所选素材，或素材类型不匹配。")
         root = (self.root / "files" if user else self.builtin_root).resolve()
         path = (root / item["file"]).resolve()

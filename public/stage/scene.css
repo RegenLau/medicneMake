@@ -965,3 +965,18 @@
 @media (prefers-reduced-motion: reduce) {
   .cm-item, .cm-takeaway, .cm-heading { transition: none; }
 }
+
+.stage-svg-drawing { position: absolute; inset: 0; }
+.stage-asset { display: block; width: 100%; height: 100%; object-fit: contain; }
+.stage-media-title {
+  position: absolute;
+  z-index: 2;
+  top: 8%;
+  left: 7%;
+  right: 7%;
+  color: var(--v-ink);
+  text-align: center;
+  font-size: 42px;
+  line-height: 1.15;
+  font-weight: 800;
+}

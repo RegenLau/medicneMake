@@ -1452,10 +1452,11 @@ function layoutChoice(value) {
 
 function setup(w) {
   const video = w.type === "video";
+  const stageVideo = StageStudio.isActive(w);
   const isTpl = TemplateStudio.isTemplateVideo(w);
   const isSvg = isSvgVideo(w);
   const motion = isCodeMotion(w);
-  const scriptButton = motion ? "生成代码动效脚本" : isTpl ? "生成模板分镜脚本" : "生成分镜脚本";
+  const scriptButton = stageVideo ? "生成视频脚本" : motion ? "生成代码动效脚本" : isTpl ? "生成模板分镜脚本" : "生成分镜脚本";
   const hasBlocks = w.blocks.length > 0;
   let left =
     '<div class="sheet"><div class="card-head"><h2>科普主题</h2>' +
@@ -1488,6 +1489,7 @@ function setup(w) {
     left +=
       '<div class="sheet"><div class="card-head"><h2>视频设置</h2></div>' +
       TemplateStudio.modeSwitcherHtml(w, btn) +
+      (stageVideo ? StageStudio.setupControls(w) : "") +
       choice(
         "参考时长",
         videoReferenceDurations.map((seconds) => seconds === null ? "自动" : `${seconds} 秒`),
@@ -1535,7 +1537,9 @@ function setup(w) {
   const themeName = TemplateVideo.THEMES.find((t) => t.id === (w.templateTheme || "medical"))?.name || "医疗白蓝风";
   const presName = TemplateVideo.PRESENTERS.find((p) => p.id === (w.templatePresenter || "digital"))?.name || "数字人";
   const refSeconds = video ? videoReferenceSeconds(w) : null;
-  const summaryRows = video
+  const summaryRows = stageVideo ? [
+    ["视频形式", "信息图模板讲解"], ["视觉风格", themeName], ["主讲形象", presName], ["输出画面", "16:9 · 1280×720"],
+  ] : video
     ? motion
       ? [
           ["视频形式", "信息图模板讲解"],
@@ -2121,6 +2125,7 @@ function templateHooks() {
 
 function editor(w) {
   const vid = w.type === "video";
+  if (StageStudio.isActive(w)) return StageStudio.editor(w);
   if (isCodeMotion(w)) {
     codeMotionEditor(w);
     return;
@@ -2727,16 +2732,23 @@ async function poll(w, owner = w) {
             }
             w.renderMode = job.payload.mode;
             w.stage = "draft";
-            if (job.payload.codeMotion === true) w.editing = false;
+            if (job.payload.codeMotion === true || job.payload.stage === true) w.editing = false;
             w.videoDirty = false;
             w.viewingSetup = false;
           } else if (job.target === "write-draft") {
-            applyWrittenDraft(w, result.output);
+            if (job.stageDraft) StageStudio.installDraft(w, job.stageDraft, result.output);
+            else applyWrittenDraft(w, result.output);
+          } else if (job.stageImageSlots) {
+            StageStudio.installImages(w, job.stageImageSlots, result.output);
           } else if (job.target === "svg-speech") {
-            const item = job.payload.items[0];
-            const block = w.blocks[item.index];
-            if (block?.line.trim() === item.line) {
-              block.svgSpeech = { ...result.output, line: item.line, voice: job.payload.settings.voice };
+            if (job.stageSpeechIndex !== undefined) {
+              StageStudio.installSpeech(w, job.stageSpeechIndex, job, result.output);
+            } else {
+              const item = job.payload.items[0];
+              const block = w.blocks[item.index];
+              if (block?.line.trim() === item.line) {
+                block.svgSpeech = { ...result.output, line: item.line, voice: job.payload.settings.voice };
+              }
             }
           } else {
             const single = owner !== w;
@@ -3005,6 +3017,7 @@ function generate(w) {
     return;
   }
   if (w.job || w.blocks.some((b) => b.job && !b.job.error)) return;
+  if (StageStudio.isActive(w)) return StageStudio.requestDraft(w);
   if (isCodeMotion(w)) {
     return authorize(w, 1, "draft", () => {
       const settings = {
@@ -3342,6 +3355,7 @@ function render(preserveScroll = false) {
     if (!preserveScroll) window.scrollTo(0, 0);
     return;
   }
+  StageStudio.normalizeWork(w);
   if (w.job) {
     if (w.job.target === "initial") setup(w);
     else jobView(w);
@@ -3359,7 +3373,7 @@ function render(preserveScroll = false) {
     if (b.job.readyToSend) sendJob(w, b);
     else poll(w, b);
   }
-  if (TemplateStudio.isTemplateVideo(w)) {
+  if (TemplateStudio.isTemplateVideo(w) && !StageStudio.isActive(w)) {
     TemplateStudio.resumeSlideJobs(w, templateHooks());
   }
   revealSelectedScene();
@@ -3434,6 +3448,7 @@ function applySettingMutation(s, key, val) {
 document.addEventListener("input", (e) => {
   const w = current(),
     el = e.target;
+  if (StageStudio.handleInput(w, el)) return;
   if (el.id === "drugquery") {
     const list = $("#druglist", dialogBody);
     if (list) list.innerHTML = renderDrugList(el.value);
@@ -3899,6 +3914,7 @@ document.addEventListener("click", async (e) => {
     v = el.dataset.val,
     w = current();
   try {
+    if (StageStudio.handleAction(w, action, v)) return;
     if (w && isCodeMotion(w) && handleCodeMotionAction(w, action, v)) return;
     switch (action) {
       case "asset-library":

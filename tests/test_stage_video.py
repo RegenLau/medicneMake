@@ -55,6 +55,22 @@ class StageVideoTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             stage_video.stage_input(p, server.ASSETS, server.media_path)
 
+    def test_asset_mode_selects_a_versioned_local_svg(self):
+        p = self.payload("asset")
+        p["items"][0]["content"].update(assetId="builtin:svg/reading-list", move="pan")
+        _, _, shots, _, used = stage_video.stage_input(p, server.ASSETS, server.media_path)
+        self.assertTrue(shots[0]["assetUrl"].startswith("file:"))
+        self.assertEqual(shots[0]["move"], "pan")
+        self.assertEqual([item["kind"] for _, item in used], ["layout", "svg"])
+
+    def test_visual_beats_do_not_truncate_shared_svg_narration(self):
+        p = self.payload("svg")
+        long_line = "核对本幕的信息和记录。" * 12
+        p["items"][0]["line"] = long_line
+        p["items"][0]["content"]["beats"] = [{"action": "log", "label": "核对日期", "line": "核对本幕的记录。"}]
+        _, _, shots, _, _ = stage_video.stage_input(p, server.ASSETS, server.media_path)
+        self.assertEqual(shots[0]["line"], long_line)
+
 
 if __name__ == "__main__":
     unittest.main()

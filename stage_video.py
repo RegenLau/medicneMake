@@ -81,6 +81,12 @@ def validate_shot(item, layout, compatible, library, media_path, pictures, used)
     base = {"name": name, "line": line, "chapterIndex": chapter, "seconds": seconds, "cues": cue_list,
             "kind": kind, "tailPause": item.get("tailPause", 0.55)}
     slide = {**{key: points[key] for key in SLIDE_FIELDS & points.keys()}, **base}
+    items = points.get("items", [])
+    if not isinstance(items, list) or len(items) > 12 or not all(isinstance(item, dict) for item in items):
+        raise ValueError("分镜要点条目格式无效。")
+    default_points = [{"title": entry.get("title", ""), "desc": entry.get("detail", "")} for entry in items]
+    for field in ("points", "steps", "warnings", "checks"):
+        slide.setdefault(field, default_points)
     if "sfxId" in item:
         library.resolve(item["sfxId"], ("sfx",))
         base["sfxId"] = item["sfxId"]
@@ -109,9 +115,7 @@ def validate_shot(item, layout, compatible, library, media_path, pictures, used)
                 raise ValueError("代码动效的版式、动效、图形或色调无效。")
             if value is not None:
                 base[field] = value
-        if not isinstance(points.get("items", []), list):
-            raise ValueError("分镜要点条目格式无效。")
-        base.update(items=points.get("items", []), takeaway=points.get("takeaway", ""),
+        base.update(items=items, takeaway=points.get("takeaway", ""),
                     listTitle=points.get("listTitle", ""), beats=item.get("beats", []))
         base["labels"] = [entry.get("title", "") for entry in base["items"] if isinstance(entry, dict)]
         slide.update(type="explain", layoutMode="explain", highlightWords=base["labels"])
@@ -121,11 +125,26 @@ def validate_shot(item, layout, compatible, library, media_path, pictures, used)
             used.append(asset)
     elif kind == "svg":
         beats = content.get("beats")
-        action = content.get("action") or (beats[0].get("action") if isinstance(beats, list) and beats and isinstance(beats[0], dict) else None)
+        action = beats[0].get("action") if isinstance(beats, list) and beats and isinstance(beats[0], dict) else content.get("action")
+        if compatible == "svg" and content.get("singleAction") is True:
+            beats = None
         svg = {"action": action, **({"beats": beats} if beats is not None else {})}
-        svg_motion.validate_shot({**base, **svg})
+        if compatible == "svg":
+            svg_motion.validate_shot({**base, **svg})
+        elif beats is not None:
+            svg_motion.validate_beats(beats)
+        elif not isinstance(action, str) or action not in svg_motion.ACTIONS:
+            raise ValueError("请选择有效的 SVG 道具动作。")
         base.update(svg)
         slide.update(type="explain", layoutMode="explain", action=action, svgBeats=beats)
     else:
-        raise ValueError("当前版本暂未提供整幕素材播放。")
+        move = content.get("move", "still")
+        if move not in ("still", "zoom", "pan"):
+            raise ValueError("静态素材的移动方式无效。")
+        item_id = content.get("assetId")
+        asset = library.resolve(item_id, ("image", "svg"))
+        base["assetUrl"] = asset[0].as_uri()
+        used.append(asset)
+        base["move"] = move
+        slide["layoutMode"] = "explain"
     return {**base, "slide": slide}

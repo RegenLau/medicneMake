@@ -209,7 +209,7 @@
     }).join("");
   }
 
-  function content(shot, progress, theme) {
+  function content(shot, progress, theme, includeHeading = true) {
     const warm = theme === "warm";
     const heading = lines(shot.name, 19, 2);
     return `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540"
@@ -221,10 +221,10 @@
           `<ellipse cx="483" cy="467" rx="235" ry="16" fill="${warm ? "#e9dfce" : "#dbe9f5"}"/>`}
         ${path("M194 266 Q213 238 237 251 M705 212 Q719 190 742 196", "none", warm ? "#82a69c" : "#a0c5e8", 4)}
         ${actionPoses(shot, progress, warm)}
-        <g font-family='${font}' fill="${ink}">
+        ${includeHeading ? `<g font-family='${font}' fill="${ink}">
           ${heading.map((row, i) => `<text x="480" y="${80 + i * 48}" text-anchor="middle" font-weight="770" font-size="45">${row}</text>`).join("")}
           ${shot.action === "compare" && !(shot.svgBeats?.length > 1) ? '<text x="480" y="159" text-anchor="middle" font-size="25" font-weight="670" fill="#a74d30">常见误区</text>' : ""}
-        </g>
+        </g>` : ""}
       </g>
     </svg>`;
   }

@@ -3888,3 +3888,20 @@ dialog p b {
   .asset-search { flex: 1; min-width: 120px; }
   .asset-search input { width: 100%; }
 }
+
+/* 信息图视频分镜 */
+.stage-layout-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 8px; }
+.stage-layout-grid .mode-card { width: 100%; }
+.stage-layout-mini { display: grid; grid-template-columns: 21% 1fr; grid-template-rows: 13% 1fr; gap: 5px; width: 100%; aspect-ratio: 16/9; padding: 8px; border-radius: var(--radius-sm); background: var(--brand-50); }
+.stage-layout-mini > span { background: var(--brand-200); border-radius: 4px; }
+.stage-layout-mini > span:first-child { grid-column: 1 / -1; }
+#stage-preview { display: block; width: 100%; aspect-ratio: 16/9; border: 0; border-radius: var(--radius-md); background: var(--soft); }
+#stage-seek { flex: 1 1 120px; accent-color: var(--brand-600); }
+#stage-preview-state { color: var(--muted); font-size: 13px; }
+.stage-rail { display: flex; gap: 8px; margin-top: 14px; padding-bottom: 5px; overflow: auto; }
+.stage-rail > * { flex: none; }
+.stage-fields { display: grid; gap: 10px; padding: 14px; }
+.stage-fields > .field { min-width: 0; }
+.stage-fields .shot-options { min-width: 0; }
+.stage-rail .scene-choice-title { display: block; font-weight: 650; }
+.stage-rail .scene-choice-meta { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }

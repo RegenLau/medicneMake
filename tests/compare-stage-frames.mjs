@@ -105,7 +105,7 @@ try {
       });
     }
     const shot = { ...(fixture.legacy || shared), kind: fixture.kind, captions: fixture.captions ?? fixture.legacy.captions };
-    await newPage.evaluate(plan => setPlan(plan), { layout, deck, images, shots: [shot] });
+    await newPage.evaluate(plan => setPlan(plan), { layout, deck, images, shots: [shot], compatibility: fixture.kind });
     for (const progress of samples) {
       if (code) {
         await legacyPage.evaluate(time => drawMotionFrame(time), progress * seconds);

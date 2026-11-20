@@ -249,10 +249,10 @@
     return '<div class="formrow" style="margin-bottom:4px"><span class="label">视频效果</span></div>' +
       '<div class="mode-cards">' +
       modes.filter(([id]) => {
-        if (id === "svg") return global.SvgMotion && config.svgMotion;
+        if (id === "svg") return !config.stageRender && global.SvgMotion && config.svgMotion;
         return true;
       }).map(([id, label, description]) => {
-        const active = w.videoMode === id || (id === "template" && motion)
+        const active = w.videoMode === id || (id === "template" && (motion || StageStudio.isActive(w)))
           || !w.videoMode && id === "storyboard";
         const locked = w.blocks.length > 0 && !active &&
           [id, w.videoMode].some(mode => mode === "svg" || mode === "code-motion");
@@ -260,7 +260,7 @@
           '" aria-pressed="' + active + '"' + (locked ? ' disabled title="新建视频可选此效果"' : "") +
           '><strong>' + label + (id === "template" ? ' <span class="mode-badge">推荐</span>' : '') +
           '</strong><span>' + description + '</span></button>';
-        if (id !== "template" || !active || typeof config.codeMotionReady !== "boolean") return card;
+        if (id !== "template" || !active || StageStudio.isActive(w) || typeof config.codeMotionReady !== "boolean") return card;
         const choices = [["template", "AI 完整图"], ["code-motion", "代码动效"]].map(([value, text]) => {
           const selected = motion === (value === "code-motion");
           return btnFn(text, "tpl-content-mode", "chip" + (selected ? " selected" : ""), value,

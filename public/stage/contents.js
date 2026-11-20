@@ -70,14 +70,36 @@
   };
 
   const svg = {
-    html(shot, progress, theme) { return StageSvgContent.content(shot, clamp(progress), theme); },
-    mount(slot) { return { slot }; },
+    html(shot, progress, theme, includeHeading = true) { return StageSvgContent.content(shot, clamp(progress), theme, includeHeading); },
+    mount(slot, shot, { layoutTitle }) {
+      const drawing = slot.ownerDocument.createElement("div");
+      drawing.className = "stage-svg-drawing";
+      slot.append(drawing);
+      return { slot: drawing, includeHeading: !layoutTitle };
+    },
     draw(dom, shot, time, { slide, theme }) {
       const duration = shot.motionSeconds ?? shot.end - shot.start;
-      dom.slot.innerHTML = svg.html(slide, duration > 0 ? time / duration : 1, theme);
+      dom.slot.innerHTML = svg.html(slide, duration > 0 ? time / duration : 1, theme, dom.includeHeading);
     },
     events: noEvents,
   };
 
-  global.Contents = { image, card, scene, svg, activeCue };
+  const asset = {
+    mount(slot, shot, ctx) {
+      slot.innerHTML = shot.assetUrl
+        ? `<img class="stage-asset" src="${attr(shot.assetUrl)}" alt="">`
+        : TemplateVideo.renderFallbackCard(ctx.slide, "all");
+      return { image: slot.querySelector("img") };
+    },
+    draw(dom, shot, time) {
+      if (!dom.image) return;
+      const p = clamp(time / Math.max(.1, shot.end - shot.start));
+      dom.image.style.transform = shot.move === "zoom" ? `scale(${1 + .08 * p})` :
+        shot.move === "pan" ? `translateX(${(p - .5) * 6}%) scale(1.07)` : "";
+    },
+    isStatic: shot => !shot.move || shot.move === "still",
+    events: noEvents,
+  };
+
+  global.Contents = { image, card, scene, svg, asset, activeCue };
 })(globalThis);

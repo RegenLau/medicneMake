@@ -90,12 +90,14 @@
       theme: deck.theme,
       imageFocus: plan.imageFocus === true,
       focus, slide, imgMap, mapSrc, deck, index: current, total: plan.shots.length,
+      layoutTitle: shot.kind === "svg" && !plan.compatibility,
     };
     const mountKey = `${current}/${stage}/${code ? "code" : progress}`;
     if (mounted !== mountKey) {
       root.innerHTML = LayoutEngine.render(plan.layout, deck, current, {
         focus: layoutFocus, stage, progress: code ? 1 : progress, imgMap,
         subtitleText: subtitle || (code ? " " : ""), highlightWords,
+        contentTitle: context.layoutTitle ? slide.name : "",
         renderMedia: () => "",
       });
       const slot = root.querySelector(".media-slot");

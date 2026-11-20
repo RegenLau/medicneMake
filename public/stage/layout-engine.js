@@ -253,6 +253,7 @@
           ? renderLeftBlock(deck, mapSrc, ringProgress, attach("presenter"), !regions?.disclaimer) : ""}
         <section class="pt-media-slot media-slot"${attach("media")}>
           ${mediaHtml}
+          ${opts.contentTitle ? `<h2 class="stage-media-title">${xmlEsc(opts.contentTitle)}</h2>` : ""}
         </section>
       `;
     }

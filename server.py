@@ -3366,6 +3366,8 @@ class Handler(SimpleHTTPRequestHandler):
                     "codeMotionReady": code_motion_ready(),
                     "templateMotionSwitch": True,
                     "stageRender": STAGE_RENDER,
+                    "stageLayouts": [item for item in ASSETS.items() if item["kind"] == "layout"],
+                    "stageCatalog": ASSETS.stage_catalog(),
                     "svgMotion": {"actions": svg_motion.ACTIONS, "exportReady": svg_motion.ready(FFMPEG)},
                     **speech_connection(),
                     "keyStorage": KEY_STORAGE,
