@@ -10,6 +10,7 @@
   {"id":"builtin:stage-config/v1","kind":"stage-config","data":{
     "pointVisuals":{"cover":"hook","explain":"mechanism","compare":"compare","steps":"steps","warning":"warning","summary":"summary","timeline":"timeline","checklist":"checklist"},
     "pointTypes":{"cover":"开场问题和直答","explain":"原理或一条关键事实","compare":"真实做法或情形对比","steps":"有实际先后关系的步骤","warning":"误区或警示","summary":"收口和提醒","timeline":"时间条件与决策","checklist":"并列的核对要点"},
+    "transitions":{"fade":"淡入","wipe":"擦除","iris":"圆形展开","slide":"推移"},
     "pointDefaults":{"cover":"card","explain":"scene","compare":"scene","steps":"scene","warning":"scene","summary":"card","timeline":"scene","checklist":"card"},
     "sceneDefaults":{
       "hook":{"motion":"focus-zoom","motif":"pill","tone":"primary"},

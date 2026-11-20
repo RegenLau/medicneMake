@@ -1,12 +1,7 @@
 "use strict";
 
 (function (global) {
-  const clamp = (n) => Math.max(0, Math.min(1, n));
-  const easeOutCubic = (n) => 1 - (1 - clamp(n)) ** 3;
-  const easeOutExpo = (n) => {
-    const x = clamp(n);
-    return x >= 1 ? 1 : 1 - 2 ** (-10 * x);
-  };
+  const {clamp, easing:{outCubic:easeOutCubic, outExpo:easeOutExpo}} = global.MgKit;
   const esc = (s) =>
     String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 

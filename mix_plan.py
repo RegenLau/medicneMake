@@ -250,6 +250,7 @@ def arrange(client, model, item, script, library):
         payload.update(
             presenters={kind: details for kind, details in catalog["presenters"].items() if kind in supports},
             supports=supports, imageBudget=budget, remainingImageBudget=remaining, candidateAssets=available,
+            transitions=catalog["transitions"],
         )
         instruction = (
             "你是药师科普视频的呈现导演。输入是已经写好的整片脚本和素材资料，"
@@ -262,6 +263,7 @@ def arrange(client, model, item, script, library):
             "reason 用一句话，逐字引用本幕 name，再具体说明这幕的对象、动作或信息结构为什么适合该方式。"
             "params 可为空对象。选择 SVG 时按清单选动作，给 1–3 段 beats，line 必须是对应口播中的原文片段，"
             "label 不超过 10 字，不重复演示与本幕无关的动作。"
+            "可在 transition 中从清单选入场转场。延续同一个要点或画面时省略，使用淡入。"
             "只返回 targetIndices 对应的 JSON。image 必须给 priority（1–100 的整数，越大越优先）。"
             '{"shots":[{"index":0,"kind":"方式","reason":"具体原因","fallback":"备用方式","params":{},"priority":50}]}'
         )
@@ -293,7 +295,11 @@ def arrange(client, model, item, script, library):
             content = {**default_content(row, None, supports, catalog, candidates), "decidedBy": "mix",
                        "reason": f'「{row["name"]}」根据本幕要点结构选用默认方式。', "adjusted": notice}
         elif mode == "mix":
-            content = choose_content(row, choices[i], i in kept, supports, catalog, candidates)
+            choice = choices[i]
+            content = choose_content(row, choice, i in kept, supports, catalog, candidates)
+            transition = choice.get("transition")
+            if transition in stage_video.TRANSITIONS and transition in catalog["transitions"]:
+                content["transition"] = transition
         else:
             try:
                 params = {"beats": choices[i]["beats"]} if mode == "svg" and i in choices else {}

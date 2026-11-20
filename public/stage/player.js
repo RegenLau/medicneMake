@@ -42,8 +42,8 @@
     return current;
   }
 
-  function dissolve(index, localTime) {
-    return plan.compatibility || index === 0 ? 1 : Math.min(1, localTime / 0.3);
+  function transitionProgress(index, localTime) {
+    return plan.compatibility || index === 0 ? 1 : MgKit.progress(localTime, 0, .3);
   }
 
   function legacyImageFade(index, time, cue) {
@@ -66,7 +66,7 @@
     const localTime = Math.max(0, time - shot.start);
     const cue = Contents.activeCue(shot, localTime);
     if (plan.hasAvatarFrames || deck.presenter !== "none" || plan.layout.regions.progress ||
-        !Contents[shot.kind].isStatic?.(shot, localTime) || dissolve(index, localTime) !== 1 ||
+        !Contents[shot.kind].isStatic?.(shot, localTime) || transitionProgress(index, localTime) !== 1 ||
         legacyImageFade(index, time, cue)) return null;
     return `${index}/${shot.captions.indexOf(cue)}`;
   }
@@ -109,7 +109,9 @@
     }
     if (content) renderer.draw(content, shot, localTime, context);
     const slot = root.querySelector(".media-slot");
-    if (slot && !plan.compatibility && current > 0) slot.style.opacity = String(dissolve(current, localTime));
+    if (slot && !plan.compatibility && current > 0) {
+      MgKit.transition(slot, shot.transition || "fade", transitionProgress(current, localTime));
+    }
     const fade = legacyImageFade(current, time, cue);
     if (fade) {
       const previous = LayoutEngine.render(plan.layout, deck, fade.index, {

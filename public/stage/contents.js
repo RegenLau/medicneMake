@@ -4,7 +4,7 @@
   const attr = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
-  const clamp = (value) => Math.max(0, Math.min(1, value));
+  const clamp = value => global.MgKit.clamp(value);
   const noEvents = () => [];
 
   function activeCue(shot, localTime) {
@@ -96,7 +96,7 @@
       const duration = shot.motionSeconds ?? shot.end - shot.start;
       dom.slot.innerHTML = svg.html(slide, duration > 0 ? time / duration : 1, theme, dom.includeHeading);
     },
-    events: StageSvgContent.events,
+    events: shot => StageSvgContent.events(shot),
   };
 
   const asset = {
@@ -109,8 +109,8 @@
     draw(dom, shot, time) {
       if (!dom.image) return;
       const p = clamp(time / Math.max(.1, shot.end - shot.start));
-      dom.image.style.transform = shot.move === "zoom" ? `scale(${1 + .08 * p})` :
-        shot.move === "pan" ? `translateX(${(p - .5) * 6}%) scale(1.07)` : "";
+      dom.image.style.transform = shot.move === "zoom" ? `scale(${MgKit.sample(MgKit.presets.pushIn[0],p)})` :
+        shot.move === "pan" ? `translateX(${MgKit.sample(MgKit.presets.pan[0],p)}%) scale(1.07)` : "";
     },
     isStatic: shot => !shot.move || shot.move === "still",
     events: noEvents,

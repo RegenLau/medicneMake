@@ -6,8 +6,7 @@
   const pale = "#d0e3dd";
   const orange = "#c7643f";
   const white = "#fffbf0";
-  const clamp = value => Math.max(0, Math.min(1, value));
-  const ease = value => 1 - (1 - clamp(value)) ** 3;
+  const {clamp, easing:{outCubic:ease}} = global.MgKit;
   const fmt = value => Number(value.toFixed(3));
   const text = value => String(value ?? "").replace(/[&<>"']/g, char => (
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" }[char]

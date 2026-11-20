@@ -132,6 +132,15 @@ class MixPlanningTests(unittest.TestCase):
         self.assertEqual(["0", "all", "0"], [row["cues"][0]["focus"] for row in result["shots"]])
         self.assertTrue(all("content" not in row for row in result["shots"]))
 
+    def test_mix_transition_accepts_supported_values_only(self):
+        choices = [choice(self.script, i, "scene", transition=value)
+                   for i, value in enumerate(("wipe", "iris", "unknown"))]
+        result, client = self.arrange(choices)
+        normalized = [row["content"].get("transition") for row in result["shots"]]
+        self.assertEqual(["wipe", "iris", None], normalized)
+        payload = json.loads(client.call_args.args[1]["messages"][1]["content"])
+        self.assertEqual(CATALOG["transitions"], payload["transitions"])
+
     def test_invalid_non_image_fallback_uses_point_default(self):
         rows = [choice(self.script, i, "unavailable", fallback="image") for i in range(3)]
         result, _ = self.arrange(rows)

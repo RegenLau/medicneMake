@@ -405,6 +405,7 @@ const StageStudio = (() => {
       '<p class="small" id="stage-stale"' + (shot.presentationStale ? "" : " hidden") + '>内容已改，可重新判断呈现方式</p>' +
       btn("本幕重新判断", "stage-replan", "outline", "one") + '</div>' : "";
     const scene = '<span class="label">本幕制作方式</span><div class="chips">' + kindButtons + '</div>' + decision +
+      (index ? select("幕间转场", "transition", Object.entries(config.stageCatalog.transitions || {fade:"淡入"}), shot.content.transition || "fade") : "") +
       text("本幕标题", "name", shot.name) + `<label class="field">本幕口播<textarea data-stage-field="line" maxlength="450" rows="3">${esc(shot.line)}</textarea></label>` +
       '<div class="tpl-two-col">' + text("预览时长（秒）", "seconds", shot.seconds, 4) +
       select("所属章节", "chapterIndex", w.stagePlan.chapters.map((name,index) => [String(index),name]), String(shot.chapterIndex)) + '</div>' +
