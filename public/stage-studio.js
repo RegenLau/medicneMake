@@ -411,7 +411,9 @@ const StageStudio = (() => {
       (shot.content.reason ? `<p>${esc(shot.content.reason)}</p>` : "") +
       (shot.content.adjusted ? `<p class="small stage-adjusted">${esc(shot.content.adjusted)}</p>` : "") +
       '<p class="small" id="stage-stale"' + (shot.presentationStale ? "" : " hidden") + '>内容已改，可重新判断呈现方式</p>' +
-      btn("本幕重新判断", "stage-replan", "outline", "one") + '</div>' : "";
+      btn("本幕重新判断", "stage-replan", "outline", "one") +
+      (shot.content.mgRequest && config.mgGeneration && (!support || support.includes("mg")) ? `<p class="small">${esc(shot.content.mgRequest)}</p>` +
+        btn("可以用 AI 制作 MG 素材","stage-create-mg","outline") : "") + '</div>' : "";
     const scene = '<span class="label">本幕制作方式</span><div class="chips">' + kindButtons + '</div>' + decision +
       (index ? select("幕间转场", "transition", Object.entries(config.stageCatalog.transitions || {fade:"淡入"}), shot.content.transition || "fade") : "") +
       text("本幕标题", "name", shot.name) + `<label class="field">本幕口播<textarea data-stage-field="line" maxlength="450" rows="3">${esc(shot.line)}</textarea></label>` +
@@ -763,6 +765,18 @@ const StageStudio = (() => {
     } else if (action === "stage-inspector") inspector.set(w, value);
     else if (action === "stage-select") { selected.set(w, Number(value)); inspector.set(w, "scene"); }
     else if (action === "stage-replan" && p.mode === "mix") { replan(w, value === "one" ? index : undefined); return true; }
+    else if (action === "stage-create-mg" && shot?.content.mgRequest) {
+      StudioAssets.generateMG({description:shot.content.mgRequest,workId:w.id,theme:w.templateTheme || "medical",
+        onAdopt:item => {
+          if (w.stagePlan.shots[index] !== shot) return;
+          selectKind(w,shot,"mg");
+          Object.assign(shot.content,{assetId:item.id,assetName:item.name,decidedBy:"user"});
+          delete shot.presentationStale;
+          touch(w,true);
+          if (current() === w) render(true);
+        }});
+      return true;
+    }
     else if (action === "stage-kind" && shot && Object.hasOwn(kinds,value) && shot.content.kind !== value) {
       if (p.mode === "mix" && value === "image" && countImages(w) >= imageBudget(w)) {
         notify("已达 AI 出图上限，可在全片设置中调整。","warn");
@@ -787,7 +801,7 @@ const StageStudio = (() => {
       }
     } else if (action === "stage-choose" && shot) {
       const content = shot.content;
-      StudioAssets.pick(value === "sfx" ? ["sfx"] : value === "image" ? ["image"] : value === "mg" ? ["lottie"] : ["image", "svg"], item => {
+      StudioAssets.pick(value === "sfx" ? ["sfx"] : value === "image" ? ["image"] : value === "mg" ? ["lottie","mg"] : ["image", "svg"], item => {
         if (value === "image") content.image = item.url;
         else if (value === "asset" || value === "mg") { content.assetId=item.id; content.assetName=item.name; }
         else if (value === "sfx") { shot.sfxId=item.id; shot.sfxName=item.name; }

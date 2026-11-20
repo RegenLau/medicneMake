@@ -21,7 +21,7 @@ SVG_ELEMENTS = frozenset("svg g path rect circle ellipse line polyline polygon d
 SVG_ATTRIBUTES = frozenset("id viewBox width height x y x1 x2 y1 y2 cx cy r rx ry d points fill fill-rule stroke stroke-width stroke-linecap stroke-linejoin stroke-dasharray stroke-dashoffset opacity fill-opacity stroke-opacity transform gradientTransform gradientUnits spreadMethod offset stop-color stop-opacity clip-path clip-rule clipPathUnits mask maskUnits maskContentUnits preserveAspectRatio font-size font-weight text-anchor dominant-baseline dx dy".split())
 LOCAL_PAINT = re.compile(r"url\(#[A-Za-z_][\w.:-]*\)")
 USER_ID = re.compile(r"user:[0-9a-f]{32}")
-LIMITS = {"image": 8 * 1024 * 1024, "svg": 300 * 1024, "layout": 64 * 1024, "lottie": motion_asset.LOTTIE_LIMIT}
+LIMITS = {"image": 8 * 1024 * 1024, "svg": 300 * 1024, "layout": 64 * 1024, "lottie": motion_asset.LOTTIE_LIMIT, "mg": motion_asset.MG_LIMIT}
 LAYOUT_VARIANTS = {
     "header": ("pill-title+chapter-rail",),
     "chapters": ("rail",),
@@ -95,7 +95,7 @@ def layout_supports(definition, item):
                                *(kind for kind in item.get("extraSupports", ()) if kind in LAYOUT_CONTENTS)]))
 
 
-def clean_svg(data):
+def clean_svg(data, *, motion=False):
     try:
         xml = data.decode("utf-8-sig")
     except UnicodeDecodeError as error:
@@ -111,13 +111,25 @@ def clean_svg(data):
         raise ValueError("请选择 SVG 文件。")
     for node in root.iter():
         tag = node.tag.removeprefix(prefix)
+        if motion and (tag in ("text", "tspan", "title", "desc") or (node.text or "").strip() or (node.tail or "").strip()):
+            raise ValueError("MG 动画不能包含文字。请用工作台的文字叠加。")
         if tag not in SVG_ELEMENTS:
             raise ValueError("SVG 仅支持静态矢量图形。请移除脚本、动画、外链和嵌入内容。")
         node.tag = prefix + tag
         for key, value in node.attrib.items():
+            if motion and key == "data-part":
+                if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,31}", value):
+                    raise ValueError("MG 部件 data-part 需使用 1–32 个英文字母、数字、短横线或下划线。")
+                continue
+            if motion and key in ("fill", "stroke", "stop-color"):
+                if value == "none" or LOCAL_PAINT.fullmatch(value) or value in {f"var({token})" for token in motion_asset.THEME_PALETTE}:
+                    continue
+                raise ValueError("MG 图形颜色必须用指定主题变量。")
             if key not in SVG_ATTRIBUTES or ("(" in value and key in {"fill", "stroke", "clip-path", "mask"}
                                               and not LOCAL_PAINT.fullmatch(value) and not re.fullmatch(r"rgba?\([\d\s.,%]+\)", value)):
                 raise ValueError("SVG 包含不支持的属性或外部引用。")
+    if motion:
+        root.attrib.setdefault("fill", "none")
     return ET.tostring(root, encoding="utf-8")
 
 
@@ -172,6 +184,7 @@ class LocalLibrary:
         self.root = Path(root)
         self.builtin_root = Path(builtin_root)
         self.lock = threading.Lock()
+        self.pending_lock = threading.Lock()
 
     def _read_user(self):
         index = self.root / "index.json"
@@ -243,11 +256,14 @@ class LocalLibrary:
                         fields, None, "copy", origin=origin)
 
     def motion(self, asset_id):
-        path, item = self.resolve(asset_id, ("lottie",))
-        return motion_asset.lottie_package(path.read_bytes(), item.get("palette", {})), item, path
+        path, item = self.resolve(asset_id, ("lottie", "mg"))
+        data = path.read_bytes()
+        package = (motion_asset.lottie_package(data, item.get("palette", {})) if item["kind"] == "lottie"
+                   else motion_asset.mg_package(data, clean_svg))
+        return package, item, path
 
     def motion_preview_file(self, asset_id, name):
-        _, item = self.resolve(asset_id, ("lottie",))
+        _, item = self.resolve(asset_id, ("lottie", "mg"))
         if name not in ("poster.jpg", "preview.mp4") or not item.get("previewUrl", "").startswith("/library-preview/"):
             raise ValueError("素材预览不存在。")
         key = self._read_user()
@@ -289,10 +305,92 @@ class LocalLibrary:
                   "credit": item.get("credit") or f'来源素材：{item["name"]}'}
         return self.add_motion("lottie", path.read_bytes(), fields, preview_renderer, "copy", item["id"])
 
+    def pending_folder(self, draft_id):
+        if not isinstance(draft_id, str) or not re.fullmatch(r"pending:[a-f0-9-]{36}", draft_id):
+            raise ValueError("MG 草稿 ID 无效。")
+        return self.root / "pending" / str(uuid.UUID(draft_id.removeprefix("pending:")))
+
+    def pending(self, draft_id):
+        directory = self.pending_folder(draft_id)
+        file = directory / "record.json"
+        if not file.is_file():
+            raise ValueError("找不到 MG 草稿。")
+        return json.loads(file.read_text(encoding="utf-8"))
+
+    def pending_items(self):
+        rows = [json.loads(file.read_text(encoding="utf-8")) for file in
+                sorted((self.root / "pending").glob("*/record.json"), key=lambda path: path.stat().st_mtime, reverse=True)]
+        return [row for row in rows if row["status"] == "pending"]
+
+    @staticmethod
+    def write_pending(directory, record):
+        temp = directory / "record.tmp"
+        temp.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+        temp.replace(directory / "record.json")
+
+    def save_pending(self, draft_id, generated, model, preview_renderer, parent_id=None):
+        directory = self.pending_folder(draft_id)
+        if (directory / "record.json").is_file():
+            return self.pending(draft_id)
+        asset = motion_asset.mg_package(json.dumps(generated["spec"], ensure_ascii=False).encode("utf-8"), clean_svg)
+        preview_renderer({**asset, "theme": generated["theme"]}, directory)
+        record = {key: generated[key] for key in ("name", "useFor", "description", "revision", "theme", "repairCount", "repairReasons")}
+        prefix = "/library-pending/" + quote(draft_id, safe="")
+        record.update(id=draft_id, kind="mg", status="pending", model=model, duration=asset["duration"],
+                      thumbnailUrl=prefix + "/poster.jpg", previewUrl=prefix + "/preview.mp4", parentId=parent_id)
+        spec = directory / "motion.json"
+        spec.write_text(json.dumps(generated["spec"], ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        self.write_pending(directory, record)
+        return record
+
+    def pending_preview_file(self, draft_id, name):
+        if self.pending(draft_id)["status"] != "pending" or name not in ("poster.jpg", "preview.mp4"):
+            raise ValueError("MG 草稿预览不存在。")
+        path = self.pending_folder(draft_id) / name
+        if not path.is_file():
+            raise ValueError("MG 草稿预览不存在。")
+        return path
+
+    def decide_pending(self, draft_id, adopt):
+        with self.pending_lock:
+            directory = self.pending_folder(draft_id)
+            record = self.pending(draft_id)
+            if record["status"] == "confirmed" and adopt:
+                _, item = self.resolve(record["assetId"], ("mg",))
+                return item
+            if record["status"] == "discarded" and not adopt:
+                return None
+            if record["status"] != "pending":
+                raise ValueError("这份 MG 草稿已处理。")
+            item = None
+            if adopt:
+                raw = (directory / "motion.json").read_bytes()
+                motion = motion_asset.mg_package(raw, clean_svg)
+                item = next((self.public(row) for row in self._read_user() if row.get("originId") == draft_id), None)
+                if item is None:
+                    tag_titles = [record["name"], *re.findall(r"[一-鿿]{2,8}", record["description"])[:3]]
+                    source = {"name":record["name"], "license":"AI 生成 · 已人工确认", "credit":"希息药事工作台",
+                              "tags": ", ".join(dict.fromkeys(tag_titles)), "model":record["model"],
+                              "prompt": record["description"] + ("\n" + record["revision"] if record["revision"] else "")}
+                    cache_key = hashlib.sha256(draft_id.encode()).hexdigest()
+                    preview = self.root / "previews" / cache_key
+                    preview.mkdir(parents=True, exist_ok=True)
+                    for filename in ("poster.jpg", "preview.mp4"):
+                        temp = preview / (filename + ".tmp")
+                        temp.write_bytes((directory / filename).read_bytes())
+                        temp.replace(preview / filename)
+                    item = self.add("mg", raw, source, None, "ai", extra={"originId":draft_id, "useFor":record["useFor"],
+                                    "markers":motion["markers"], "previewDigest":cache_key, "palette":{}})
+                record.update(status="confirmed", assetId=item["id"])
+            else:
+                record["status"] = "discarded"
+            self.write_pending(directory, record)
+            return item
+
     def upload(self, payload, ffmpeg, preview_renderer=None):
         kind = payload.get("kind")
-        if kind not in LIMITS:
-            raise ValueError("请选择图片、SVG 或布局 JSON。")
+        if kind not in ("image", "svg", "layout", "lottie"):
+            raise ValueError("请选择图片、SVG、布局或 Lottie JSON。")
         try:
             raw = base64.b64decode(payload["data"], validate=True)
         except (KeyError, TypeError, ValueError, binascii.Error) as error:
@@ -313,7 +411,7 @@ class LocalLibrary:
                 raise ValueError("请选择 UTF-8 编码的布局 JSON 文件。") from error
             data = json.dumps(validate_layout(definition), sort_keys=True, separators=(",", ":")).encode("utf-8")
             ext = ".json"
-        elif kind == "lottie":
+        elif kind in ("lottie", "mg"):
             ext = ".json"
         else:
             ext = check_image(data, ffmpeg)
@@ -330,7 +428,7 @@ class LocalLibrary:
         sha = hashlib.sha256(data).hexdigest()
         with self.lock:
             entries = self._read_user()
-            for item in entries if kind not in ("layout", "lottie") else ():
+            for item in entries if kind not in ("layout", "lottie", "mg") else ():
                 if item.get("sha256") == sha and item["kind"] == kind and not item.get("archived"):
                     return self.public(item)
             files = self.root / "files"

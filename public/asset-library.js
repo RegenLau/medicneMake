@@ -1,7 +1,7 @@
 "use strict";
 
 const StudioAssets = (() => {
-  const categories = { image: "图片", svg: "SVG 图形", motion: "SVG 动效", music: "背景音乐", sfx: "音效", font: "字体", layout: "布局", lottie: "Lottie 动画" };
+  const categories = { image: "图片", svg: "SVG 图形", motion: "SVG 动效", music: "背景音乐", sfx: "音效", font: "字体", layout: "布局", lottie: "Lottie 动画", mg: "MG 动画", pending: "待确认" };
   const kinds = Object.keys(categories);
   const rights = '<label class="field">授权<select name="license" required><option value="">请选择授权</option>' +
     '<option>自制或已获授权</option><option>CC0</option><option>CC BY</option><option>AI 生成 · 已核对服务条款</option></select></label>' +
@@ -25,7 +25,7 @@ const StudioAssets = (() => {
   }
 
   function media(item) {
-    if (item.kind === "lottie") return `<div class="asset-thumb"><img src="${esc(item.thumbnailUrl)}" alt="${esc(item.name)}" loading="lazy"></div>`;
+    if (["lottie","mg","pending"].includes(item.kind)) return `<div class="asset-thumb"><img src="${esc(item.thumbnailUrl)}" alt="${esc(item.name)}" loading="lazy"></div>`;
     if (item.kind === "image" || item.kind === "svg") {
       return `<div class="asset-thumb ${item.kind}"><img src="${esc(item.url)}" alt="${esc(item.name)}" loading="lazy"></div>`;
     }
@@ -39,11 +39,12 @@ const StudioAssets = (() => {
   }
 
   function card(item, picking) {
+    if (item.kind === "pending") return pendingCard(item);
     const tags = item.tags?.length ? `<ul class="asset-tags">${item.tags.map((tag) => `<li>${esc(tag)}</li>`).join("")}</ul>` : "";
     const termsUrl = item.termsUrl || item.sourceUrl;
     const terms = termsUrl ? `<a href="${esc(termsUrl)}" target="_blank" rel="noopener">授权</a>` : "";
     const actions = [
-      item.kind === "lottie" ? `<button type="button" class="outline" data-lib-motion="${esc(item.id)}">预览动画</button>` : "",
+      ["lottie","mg"].includes(item.kind) ? `<button type="button" class="outline" data-lib-motion="${esc(item.id)}">预览动画</button>` : "",
       item.kind === "lottie" && !picking ? `<button type="button" class="outline" data-lib-palette="${esc(item.id)}">编辑配色</button>` : "",
       item.kind === "layout" ? `<button type="button" class="outline" data-lib-layout="${esc(item.id)}">预览布局</button>` : "",
       item.kind === "layout" && !picking ? `<button type="button" class="outline" data-lib-copy="${esc(item.id)}">复制为我的布局</button>` : "",
@@ -60,7 +61,7 @@ const StudioAssets = (() => {
   }
 
   function mount(root, options = {}) {
-    const allowed = options.kinds || kinds;
+    const allowed = options.kinds || kinds.filter(kind => config.mgGeneration || !["mg","pending"].includes(kind));
     const picking = Boolean(options.onPick);
     let selected = picking || !allowed.includes(pageKind) ? allowed[0] : pageKind;
     let query = picking || options.manage ? "" : pageQuery;
@@ -75,10 +76,14 @@ const StudioAssets = (() => {
     const input = root.querySelector("input[type=search]");
     input.value = query;
     const uploadButton = root.querySelector("[data-lib-upload]");
-    if (uploadButton) uploadButton.onclick = () => upload(selected, options.manage);
+    if (uploadButton) uploadButton.onclick = () => {
+      if (selected === "mg" || selected === "pending") generateMG();
+      else upload(selected,options.manage);
+    };
 
     function draw() {
-      if (uploadButton) uploadButton.textContent = selected === "layout" ? "上传布局" : selected === "lottie" ? "上传 Lottie" : "上传素材";
+      if (uploadButton) uploadButton.textContent = selected === "layout" ? "上传布局" : selected === "lottie" ? "上传 Lottie" :
+        ["mg","pending"].includes(selected) ? "AI 制作 MG" : "上传素材";
       root.querySelectorAll("[data-lib-kind]").forEach((b) => {
         b.setAttribute("aria-pressed", String(b.dataset.libKind === selected));
         b.classList.toggle("selected", b.dataset.libKind === selected);
@@ -116,7 +121,9 @@ const StudioAssets = (() => {
 
     async function load() {
       try {
-        items = (await jsonRequest("/api/library")).items;
+        const [library,drafts] = await Promise.all([jsonRequest("/api/library"),
+          allowed.includes("pending") ? jsonRequest("/api/library/mg-pending") : {items:[]}]);
+        items = [...library.items,...drafts.items.map(item => ({...item,kind:"pending"}))];
         syncLayouts(items);
         draw();
       } catch (error) {
@@ -136,7 +143,7 @@ const StudioAssets = (() => {
     root.addEventListener("click", async (event) => {
       const button = event.target.closest("button");
       if (!button) return;
-      const { libKind, libUse, libArchive, libPlay, libLayout, libCopy, libMotion, libPalette } = button.dataset;
+      const { libKind, libUse, libArchive, libPlay, libLayout, libCopy, libMotion, libPalette, libDraft } = button.dataset;
       if (libKind) {
         selected = libKind;
         if (!picking) pageKind = selected;
@@ -146,6 +153,9 @@ const StudioAssets = (() => {
         if (!item) return;
         dialog.close();
         options.onPick(item);
+      } else if (libDraft) {
+        const item = items.find(({id}) => id === libDraft);
+        if (item) showDraft(item);
       } else if (libMotion || libPalette) {
         const item = items.find(({id}) => id === (libMotion || libPalette));
         if (item) motionModal(item, Boolean(libPalette), picking ? options : null);
@@ -343,6 +353,102 @@ const StudioAssets = (() => {
     });
   }
 
+  function pendingCard(item) {
+    return `<article class="asset-card">${media(item)}<div class="asset-card-info"><h3>${esc(item.name)}</h3>
+      <p>${esc(item.useFor)}</p><div class="asset-actions">
+      <button type="button" class="primary" data-lib-draft="${esc(item.id)}">检查预览</button></div></div></article>`;
+  }
+
+  function showDraft(item, options = {}) {
+    openModal("待确认 MG 素材",`<div class="asset-form">
+      <h3>${esc(item.name)}</h3><p class="small">${esc(item.useFor)}</p>
+      <video class="motion-preview-video" src="${esc(item.previewUrl)}" poster="${esc(item.thumbnailUrl)}" controls muted playsinline preload="metadata"></video>
+      <div class="asset-actions">
+        <button type="button" class="primary" data-adopt-mg>采用入库</button>
+        <button type="button" class="outline" data-revise-mg>补充要求后重新生成</button>
+        <button type="button" class="textbtn danger" data-discard-mg>丢弃</button>
+      </div><p class="banner err" role="alert" hidden></p></div>`,"asset-form");
+    const panel=dialogBody.querySelector(".asset-form");
+    const buttons=[...panel.querySelectorAll("button")];
+    async function decide(adopt) {
+      buttons.forEach(button => button.disabled = true);
+      try {
+        const result=await post("mg-decide",{id:item.id,adopt});
+        if (panel.isConnected) dialog.close();
+        if (adopt) options.onAdopt?.(result.item);
+        if (route()[0] === "library") {
+          pageKind=adopt ? "mg" : "pending";
+          render(true);
+        }
+        notify(adopt ? `「${result.item.name}」已采用入库` : "MG 草稿已丢弃","ok");
+      } catch (error) {
+        const status=panel.querySelector('[role="alert"]');
+        status.textContent=error.message;
+        status.hidden=false;
+        buttons.forEach(button => button.disabled = false);
+      }
+    }
+    panel.querySelector("[data-adopt-mg]").addEventListener("click",()=>decide(true));
+    panel.querySelector("[data-discard-mg]").addEventListener("click",()=>decide(false));
+    panel.querySelector("[data-revise-mg]").addEventListener("click",()=>generateMG({...options,parent:item,description:item.description,theme:item.theme}));
+  }
+
+  function generateMG(options = {}) {
+    if (!config.deepseekKeyPresent) return openApiKeys("deepseek");
+    const modelList = Object.entries(config.textModels || {});
+    const selected = options.parent?.model || resolveTextModel(current()?.settings || data.settings);
+    openModal(options.parent ? "重新生成 MG 素材" : "AI 制作 MG 素材",`<form class="asset-form">
+      <label class="field">动作描述<textarea name="description" required maxlength="200" rows="3"
+        ${options.parent ? "readonly" : ""}>${esc(options.description || "")}</textarea></label>
+      ${options.parent ? '<label class="field">补充要求<textarea name="revision" required maxlength="220" rows="3"></textarea></label>' : ""}
+      <label class="field">主题<select name="theme">${opts([["medical","医疗蓝"],["warm","暖色"]],options.theme || "medical")}</select></label>
+      <label class="field">文本模型<select name="model">${opts(modelList,selected)}</select></label>
+      <p class="small">DeepSeek 按 Token 计费。校验失败时最多修正两次。</p>
+      <p role="status"></p><p class="banner err" role="alert" hidden></p>
+      <div class="asset-actions"><button type="submit" class="primary">生成草稿并计费</button></div></form>`,"asset-form");
+    const form=dialogBody.querySelector("form");
+    const button=form.querySelector('button[type="submit"]');
+    const status=form.querySelector('[role="status"]');
+    const errorBox=form.querySelector('[role="alert"]');
+    let saved, signature, finished=false;
+    form.addEventListener("submit",async event=>{
+      event.preventDefault();
+      if (button.disabled || finished) return;
+      button.disabled=true;
+      errorBox.hidden=true;
+      const mg={description:form.elements.description.value.trim(),revision:form.elements.revision?.value.trim() || "",
+        theme:form.elements.theme.value,...(options.parent ? {parentId:options.parent.id} : {})};
+      const textModel=form.elements.model.value;
+      const identity=JSON.stringify([mg,textModel]);
+      if (identity !== signature) {
+        signature=identity;
+        const id=crypto.randomUUID();
+        saved={id,workId:options.workId || id,mode:"ark",kind:"mg-draft",items:[],settings:{textModel},mg};
+      }
+      try {
+        let result=await jsonRequest("/api/jobs",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(saved)});
+        while (["queued","running"].includes(result.status) && form.isConnected && dialog.open) {
+          status.textContent=result.progress || "正在制作 MG 草稿…";
+          await new Promise(resolve=>setTimeout(resolve,750));
+          result=await jsonRequest("/api/jobs/"+saved.id);
+        }
+        if (!form.isConnected || !dialog.open) return;
+        if (result.status !== "done") throw Error(result.error || "MG 草稿未制作完成。");
+        finished=true;
+        if (route()[0] === "library") {
+          pageKind="pending";
+          render(true);
+        }
+        showDraft(result.output,options);
+      } catch (error) {
+        errorBox.textContent=error.message;
+        errorBox.hidden=false;
+        status.textContent="";
+        button.disabled=false;
+      }
+    });
+  }
+
   function parsePalette(value) {
     let palette;
     try { palette = JSON.parse(value.trim() || "{}"); }
@@ -461,5 +567,5 @@ const StudioAssets = (() => {
 
   const motionUrl = id => "/api/library/motion/" + encodeURIComponent(id);
 
-  return { page, pick, collect, url, manageLayouts, layoutDiagram, motionUrl };
+  return { page, pick, collect, url, manageLayouts, layoutDiagram, motionUrl, generateMG };
 })();

@@ -30,6 +30,7 @@ import svg_motion
 import stage_video
 import mix_plan
 import motion_asset
+import mg_generation
 import music_gen
 import work_costs
 
@@ -957,8 +958,23 @@ def code_motion_shot_captions(scene, start, audible):
 
 
 def setting_valid(p):
-    if p.get("mode") != "ark" or p.get("kind") not in ("images", "video", "draft", "svg-speech"):
+    if p.get("mode") != "ark" or p.get("kind") not in ("images", "video", "draft", "svg-speech", "mg-draft"):
         raise ValueError("未知的生成方式")
+    if p["kind"] == "mg-draft":
+        if not current_deepseek_key():
+            raise ValueError("请先连接 DeepSeek，再制作 MG 动画。")
+        model = p["settings"].get("textModel") or default_text_model()
+        if model not in text_models():
+            raise ValueError("请选择有效的 DeepSeek 文本模型。")
+        description, _, _ = mg_generation.validate_request(p.get("mg"))
+        parent_id = p["mg"].get("parentId")
+        if parent_id:
+            parent = ASSETS.pending(parent_id)
+            if parent["status"] != "pending" or description != parent["description"]:
+                raise ValueError("请从仍待确认的原草稿重新生成。")
+        if not code_motion_ready():
+            raise ValueError("制作 MG 预览需要 Node.js、Chrome、Playwright 和 FFmpeg。")
+        return
     if p["kind"] == "draft":
         if not current_deepseek_key():
             raise ValueError("请先连接 DeepSeek，再生成自定义内容。")
@@ -2926,7 +2942,8 @@ def render_motion_preview(asset, destination):
             "fps": fps, "frames": round(duration * fps), "fontId": None, "images": {},
             "layout": {"canvas": {"w": 1280, "h": 720}, "regions": {
                 "media": {"x": 0, "y": 0, "w": 100, "h": 100, "component": "media"}}},
-            "deck": {"title": "动画预览", "presenter": "none", "chapters": ["预览", "结束"], "slides": [slide]},
+            "deck": {"title": "动画预览", "theme": asset.get("theme", "medical"), "presenter": "none",
+                     "chapters": ["预览", "结束"], "slides": [slide]},
             "shots": [{"name": "动画预览", "line": "", "kind": "mg", "start": 0, "end": duration, "captions": [],
                        "overlay": "off", "fit": "auto", "motionAsset": asset}],
         }
@@ -3235,6 +3252,31 @@ def write_draft(p, job, save, record=None):
         )
 
 
+def write_mg_draft(p, job, save, record):
+    model = p["settings"].get("textModel") or default_text_model()
+    item = p["mg"]
+
+    def progress(message):
+        job["progress"] = message
+        save()
+
+    def tracked(path, body, **kwargs):
+        result = deepseek(path, body, **kwargs)
+        record(f"text:{uuid.uuid4()}", work_costs.text_cost(
+            "MG 动画素材制作", result.get("model") or body["model"], result.get("usage") or {},
+        ))
+        return result
+
+    generated = job.get("mgDraft")
+    if generated is None:
+        progress("用 DeepSeek 制作无字矢量动画")
+        generated = mg_generation.generate(tracked, model, item, lambda n: progress(f"按校验结果修正 MG 规格（{n}/2）"))
+        job["mgDraft"] = generated
+        save()
+    progress("在本机渲染 MG 预览")
+    job["output"] = ASSETS.save_pending("pending:" + job["id"], generated, model, render_motion_preview, item.get("parentId"))
+
+
 def work(job, key=None, speech_key="", deepseek_key=None, dashscope_key=""):
     def save():
         with CACHE_LOCK:
@@ -3263,6 +3305,8 @@ def work(job, key=None, speech_key="", deepseek_key=None, dashscope_key=""):
                 job["output"] = {"images": job["results"]}
             elif p["kind"] == "draft":
                 write_draft(p, job, save, record)
+            elif p["kind"] == "mg-draft":
+                write_mg_draft(p, job, save, record)
             elif p["kind"] == "svg-speech":
                 preview_svg_speech(p, save, job, speech_key, record)
             else:
@@ -3435,6 +3479,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "layoutVariants": asset_library.LAYOUT_VARIANTS,
                     "stageCatalog": ASSETS.stage_catalog(),
                     "motionPalette": motion_asset.THEME_PALETTE,
+                    "mgGeneration": True,
                     "imageRates": work_costs.image_estimate_rates(),
                     "sfxPacks": ASSETS.sound_packs(),
                     "svgMotion": {"actions": svg_motion.ACTIONS, "exportReady": svg_motion.ready(FFMPEG)},
@@ -3447,6 +3492,13 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/library":
             with CACHE_LOCK:
                 return self.send_json(200, {"items": list_assets()})
+        if path == "/api/library/mg-pending":
+            return self.send_json(200, {"items": ASSETS.pending_items()})
+        if m := re.fullmatch(r"/library-pending/([^/]+)/(poster\.jpg|preview\.mp4)", path):
+            try:
+                return self.file_response(ASSETS.pending_preview_file(unquote(m[1]), m[2]))
+            except ValueError:
+                return self.send_error(404)
         if m := re.fullmatch(r"/api/library/motion/([^/]+)", path):
             try:
                 asset, _, _ = ASSETS.motion(unquote(m[1]))
@@ -3535,7 +3587,7 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         if (
             self.path not in ("/api/jobs", "/api/costs", "/api/ark-key", "/api/deepseek-key", "/api/speech-key", "/api/dashscope-key", "/api/mureka-key", "/api/upload-frame", "/api/generate-music", "/api/music-library/rename", "/api/music-library/delete",
-                              "/api/library/upload", "/api/library/collect-image", "/api/library/copy-layout", "/api/library/motion-palette", "/api/library/archive")
+                              "/api/library/upload", "/api/library/collect-image", "/api/library/copy-layout", "/api/library/motion-palette", "/api/library/mg-decide", "/api/library/archive")
             or not self.allowed()
             or self.headers.get("Origin") not in (ORIGIN, f"http://localhost:{PORT}")
             or self.headers.get_content_type() != "application/json"
@@ -3557,6 +3609,10 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(200, save_uploaded_frame(p))
             if self.path == "/api/library/upload":
                 return self.send_json(200, {"item": ASSETS.upload(p, FFMPEG, render_motion_preview)})
+            if self.path == "/api/library/mg-decide":
+                if type(p.get("adopt")) is not bool:
+                    raise ValueError("请选择采用或丢弃。")
+                return self.send_json(200, {"item": ASSETS.decide_pending(p.get("id"), p["adopt"])})
             if self.path == "/api/library/motion-palette":
                 return self.send_json(200, {"item": ASSETS.copy_motion_palette(p, render_motion_preview)})
             if self.path == "/api/library/copy-layout":
@@ -3610,7 +3666,7 @@ class Handler(SimpleHTTPRequestHandler):
                 write_json(file, job)
                 ACTIVE.add(job_id)
                 key = current_ark_key()
-                ds_key = current_deepseek_key() if p["kind"] == "draft" else None
+                ds_key = current_deepseek_key() if p["kind"] in ("draft", "mg-draft") else None
                 motion_avatar = p.get("codeMotion") is True and p.get("avatar") is not None
                 dash_key = current_dashscope_key() if p["kind"] == "video" and (p.get("template") is True or motion_avatar or (p.get("stage") is True and p.get("avatar"))) else ""
                 threading.Thread(

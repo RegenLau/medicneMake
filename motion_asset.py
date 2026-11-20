@@ -169,3 +169,74 @@ def lottie_package(data, palette):
     spec, markers = lottie(data)
     return {"kind": "lottie", "animation": spec, "palette": checked_palette(palette),
             "markers": markers, "duration": (spec["op"] - spec["ip"]) / spec["fr"]}
+
+
+MG_LIMIT = 300 * 1024
+MG_PROPS = {
+    "opacity": (0, 1), "translateX": (-1600, 1600), "translateY": (-900, 900),
+    "scale": (0, 5), "rotate": (-720, 720), "draw": (0, 1), "clip": (0, 1), "blur": (0, 24),
+}
+MG_EASES = ("linear", "outCubic", "outExpo", "outBack", "inOutCubic", "wobble")
+MG_TRACK_FIELDS = {"part", "prop", "from", "to", "start", "end", "ease"}
+PART_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,31}")
+
+
+def mg_package(data, clean_svg):
+    import xml.etree.ElementTree as ET
+
+    if not 0 < len(data) <= MG_LIMIT:
+        raise ValueError("MG 规格文件不能超过 300 KB。")
+    value = json_bytes(data)
+    if not isinstance(value, dict) or value.keys() != {"schemaVersion", "svg", "duration", "tracks", "events"}:
+        raise ValueError("MG 规格需要 schemaVersion、svg、duration、tracks 和 events。")
+    if type(value["schemaVersion"]) is not int or value["schemaVersion"] != 1:
+        raise ValueError("MG 规格版本必须为 1。")
+    if not isinstance(value["svg"], str) or not value["svg"].strip():
+        raise ValueError("请提供矢量 SVG 图形。")
+    duration = value["duration"]
+    if not number(duration, 1, 8):
+        raise ValueError("素材参考时长应为 1 到 8 秒。")
+    svg = clean_svg(value["svg"].encode("utf-8"), motion=True)
+    root = ET.fromstring(svg)
+    bounds = root.get("viewBox", "").replace(",", " ").split()
+    try:
+        canvas = [float(value) for value in bounds]
+    except ValueError:
+        canvas = []
+    if (len(canvas) != 4 or not all(number(x, -4000, 4000) for x in canvas)
+            or min(canvas[2:]) <= 0 or abs(canvas[2] / canvas[3] - 16 / 9) > .02):
+        raise ValueError("MG 素材需要 16:9 的 SVG viewBox，例如 0 0 800 450。")
+    nodes = list(root.iter())
+    parts = [element.get("data-part") for element in nodes if element.get("data-part")]
+    if not parts or len(parts) != len(set(parts)) or len(nodes) > 300:
+        raise ValueError("MG 需要可动部件，data-part 不允许重复，SVG 最多 300 个节点。")
+    part_names = set(parts)
+    tracks = value["tracks"]
+    if not isinstance(tracks, list) or not 1 <= len(tracks) <= 120:
+        raise ValueError("MG 需要 1 到 120 条动作轨道。")
+    for track in tracks:
+        if not isinstance(track, dict) or not MG_TRACK_FIELDS <= track.keys() <= MG_TRACK_FIELDS | {"loop", "stagger", "index"}:
+            raise ValueError("动作轨道字段无效。")
+        part, prop = track["part"], track["prop"]
+        if not isinstance(part, str) or not PART_NAME.fullmatch(part) or part not in part_names:
+            raise ValueError("每条轨道的 part 必须对应 SVG 中的 data-part。")
+        if not isinstance(prop, str) or prop not in MG_PROPS or track["ease"] not in MG_EASES:
+            raise ValueError("轨道属性或缓动不在白名单中。")
+        low, high = MG_PROPS[prop]
+        if not number(track["from"], low, high) or not number(track["to"], low, high):
+            raise ValueError(f"{prop} 的起止值超出范围。")
+        if not number(track["start"], 0, 1) or not number(track["end"], 0, 1) or track["start"] >= track["end"]:
+            raise ValueError("轨道起止时间必须在 0 到 1 之间，且起点小于终点。")
+        shift, index = track.get("stagger", 0), track.get("index", 0)
+        if (not number(shift, 0, 1) or type(index) is not int or not 0 <= index <= 50
+                or track["end"] + shift * index > 1 + 1e-9
+                or ("loop" in track and track["loop"] not in ("repeat", "pingpong"))):
+            raise ValueError("轨道交错或循环设置无效。")
+    events = value["events"]
+    if not isinstance(events, list) or len(events) > 12 or not all(
+        isinstance(row, dict) and row.keys() == {"type", "t"} and isinstance(row["type"], str)
+        and row["type"] in KNOWN_EVENTS and number(row["t"], 0, 1) for row in events
+    ):
+        raise ValueError("MG 音效事件必须有有效的 type 和 0 到 1 的时间，最多 12 项。")
+    return {"kind": "mg", "svg": svg.decode("utf-8"), "tracks": tracks, "events": events, "duration": duration,
+            "markers": [{"name": "sfx:" + row["type"], "t": row["t"] * duration, "d": 0} for row in events]}

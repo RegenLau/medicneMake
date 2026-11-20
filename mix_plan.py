@@ -277,6 +277,8 @@ def arrange(client, model, item, script, library):
             "reason 用一句话，逐字引用本幕 name，再具体说明这幕的对象、动作或信息结构为什么适合该方式。"
             "params 可为空对象。选择 SVG 时按清单选动作，给 1–3 段 beats，line 必须是对应口播中的原文片段，"
             "label 不超过 10 字，不重复演示与本幕无关的动作。"
+            "若布局支持 mg 而且没有贴切的已确认 MG 素材，可额外输出 mgRequest（一句无文字动作描述，不超过 160 字），"
+            "同时把 kind 和 params 设为能立即渲染的备用方式。"
             "可在 transition 中从清单选入场转场。延续同一个要点或画面时省略，使用淡入。"
             "只返回 targetIndices 对应的 JSON。image 必须给 priority（1–100 的整数，越大越优先）。"
             '{"shots":[{"index":0,"kind":"方式","reason":"具体原因","fallback":"备用方式","params":{},"priority":50}]}'
@@ -314,6 +316,10 @@ def arrange(client, model, item, script, library):
             transition = choice.get("transition")
             if transition in stage_video.TRANSITIONS and transition in catalog["transitions"]:
                 content["transition"] = transition
+            suggestion = choice.get("mgRequest")
+            if ("mg" in supports and content["kind"] != "mg" and isinstance(suggestion, str)
+                    and 1 <= len(suggestion.strip()) <= 160 and not any(char in suggestion for char in "<>")):
+                content["mgRequest"] = suggestion.strip()
         else:
             try:
                 params = {"beats": choices[i]["beats"]} if mode == "svg" and i in choices else {}

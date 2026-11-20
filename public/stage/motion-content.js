@@ -6,6 +6,9 @@
   const base = (mark, fallback) => mark.d > 0 ? mark.d : fallback - mark.t;
 
   function timing(asset, duration, fit = "auto") {
+    if (asset.kind === "mg" && fit === "auto") {
+      return [{from:0,to:duration,source:0,span:asset.duration,rate:asset.duration/duration}];
+    }
     const intro = asset.markers.find(mark => mark.name === "intro");
     const loop = asset.markers.find(mark => mark.name === "loop");
     const outro = asset.markers.find(mark => mark.name === "outro");
@@ -125,6 +128,21 @@
     }
   }
 
+  function attachSpec(host, asset) {
+    const svg = new DOMParser().parseFromString(asset.svg,"image/svg+xml").documentElement;
+    if (svg.localName !== "svg") throw Error("MG 动画 SVG 无效。");
+    host.append(document.importNode(svg,true));
+    const parts = new Map([...host.querySelectorAll("[data-part]")].map(node => [node.dataset.part,node]));
+    return {
+      draw(time) {
+        for (const [name,state] of MgKit.evaluate(asset.tracks,time/asset.duration)) {
+          MgKit.apply(parts.get(name),state);
+        }
+      },
+      dispose: () => host.replaceChildren(),
+    };
+  }
+
   function overlay(slot, shot, slide) {
     if (shot.overlay === "off") return [];
     const wrapper = document.createElement("div");
@@ -156,7 +174,7 @@
     if (!asset) return;
     const host = document.createElement("div");
     host.className = "stage-mg-art";
-    const player = await attachAnimation(host,asset,theme);
+    const player = asset.kind === "mg" ? attachSpec(host,asset) : await attachAnimation(host,asset,theme);
     if (disposed.has(shot)) { player.dispose(); return; }
     prepared.set(shot,{host,asset,player,segments:timing(asset,shot.end-shot.start,shot.fit)});
   }
