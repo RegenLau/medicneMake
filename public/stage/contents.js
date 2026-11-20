@@ -36,6 +36,21 @@
     events: noEvents,
   };
 
+  function cardEvents(shot, {slide}) {
+    const events = [];
+    let previous = "all";
+    for (const cue of shot.captions || []) {
+      const focus = cue.focus || "all";
+      if (focus !== previous && focus !== "all" && focus !== "outro") {
+        const check = slide.type === "summary" && focus === "action" && slide.checks?.length;
+        events.push({t: cue.start - shot.start, type:check ? "check" : "item-focus"});
+      }
+      previous = focus;
+    }
+    if (slide.type === "warning") events.push({t:0, type:"warning"});
+    return events;
+  }
+
   const card = {
     mount(slot) { return { slot }; },
     draw(dom, shot, time, { slide }) {
@@ -49,7 +64,7 @@
       }
       StageSceneContent.animateTemplateCard(dom, slide, time, focus, Math.max(0.5, shot.end - shot.start));
     },
-    events: noEvents,
+    events: cardEvents,
   };
 
   const scene = {
@@ -66,7 +81,7 @@
       };
     },
     draw(dom, shot, time) { StageSceneContent.animateDynamicScene(dom, shot, dom.meta, time); },
-    events: noEvents,
+    events: (shot, {index, total}) => StageSceneContent.sceneEvents(shot, index, total),
   };
 
   const svg = {
@@ -81,7 +96,7 @@
       const duration = shot.motionSeconds ?? shot.end - shot.start;
       dom.slot.innerHTML = svg.html(slide, duration > 0 ? time / duration : 1, theme, dom.includeHeading);
     },
-    events: noEvents,
+    events: StageSvgContent.events,
   };
 
   const asset = {

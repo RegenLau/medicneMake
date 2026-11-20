@@ -11,6 +11,7 @@ CLASSIC_LAYOUT = "builtin:layout/info-classic"
 CONTENT_KINDS = asset_library.LAYOUT_CONTENTS
 LEGACY_KINDS = frozenset(("image", "card", "scene", "svg"))
 FOCUSES = frozenset(("all", "0", "1", "2", "3", "top", "bottom", "question", "answer", "action", "outro"))
+TRANSITIONS = ("fade", "wipe", "iris", "slide")
 POINT_TYPES = frozenset(("cover", "explain", "compare", "steps", "warning", "summary", "timeline", "checklist"))
 SLIDE_FIELDS = frozenset(("type", "layoutMode", "headline", "lead", "accentPhrase", "question", "answer",
                           "items", "points", "pills", "steps", "warnings", "columns", "checks", "takeaway",
@@ -21,6 +22,21 @@ def mapping(value, message):
     if not isinstance(value, dict):
         raise ValueError(message)
     return value
+
+
+def sound_settings(p, library):
+    audio = mapping(p.get("audio", {}), "音轨设置格式无效。")
+    settings = mapping(audio.get("sfx", {}), "音效设置格式无效。")
+    pack = settings.get("pack", "off")
+    gain = settings.get("gainDb", -14)
+    if type(gain) not in (int, float) or not -30 <= gain <= -6:
+        raise ValueError("音效音量应在 -30 到 -6 dB 之间。")
+    if pack == "off":
+        return {}, gain
+    selected = next((item for item in library.sound_packs() if item["id"] == pack), None)
+    if selected is None:
+        raise ValueError("请选择有效的音效风格包。")
+    return selected["events"], gain
 
 
 def stage_input(p, library, media_path):
@@ -88,6 +104,11 @@ def validate_shot(item, layout, compatible, library, media_path, pictures, used)
     kind = content.get("kind")
     if not isinstance(kind, str) or kind not in layout["supports"] or (compatible and kind != compatible):
         raise ValueError("所选布局不支持本幕制作方式。")
+    transition = content.get("transition")
+    if transition is not None:
+        if transition not in TRANSITIONS:
+            raise ValueError("请选择有效的幕间转场。")
+        base["transition"] = transition
     base.update(kind=kind, tailPause=item.get("tailPause", 0.55))
     slide = {**{key: points[key] for key in SLIDE_FIELDS & points.keys()}, **base}
     default_points = [{"title": entry.get("title", ""), "desc": entry.get("detail", "")} for entry in items]

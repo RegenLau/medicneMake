@@ -123,6 +123,9 @@
     ].join(""));
   }
 
+  const crossAt = 0.39;
+  const consultCheckAt = 0.26;
+
   function compare(p) {
     const separated = ease((p - 0.21) * 2.7);
     return group("translate(665 460)", [
@@ -131,7 +134,7 @@
         group(`translate(${fmt(32 * separated)} 0)`, path("M0 -48 H50 Q102 -48 102 0 Q102 48 50 48 H0 L-9 24 L4 6 L-8 -16 Z", white)),
       ].join("")),
       circle(118, -87, 49, "#f3dfcf", orange),
-      drawn("M98 -107 L137 -68 M137 -107 L98 -68", (p - 0.39) * 2.1),
+      drawn("M98 -107 L137 -68 M137 -107 L98 -68", (p - crossAt) * 2.1),
     ].join(""));
   }
 
@@ -140,7 +143,7 @@
       path("M-158 -94 Q-158 -134 -118 -134 H20 Q63 -134 63 -93 V-14 Q63 22 22 22 H-86 L-130 55 L-130 22 Q-158 17 -158 -13 Z", "#9ebfb8"),
       path("M-38 -2 Q-38 -36 -1 -36 H124 Q162 -36 162 0 V65 Q162 99 126 99 H106 L139 133 L85 99 H-2 Q-38 99 -38 63 Z", white),
       ...[-103, -48, 5].map((x, index) => circle(x, -58 - fmt(Math.sin(clamp(p * 2 - index * 0.14) * Math.PI) * 15), 8, white, "none")),
-      drawn("M10 40 L40 63 L100 5", (p - 0.26) * 1.8, blue, 9),
+      drawn("M10 40 L40 63 L100 5", (p - consultCheckAt) * 1.8, blue, 9),
     ].join(""));
   }
 
@@ -192,14 +195,33 @@
     consult: ["药师", "咨询", "医师"],
   };
 
-  function beatPhases(beats, progress) {
+  function beatWindows(beats) {
     const weights = beats.map(beat => Math.max(1, Array.from(beat.line.replace(/\s/g, "")).length));
     const total = weights.reduce((sum, weight) => sum + weight, 0);
     let elapsed = 0;
     return weights.map(weight => {
-      const local = (progress * total - elapsed) / weight;
+      const start = elapsed / total;
       elapsed += weight;
-      return local;
+      return {start, span:weight / total};
+    });
+  }
+
+  function beatPhases(beats, progress) {
+    return beatWindows(beats).map(({start, span}) => (progress - start) / span);
+  }
+
+  function events(shot) {
+    const beats = shot.beats || [{action: shot.action, line: shot.line}];
+    const duration = shot.motionSeconds ?? shot.end - shot.start;
+    return beatWindows(beats).flatMap(({start, span}, index) => {
+      const action = beats[index].action;
+      const rows = index === 0 ? [] : [{t: start * duration, type:"beat-in"}];
+      if (action === "compare" || action === "consult") {
+        const warning = action === "compare";
+        rows.push({t: (start + span * (warning ? crossAt : consultCheckAt)) * duration,
+                   type:warning ? "warning" : "check"});
+      }
+      return rows;
     });
   }
 
@@ -252,5 +274,5 @@
     </svg>`;
   }
 
-  global.StageSvgContent = { content, beatPhases, keywords };
+  global.StageSvgContent = { content, beatPhases, keywords, events };
 })(globalThis);

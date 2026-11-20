@@ -1091,6 +1091,7 @@ function newWork(type, example, videoMode, tplSampleIdx) {
     updated: Date.now(),
     job: null,
   };
+  StageStudio.initWork(w);
   data.works.unshift(w);
   save();
   navigate("work/" + id);

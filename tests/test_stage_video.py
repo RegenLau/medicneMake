@@ -71,6 +71,17 @@ class StageVideoTests(unittest.TestCase):
         _, _, shots, _, _ = stage_video.stage_input(p, server.ASSETS, server.media_path)
         self.assertEqual(shots[0]["line"], long_line)
 
+    def test_transition_field_is_optional_and_validated(self):
+        p = self.payload()
+        _, _, shots, _, _ = stage_video.stage_input(p, server.ASSETS, server.media_path)
+        self.assertNotIn("transition", shots[0])
+        p["items"][0]["content"]["transition"] = "wipe"
+        _, _, shots, _, _ = stage_video.stage_input(p, server.ASSETS, server.media_path)
+        self.assertEqual("wipe", shots[0]["transition"])
+        p["items"][0]["content"]["transition"] = "<style>"
+        with self.assertRaisesRegex(ValueError, "幕间转场"):
+            stage_video.stage_input(p, server.ASSETS, server.media_path)
+
 
 if __name__ == "__main__":
     unittest.main()

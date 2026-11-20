@@ -11,6 +11,10 @@ const StageStudio = (() => {
   const copy = value => structuredClone(value);
   const fixedKinds = Object.keys(kinds).filter(kind => kind !== "asset");
   const draftModes = [["mix","Mix 模式（推荐）"], ...fixedKinds.map(kind => [kind,kinds[kind]])];
+  let soundContext;
+  const decodedSounds = new Map();
+  const soundSettings = w => w.stagePlan.audio?.sfx || {pack:"off", gainDb:-14};
+  const soundPack = id => (config.sfxPacks || []).find(pack => pack.id === id);
   const imageBudget = w => w.stagePlan.imageBudget ?? 2;
   const countImages = w => w.stagePlan.shots.filter(shot => shot.content.kind === "image").length;
   const imageEstimate = (w,count) => {
@@ -110,6 +114,12 @@ const StageStudio = (() => {
     return w.stagePlan;
   }
 
+  function initWork(w) {
+    const plan = normalizeWork(w);
+    const pack = soundPack("builtin:sfx-pack/soft");
+    if (plan && pack) plan.audio.sfx = {pack:pack.id, gainDb:pack.gainDb};
+  }
+
   function syncBlocks(w) {
     w.blocks = w.stagePlan.shots.map(shot => ({ name:shot.name, line:shot.line, seconds:shot.seconds,
       image:shot.variants.image?.image || "", ...(shot.speech ? {svgSpeech:shot.speech} : {}) }));
@@ -123,9 +133,11 @@ const StageStudio = (() => {
   }
 
   function selectKind(w, shot, kind) {
+    const transition = shot.content.transition;
     shot.variants[shot.content.kind] = shot.content;
     shot.content = shot.variants[kind] || initialContent(kind, shot);
     shot.content.kind = kind;
+    if (transition !== undefined) shot.content.transition = transition;
     shot.variants[kind] = shot.content;
   }
 
@@ -210,7 +222,8 @@ const StageStudio = (() => {
     const media = Object.fromEntries(["image","outroImage","focusRegions","libraryArtId","libraryArtName"]
       .filter(field => saved[field] !== undefined).map(field => [field,saved[field]]));
     shot.variants[shot.content.kind] = shot.content;
-    shot.content = {...content, ...media};
+    const transition = content.transition ?? shot.content.transition;
+    shot.content = {...content, ...media, ...(transition ? {transition} : {})};
     shot.variants[content.kind] = shot.content;
     delete shot.presentationStale;
   }
@@ -312,6 +325,30 @@ const StageStudio = (() => {
       (c.beats.length < 3 ? btn("添加动作", "stage-beat-add", "outline") : "");
   }
 
+  function soundControls(w) {
+    const settings = soundSettings(w);
+    return '<div class="tpl-two-col">' +
+      select("画面事件音效", "sfx-pack", [["off","关闭"], ...(config.sfxPacks || []).map(pack => [pack.id,pack.name])], settings.pack) +
+      `<label class="field">音效音量
+        <input type="range" min="-30" max="-6" step="1" data-stage-field="sfx-gain" value="${settings.gainDb}"
+          ${settings.pack === "off" ? "disabled" : ""}>
+        <output id="stage-sfx-gain">${settings.gainDb} dB</output></label></div>`;
+  }
+
+  function bufferFor(id) {
+    if (!decodedSounds.has(id)) {
+      const pending = fetch(StudioAssets.url(id)).then(response => {
+        if (!response.ok) throw Error("音效素材未加载。");
+        return response.arrayBuffer();
+      }).then(bytes => soundContext.decodeAudioData(bytes)).catch(error => {
+        decodedSounds.delete(id);
+        throw error;
+      });
+      decodedSounds.set(id, pending);
+    }
+    return decodedSounds.get(id);
+  }
+
   function editor(w) {
     const shots = w.stagePlan.shots;
     const index = Math.min(selected.get(w) || 0, shots.length - 1);
@@ -326,7 +363,7 @@ const StageStudio = (() => {
       text("标题短句", "work-shortTitle", w.stagePlan.shortTitle, 20),
       ...w.stagePlan.chapters.map((name,i) => text(`章节 ${i+1}`, "work-chapter:"+i, name, 10)),
       text("底部参考声明", "work-disclaimer", w.stagePlan.disclaimer, 60),
-      TemplateStudio.templateSetupHtml(w,data,esc,btn), renderMusicStudioCard(w, {showModeChips:true}),
+      TemplateStudio.templateSetupHtml(w,data,esc,btn), renderMusicStudioCard(w, {showModeChips:true}), soundControls(w),
       select("全片字体", "font", [["", "默认"], ["builtin:font/noto-sans-sc", "Noto Sans SC"]], w.settings.fontId)].join("");
     const items = shot.points.items.map(item => [item.title,item.detail,item.tag].filter(Boolean).join("｜")).join("\n");
     const decision = isMix ? '<div class="stage-decision">' +
@@ -361,6 +398,7 @@ const StageStudio = (() => {
       <span id="stage-preview-state" role="status">载入预览…</span></div><iframe id="stage-preview" src="/stage.html" title="分镜预览"></iframe>
       <div class="asset-inline"><button type="button" class="outline" id="stage-play" disabled>播放本幕</button>
       ${shot.content.kind === "svg" && w.settings.voice !== "无配音" ? btn("试听本幕口播","stage-speech","outline") : ""}
+      ${soundSettings(w).pack !== "off" || shot.sfxId ? btn("试听音效","stage-audition","outline") : ""}
       <input type="range" aria-label="本幕播放进度" min="0" max="${shot.seconds}" step="0.01" value="${Math.min(1,shot.seconds/2)}" id="stage-seek"></div>
       <div class="stage-rail">${strip}${btn("添加一幕", "stage-add", "outline", "", shots.length >= 12 ? "disabled" : "")}</div></section>
       <aside class="sheet"><div class="vstudio-tabs" role="tablist" aria-label="分镜设置">${["scene","global"].map(id =>
@@ -372,11 +410,43 @@ const StageStudio = (() => {
   function bindPreview(w, index) {
     const iframe = $("#stage-preview"), button = $("#stage-play"), seek = $("#stage-seek"), status = $("#stage-preview-state");
     let frame, player, plan, audio, playing = false;
+    let run = 0;
+    const sources = new Set();
     function pause() {
+      run++;
       playing = false;
       audio?.pause();
       cancelAnimationFrame(frame);
+      for (const source of sources) source.stop();
+      sources.clear();
       button.textContent = "播放本幕";
+    }
+    async function soundTimeline() {
+      const settings = soundSettings(w);
+      const events = soundPack(settings.pack)?.events || {};
+      const shot = plan.shots[index];
+      const sounds = player.collectStageEvents().filter(event => event.shot === index && events[event.type])
+        .map(event => ({assetId:events[event.type], time:event.t - shot.start, gainDb:settings.gainDb}));
+      const manual = w.stagePlan.shots[index]?.sfxId;
+      if (manual) sounds.push({assetId:manual, time:.16, gainDb:-12});
+      if (!sounds.length) return [];
+      soundContext ||= new AudioContext();
+      await soundContext.resume();
+      return await Promise.all(sounds.map(async sound => ({...sound, buffer:await bufferFor(sound.assetId)})));
+    }
+    function schedule(sounds, scale = 1) {
+      if (!sounds.length) return;
+      const start = soundContext.currentTime;
+      for (const sound of sounds) {
+        const source = soundContext.createBufferSource();
+        const gain = soundContext.createGain();
+        source.buffer = sound.buffer;
+        gain.gain.value = 10 ** (sound.gainDb / 20);
+        source.connect(gain).connect(soundContext.destination);
+        source.addEventListener("ended", () => sources.delete(source), {once:true});
+        source.start(start + sound.time * scale);
+        sources.add(source);
+      }
     }
     function draw(offset) {
       const shot = plan.shots[index];
@@ -395,9 +465,10 @@ const StageStudio = (() => {
     }
     iframe.addEventListener("load", () => prepare().catch(error => {status.textContent = error.message;}), {once:true});
     iframe.refreshStage = () => { if (player) prepare().catch(error => {status.textContent = error.message;}); };
-    iframe.playSpeech = speech => {
+    iframe.playSpeech = async speech => {
       if (!player) return;
       pause();
+      const ticket = run;
       audio = new Audio(speech.url);
       playing = true;
       button.textContent = "暂停";
@@ -408,13 +479,36 @@ const StageStudio = (() => {
         draw(position);
         frame = requestAnimationFrame(tick);
       };
-      audio.play().then(tick).catch(error => {pause(); notify(error.message, "warn");});
+      try {
+        const sounds = await soundTimeline();
+        if (ticket !== run || !iframe.isConnected) return;
+        await audio.play();
+        if (ticket !== run || !iframe.isConnected) return;
+        schedule(sounds, speech.seconds / Number(seek.max));
+        tick();
+      } catch (error) {
+        pause();
+        notify(error.message, "warn");
+      }
     };
     seek.addEventListener("input", () => { pause(); if (player) draw(Number(seek.value)); });
-    button.addEventListener("click", () => {
+    async function play(audition) {
+      if (!player) return;
       if (playing) { pause(); return; }
       playing = true;
+      const ticket = ++run;
       button.textContent = "暂停";
+      let sounds;
+      try {
+        sounds = await soundTimeline();
+      } catch (error) {
+        pause();
+        notify(error.message,"warn");
+        return;
+      }
+      if (ticket !== run || !iframe.isConnected) return;
+      if (audition && !sounds.length) notify("本幕没有需要试听的音效。");
+      schedule(sounds);
       const start = performance.now();
       function tick(now) {
         if (!iframe.isConnected) return pause();
@@ -424,8 +518,10 @@ const StageStudio = (() => {
         if (time < Number(seek.max)) frame = requestAnimationFrame(tick);
         else pause();
       }
-      frame = requestAnimationFrame(tick);
-    });
+      tick(start);
+    }
+    iframe.audition = () => play(true);
+    button.addEventListener("click", () => play(false));
   }
 
   function handleInput(w, el) {
@@ -434,6 +530,20 @@ const StageStudio = (() => {
     const shot = w.stagePlan.shots[selected.get(w) || 0];
     const [key, rawIndex] = field.split(":");
     const value = el.value;
+    if (key === "sfx-pack" || key === "sfx-gain") {
+      const options = {...soundSettings(w)};
+      if (key === "sfx-pack") {
+        options.pack = value;
+        if (value !== "off" && !soundPack(value)) return true;
+      } else {
+        options.gainDb = Number(value);
+        $("#stage-sfx-gain").value = `${value} dB`;
+      }
+      (w.stagePlan.audio ||= {}).sfx = options;
+      touch(w);
+      if (key === "sfx-pack") render(true);
+      return true;
+    }
     if (key === "imageBudget") {
       if (value === "" || !el.validity.valid) return true;
       const budget = Number(value);
@@ -641,11 +751,12 @@ const StageStudio = (() => {
     } else if (action === "stage-beat-remove" && shot?.content.beats?.length > 1) {
       shot.content.beats.splice(Number(value),1); touch(w,true);
     } else if (action === "stage-images") { prepareImages(w,value); return true; }
+    else if (action === "stage-audition") { $("#stage-preview")?.audition?.(); return true; }
     else if (action === "stage-speech") { prepareSpeech(w,index); return true; }
     else if (action === "stage-compose") { compose(w); return true; }
     render(true);
     return true;
   }
 
-  return {applies,isActive,normalizeWork,setupControls,requestDraft,installDraft,installImages,installSpeech,editor,handleInput,handleAction};
+  return {applies,isActive,normalizeWork,initWork,setupControls,requestDraft,installDraft,installImages,installSpeech,editor,handleInput,handleAction};
 })();

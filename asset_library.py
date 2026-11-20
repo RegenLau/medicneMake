@@ -186,6 +186,10 @@ class LocalLibrary:
     def stage_catalog(self):
         return next(item["data"] for item in self._builtins() if item["id"] == "builtin:stage-config/v1")
 
+    def sound_packs(self):
+        return [{key: item[key] for key in ("id", "name", "gainDb", "events")}
+                for item in self._builtins() if item["kind"] == "sfx-pack"]
+
     @staticmethod
     def public(item):
         return {**{key: value for key, value in item.items() if key != "file"}, "url": asset_url(item["id"])}

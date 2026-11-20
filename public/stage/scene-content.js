@@ -294,7 +294,7 @@
       const rings = part("rings");
       if (shield) shield.setAttribute("transform", `translate(110 110) scale(${((0.84 + 0.16 * enter) * pulse).toFixed(3)}) translate(-110 -110)`);
       if (rings) rings.setAttribute("transform", `rotate(${(time * 10).toFixed(2)} 110 110)`);
-      setDash(part("check"), (time - 0.35) / 0.75);
+      setDash(part("check"), (time - shieldCheckAt) / 0.75);
     } else if (motif === "checklist") {
       setDash(part("tick1"), (time - 0.18) / 0.5);
       setDash(part("tick2"), (time - 0.65) / 0.5);
@@ -510,6 +510,13 @@
   }
 
   /* ===== Beat & Choreography Timing Helpers ===== */
+  const spotlightStart = 0.55;
+  const spotlightOrigin = 0.45;
+  const spotlightSpan = duration => Math.max(0.6, duration - 1.0);
+  const itemWindow = (duration, count) => Math.min(0.55, Math.max(0.18, (duration * 0.52) / Math.max(1, count)));
+  const checkAt = (index, window) => 0.28 + index * window;
+  const shieldCheckAt = 0.35;
+
   function resolveActiveFocus(shot, localTime, itemCount, motion) {
     const duration = Math.max(0.5, shot.end - shot.start);
     const absTime = shot.start + localTime;
@@ -534,9 +541,8 @@
     if (focus === "top") focusedIndices = new Set([0, 1]);
     else if (focus === "bottom") focusedIndices = new Set([2, 3]);
     else if (/^[0-3]$/.test(focus)) focusedIndices = new Set([Number(focus)]);
-    else if (focus === "all" && itemCount >= 2 && (motion === "spotlight" || motion === "contrast") && localTime > 0.55) {
-      const span = Math.max(0.6, duration - 1.0);
-      const progress = (localTime - 0.45) / span;
+    else if (focus === "all" && itemCount >= 2 && (motion === "spotlight" || motion === "contrast") && localTime > spotlightStart) {
+      const progress = (localTime - spotlightOrigin) / spotlightSpan(duration);
       if (progress < 0.92) {
         focusedIndices = new Set([Math.min(itemCount - 1, Math.floor(progress * itemCount))]);
       }
@@ -628,7 +634,7 @@
     });
 
     // 6. Item choreography by `motion`
-    const stepWindow = Math.min(0.55, Math.max(0.18, (duration * 0.52) / Math.max(1, itemCount)));
+    const stepWindow = itemWindow(duration, itemCount);
     dom.items.forEach((el, i) => {
       const isFocused = focusedIndices ? focusedIndices.has(i) : false;
       const isDimmed = Boolean(focusedIndices && !isFocused);
@@ -707,8 +713,7 @@
       // Checklist SVG checkmark draw synced to item entrance / beat
       const check = dom.checks[i];
       if (check) {
-        const checkAt = 0.28 + i * stepWindow;
-        const cProg = isFocused ? 1 : easeOutCubic((localTime - checkAt) / 0.46);
+        const cProg = isFocused ? 1 : easeOutCubic((localTime - checkAt(i, stepWindow)) / 0.46);
         check.setAttribute("stroke-dashoffset", String((100 * (1 - cProg)).toFixed(2)));
       }
     });
@@ -821,5 +826,36 @@
     }
   }
 
-  global.StageSceneContent = { resolveSceneMeta, resolveActiveFocus, buildDynamicSceneHtml, animateDynamicScene, animateTemplateCard };
+  function sceneEvents(shot, index, total) {
+    const {visual, motion, motif, tone, items} = resolveSceneMeta(shot, index, total);
+    const duration = shot.end - shot.start;
+    const count = items.length;
+    const changes = new Set((shot.captions || []).map(cue => cue.start - shot.start));
+    changes.add(0);
+    if (count >= 2 && (motion === "spotlight" || motion === "contrast")) {
+      changes.add(spotlightStart);
+      for (let i = 1; i < count; i++) changes.add(spotlightOrigin + spotlightSpan(duration) * i / count);
+    }
+    const focus = [];
+    let previous = null;
+    for (const t of [...changes].sort((a, b) => a - b)) {
+      const state = resolveActiveFocus(shot, t + 0.00001, count, motion);
+      const key = state.focusedIndices ? [...state.focusedIndices].join(",") : state.focus;
+      if (t > 0 && key !== previous && (key !== "all") && key !== "outro") {
+        focus.push({t, type:"item-focus"});
+      }
+      previous = key;
+    }
+    if (visual === "checklist") {
+      for (let i = 0; i < count; i++) {
+        const firstFocus = [...changes].filter(t => resolveActiveFocus(shot, t + 0.00001, count, motion).focusedIndices?.has(i));
+        focus.push({t:Math.min(checkAt(i, itemWindow(duration, count)), ...firstFocus), type:"check"});
+      }
+    }
+    if (visual === "summary" && motif === "shield") focus.push({t:shieldCheckAt, type:"check"});
+    if (visual === "warning" || tone === "caution") focus.push({t:0, type:"warning"});
+    return focus;
+  }
+
+  global.StageSceneContent = { resolveSceneMeta, resolveActiveFocus, buildDynamicSceneHtml, animateDynamicScene, animateTemplateCard, sceneEvents };
 })(globalThis);

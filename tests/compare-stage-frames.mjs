@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -55,8 +56,10 @@ async function loadBaseline() {
 }
 
 function pixels(buffer) {
-  return execFileSync(process.env.FFMPEG || "ffmpeg", ["-v", "error", "-i", "pipe:0", "-frames:v", "1", "-f", "rawvideo",
-    "-pix_fmt", "rgb24", "pipe:1"], { input: buffer, maxBuffer: width * height * 4 });
+  const source = join(temp, "diff-input.png");
+  writeFileSync(source, buffer);
+  return execFileSync(process.env.FFMPEG || "ffmpeg", ["-v", "error", "-i", source, "-frames:v", "1", "-f", "rawvideo",
+    "-pix_fmt", "rgb24", "pipe:1"], { maxBuffer: width * height * 4, timeout:15000 });
 }
 
 function difference(before, after) {

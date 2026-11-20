@@ -1683,26 +1683,34 @@ def music_mix(duration, voiced, music_index=2, is_generated=False, voice_index=0
     )
 
 
-def library_sound_mix(shots, music, track, duration, voiced):
+def library_sound_mix(shots, music, track, duration, voiced, events=()):
+    placements = [(shot["sfxId"], shot["start"] + 0.16, -12) for shot in shots if "sfxId" in shot]
     sound_inputs, delays, used = [], [], []
-    for shot in shots:
-        if "sfxId" not in shot:
-            continue
-        path, item = ASSETS.resolve(shot["sfxId"], ("sfx",))
+    for asset_id, time, gain in (*placements, *events):
+        path, item = ASSETS.resolve(asset_id, ("sfx",))
         index = 2 + bool(music) + len(delays)
-        delay = round((shot["start"] + 0.16) * 1000)
+        delay = round(time * 1000)
         sound_inputs.extend(["-i", path])
-        delays.append(f"[{index}:a]volume=-12dB,adelay={delay}:all=1[sfx{len(delays)}]")
+        delays.append(f"[{index}:a]volume={gain}dB,adelay={delay}:all=1[sfx{len(delays)}]")
         used.append((path, item))
     base = music_mix(duration, voiced, is_generated=track.startswith("library:")) if music else ""
     if not delays:
         return [], ["-filter_complex", base, "-map", "[mix]"] if base else ["-map", "0:a:0"], used
     source = base.removesuffix("[mix]") + "[base]" if base else "[0:a]anull[base]"
     parts = "[base]" + "".join(f"[sfx{index}]" for index in range(len(delays)))
+    # Preserve legacy mix levels. Leave extra headroom for AAC inter-sample peaks with automatic effects.
+    limit = "0.79" if events else "0.89"
     mix = ";".join([source, *delays,
                     f"{parts}amix=inputs={len(delays) + 1}:duration=first:normalize=0,"
-                    "alimiter=limit=0.89:level=false:latency=1[mix]"])
+                    f"alimiter=limit={limit}:level=false:latency=1[mix]"])
     return sound_inputs, ["-filter_complex", mix, "-map", "[mix]"], used
+
+
+def stage_sound_mix(p, shots, music, track, duration, voiced, event_rows):
+    pack, gain = stage_video.sound_settings(p, ASSETS)
+    events = [(pack[row["type"]], row["t"], gain)
+              for row in event_rows if row["type"] in pack and 0 <= row["t"] < duration]
+    return library_sound_mix(shots, music, track, duration, voiced, events)
 
 
 def asset_versions(assets):
@@ -2824,6 +2832,7 @@ def validate_stage_video(p):
     if settings.get("ratio") != "16:9":
         raise ValueError("当前视频布局固定为 16:9。")
     stage_video.stage_input(p, ASSETS, media_path)
+    stage_video.sound_settings(p, ASSETS)
     code_motion_appearance(p)
     if not code_motion_ready():
         raise ValueError("视频合成需要 Node.js、Playwright 和 FFmpeg。")
@@ -2960,7 +2969,8 @@ def render_stage_video(p, job, save, speech_key, record=None, dashscope_key=""):
             raise ValueError(f"舞台渲染失败：{error[:260]}")
         progress("合成画面、配音与 MP4")
         music_input = ["-stream_loop", "-1", "-i", music] if music else []
-        sfx_input, mix, sounds = library_sound_mix(shots, music, track, duration, voiced)
+        event_rows = read_json(scratch / "events.json")
+        sfx_input, mix, sounds = stage_sound_mix(p, shots, music, track, duration, voiced, event_rows)
         output = scratch / "output.mp4"
         render_stats = read_json(scratch / "capture-stats.json")
         sequence = render_stats["captures"] == frames and (scratch / "frame-00000.jpg").is_file()
@@ -3387,6 +3397,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "stageLayouts": [item for item in ASSETS.items() if item["kind"] == "layout"],
                     "stageCatalog": ASSETS.stage_catalog(),
                     "imageRates": work_costs.image_estimate_rates(),
+                    "sfxPacks": ASSETS.sound_packs(),
                     "svgMotion": {"actions": svg_motion.ACTIONS, "exportReady": svg_motion.ready(FFMPEG)},
                     **speech_connection(),
                     "keyStorage": KEY_STORAGE,

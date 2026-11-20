@@ -5,6 +5,7 @@
   {"id":"builtin:sfx/transition","kind":"sfx","name":"柔和过渡","tags":["出场","转场"],"source":"内置合成","license":"项目自制","file":"sfx/transition.wav"},
   {"id":"builtin:font/noto-sans-sc","kind":"font","name":"Noto Sans SC","tags":["简体中文","无衬线"],"source":"Google Fonts / Noto Project","license":"SIL OFL 1.1","termsUrl":"/assets/library/fonts/OFL.txt","file":"fonts/NotoSansSC.ttf"},
   {"id":"builtin:layout/info-classic","kind":"layout","name":"信息图模板","tags":["左栏主讲","16:9"],"aspect":"16:9","source":"内置","license":"项目自制","file":"layouts/info-classic.json"},
+  {"id":"builtin:sfx-pack/soft","kind":"sfx-pack","name":"柔和","gainDb":-14,"events":{"scene-in":"builtin:sfx/transition","item-focus":"builtin:sfx/soft-pop","beat-in":"builtin:sfx/soft-pop","check":"builtin:sfx/check","warning":"builtin:sfx/transition","outro":"builtin:sfx/check"}},
   {"id":"builtin:stage-config/v1","kind":"stage-config","data":{
     "pointVisuals":{"cover":"hook","explain":"mechanism","compare":"compare","steps":"steps","warning":"warning","summary":"summary","timeline":"timeline","checklist":"checklist"},
     "pointTypes":{"cover":"开场问题和直答","explain":"原理或一条关键事实","compare":"真实做法或情形对比","steps":"有实际先后关系的步骤","warning":"误区或警示","summary":"收口和提醒","timeline":"时间条件与决策","checklist":"并列的核对要点"},

@@ -130,10 +130,29 @@
     return LayoutEngine.update(root, state);
   }
 
+  const eventPriority = {"warning": 6, "outro": 5, "check": 4, "scene-in": 3, "beat-in": 2, "item-focus": 1};
+
   function collectEvents() {
-    return plan.shots.flatMap((shot, index) =>
-      Contents[shot.kind].events(shot, { slide: deck.slides[index], theme: deck.theme, index, total: deck.slides.length })
-        .map(event => ({ ...event, shot: index, t: shot.start + event.t })));
+    const events = plan.shots.flatMap((shot, index) => {
+      const slide = deck.slides[index];
+      const local = [...Contents[shot.kind].events(shot, {slide, theme:deck.theme, index, total:deck.slides.length})];
+      if (index > 0) local.push({t:0, type:"scene-in"});
+      if (index === deck.slides.length - 1) {
+        const outro = shot.captions.find(cue => cue.focus === "outro") || shot.captions.at(-1);
+        local.push({t:outro ? outro.start - shot.start : 0, type:"outro"});
+      }
+      return local.filter(event => Number.isFinite(event.t) && event.t >= 0 && event.t < shot.end - shot.start)
+        .map(event => ({...event, shot:index, t:shot.start + event.t}));
+    });
+    const rank = (a,b) => (eventPriority[b.type] || 0) - (eventPriority[a.type] || 0) || a.t - b.t;
+    const selected = [];
+    const count = new Map();
+    for (const event of events.sort(rank)) {
+      if ((count.get(event.shot) || 0) >= 4 || selected.some(other => Math.abs(other.t - event.t) < .35 - 1e-9)) continue;
+      selected.push(event);
+      count.set(event.shot, (count.get(event.shot) || 0) + 1);
+    }
+    return selected.sort((a,b) => a.t - b.t);
   }
 
   global.setPlan = setPlan;
