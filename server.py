@@ -82,14 +82,19 @@ TEXT_MODEL = os.environ.get("DEEPSEEK_TEXT_MODEL", "").strip() or "deepseek-flas
 MUSIC_TRACKS = {name: PUBLIC / "assets" / "music" / (name + ".flac") for name in ("calm", "light")}
 SPEECH_URL = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
 SPEECH_RESOURCE = "seed-tts-2.0"
+SPEECH_CLONE_RESOURCE = "seed-icl-2.0"
 SPEECH_SAMPLE_RATE = 24000
 SPEAKERS = {
+    "刘飞 2.0": "zh_male_liufei_uranus_bigtts",
+    "男声": "zh_male_m191_uranus_bigtts",
     "流畅女声 2.0": "zh_female_liuchangnv_uranus_bigtts",
     "女声": "zh_female_xiaohe_uranus_bigtts",
-    "男声": "zh_male_m191_uranus_bigtts",
     "医生音色": "S_5yB2w6uk2",
-    "刘飞 2.0": "zh_male_liufei_uranus_bigtts",
 }
+
+
+def speech_resource_for(speaker):
+    return SPEECH_CLONE_RESOURCE if str(speaker or "").startswith("S_") else SPEECH_RESOURCE
 IMAGE_MODELS = {
     "doubao-seedream-5-5-261028": ("Seedream 5.5", ["1K", "2K"]),
     "doubao-seedream-5-0-260128": ("Seedream 5.0 Lite", ["2K", "4K"]),
@@ -1463,7 +1468,7 @@ def narrate(line, speaker, target, key):
         data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
         headers={
             "Content-Type": "application/json",
-            "X-Api-Resource-Id": SPEECH_RESOURCE,
+            "X-Api-Resource-Id": speech_resource_for(speaker),
             "X-Api-Request-Id": str(uuid.uuid4()),
             "X-Control-Require-Usage-Tokens-Return": "text_words",
         },
@@ -1488,12 +1493,20 @@ def narrate(line, speaker, target, key):
                     characters = work_costs.usage_value(chunk.get("usage"), "text_words")
                     break
                 if code != 0:
-                    raise ValueError(f"火山语音合成失败（{code}），请检查服务权限或额度。")
+                    detail = str(chunk.get("message") or "").strip()
+                    suffix = f"：{detail[:180]}" if detail else "，请检查服务权限或额度。"
+                    raise ValueError(f"火山语音合成失败（{code}）{suffix}")
             else:
                 raise ValueError("火山语音返回中断，请继续此任务重试配音。")
     except HTTPError as error:
+        body_text = ""
+        try:
+            body_text = error.read().decode("utf-8", "replace")[:200].strip()
+        except Exception:
+            pass
         if error.code in (401, 403):
-            raise ValueError("火山语音鉴权失败，请检查豆包语音 API Key 和语音合成 2.0 权限。") from None
+            extra = f"（{body_text}）" if body_text else ""
+            raise ValueError(f"火山语音鉴权失败，请检查豆包语音 API Key 和语音合成 2.0 权限{extra}。") from None
         raise ValueError(f"火山语音请求失败（HTTP {error.code}）。") from None
     except (URLError, TimeoutError, HTTPException):
         raise ValueError("火山语音连接中断，请检查网络后继续此任务。") from None
@@ -1512,7 +1525,7 @@ def speech_cache_name(settings, line):
     speaker = SPEAKERS.get(settings.get("voice"))
     if not speaker or not line:
         return None
-    fingerprint = json.dumps([SPEECH_RESOURCE, SPEECH_SAMPLE_RATE, speaker, line])
+    fingerprint = json.dumps([speech_resource_for(speaker), SPEECH_SAMPLE_RATE, speaker, line])
     digest = hashlib.sha256(fingerprint.encode()).hexdigest()
     return "speech-" + digest + ".wav"
 
@@ -2759,7 +2772,7 @@ def render_template_video(p, job, save, speech_key, record=None, dashscope_key="
 
 
 def svg_speech_cache_path(p, line, speaker):
-    fingerprint = json.dumps([p["workId"], SPEECH_RESOURCE, SPEECH_SAMPLE_RATE, speaker, line])
+    fingerprint = json.dumps([p["workId"], speech_resource_for(speaker), SPEECH_SAMPLE_RATE, speaker, line])
     digest = hashlib.sha256(fingerprint.encode()).hexdigest()
     return MEDIA / (digest + ".wav")
 

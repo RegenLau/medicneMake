@@ -193,6 +193,14 @@ class StageVideoTests(unittest.TestCase):
             self.assertEqual(server.extract_render_error(b"Error: \xe5\x88\x86\xe9\x95\x9c\xe7\xb4\xa0\xe6\x9d\x90\xe6\x9c\xaa\xe5\x8a\xa0\xe8\xbd\xbd\xe3\x80\x82\n"), "分镜素材未加载。")
             self.assertEqual(server.extract_render_error(b""), "请核对 Chrome 和 Playwright 安装。")
 
+    def test_speech_resource_routes_cloned_voices_to_seed_icl(self):
+        self.assertEqual(server.speech_resource_for("S_5yB2w6uk2"), "seed-icl-2.0")
+        self.assertEqual(server.speech_resource_for("zh_male_liufei_uranus_bigtts"), "seed-tts-2.0")
+        self.assertNotEqual(
+            server.speech_cache_name({"voice": "医生音色"}, "测试"),
+            server.speech_cache_name({"voice": "刘飞 2.0"}, "测试"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

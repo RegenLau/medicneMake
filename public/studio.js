@@ -187,8 +187,8 @@ let data = loadState(),
   retryPayload = null,
   exampleCursor = 0;
 
-const defaultVoice = "男声";
-const voiceOptions = [["男声", "男声 · 云舟 2.0"], "流畅女声 2.0", ["女声", "小何 2.0"], ["医生音色", "医生音色 · 定制男声"], ["刘飞 2.0", "男声 · 刘飞 2.0"], "无配音"];
+const defaultVoice = "刘飞 2.0";
+const voiceOptions = [["刘飞 2.0", "男声 · 刘飞 2.0"], ["医生音色", "医生音色 · 定制男声"], ["男声", "男声 · 云舟 2.0"], "流畅女声 2.0", ["女声", "小何 2.0"], "无配音"];
 const voiceLabels = Object.fromEntries(voiceOptions.map((item) => Array.isArray(item) ? item : [item, item]));
 const voiceLabel = (v) => voiceLabels[v] || v || "";
 const musicLabels = { auto: "自动搭配", off: "无背景音乐", calm: "舒缓钢琴", light: "轻快木琴" };
@@ -285,6 +285,12 @@ if (!data.yunzhouVoiceAutoMusicDefaultApplied) {
   data.fluentVoiceDefaultApplied = true;
   data.musicOffDefaultApplied = true;
   data.yunzhouVoiceAutoMusicDefaultApplied = true;
+  save();
+}
+
+if (!data.liufeiVoiceDefaultApplied) {
+  data.settings.voice = defaultVoice;
+  data.liufeiVoiceDefaultApplied = true;
   save();
 }
 
