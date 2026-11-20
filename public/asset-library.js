@@ -1,7 +1,7 @@
 "use strict";
 
 const StudioAssets = (() => {
-  const categories = { image: "图片", svg: "SVG 图形", motion: "SVG 动效", music: "背景音乐", sfx: "音效", font: "字体", layout: "布局", lottie: "Lottie 动画", mg: "MG 动画", pending: "待确认" };
+  const categories = { image: "图片", svg: "SVG 图形", motion: "SVG 动效", music: "背景音乐", sfx: "音效", font: "字体", layout: "布局", theme: "主题", lottie: "Lottie 动画", mg: "MG 动画", pending: "待确认" };
   const kinds = Object.keys(categories);
   const rights = '<label class="field">授权<select name="license" required><option value="">请选择授权</option>' +
     '<option>自制或已获授权</option><option>CC0</option><option>CC BY</option><option>AI 生成 · 已核对服务条款</option></select></label>' +
@@ -15,13 +15,41 @@ const StudioAssets = (() => {
   let pageQuery = "";
 
   function layoutDiagram(item) {
-    const labels = {header:"页头",chapters:"章节",presenter:"主讲",media:"内容",subtitle:"字幕"};
+    const labels = {header:"页头",chapters:"章节",presenter:"主讲",media:"内容",subtitle:"字幕",keypoints:"要点",answer:"回答",headline:"标题"};
+    const headerLabels = {breadcrumb:"路径",ticker:"信息条",namecard:"名片",question:"提问"};
+    const labelFor = (key, region) => {
+      if (key === "chapters" && region.variant === "nav-panel") return "导航";
+      if (key === "header" && headerLabels[region.variant]) return headerLabels[region.variant];
+      return labels[key] || "";
+    };
     return '<span class="stage-layout-mini" aria-hidden="true">' + Object.entries(item.regions || {}).map(([key, region]) =>
-      `<span class="layout-region region-${esc(key)}" style="left:${Number(region.x)}%;top:${Number(region.y)}%;width:${Number(region.w)}%;height:${Number(region.h)}%">${labels[key] || ""}</span>`).join("") + "</span>";
+      `<span class="layout-region region-${esc(key)}" style="left:${Number(region.x)}%;top:${Number(region.y)}%;width:${Number(region.w)}%;height:${Number(region.h)}%">${labelFor(key, region)}</span>`).join("") + "</span>";
+  }
+
+  function themeSwatch(item) {
+    const vars = LayoutEngine.safeThemeVars(item.vars);
+    const bgUrl = item.background?.url || (item.background?.assetId ? url(item.background.assetId) : "");
+    const safeUrl = bgUrl && /^(?:\/|file:\/\/|data:image\/)/i.test(bgUrl) && !/["'()\\;\r\n<>]/.test(bgUrl) ? bgUrl : "";
+    const bgStyle = safeUrl ? `background:center / cover no-repeat url('${esc(safeUrl)}')` : `background:${esc(vars["--v-bg"] || "#eef6fe")}`;
+    const cardBg = esc(vars["--v-card-bg"] || "#ffffff");
+    const border = esc(vars["--v-card-border"] || "#d2e4f6");
+    const primary = esc(vars["--v-primary"] || "#1466cc");
+    const ink = esc(vars["--v-ink"] || "#122d4c");
+    const coral = esc(vars["--v-coral"] || "#e6592d");
+    const green = esc(vars["--v-green"] || "#1e8e5a");
+    return `<span class="theme-mini-frame${item.glass ? " is-glass" : ""}" style="${bgStyle}" aria-hidden="true">` +
+      `<span class="theme-mini-card" style="background:${cardBg};border-color:${border}">` +
+      `<span class="theme-mini-dots"><i style="background:${primary}"></i><i style="background:${coral}"></i><i style="background:${green}"></i></span>` +
+      `<span class="theme-mini-bar" style="background:${ink}"></span>` +
+      `<span class="theme-mini-bar short" style="background:${primary}"></span>` +
+      `</span></span>`;
   }
 
   function syncLayouts(items) {
-    if (config) config.stageLayouts = items.filter(item => item.kind === "layout");
+    if (config) {
+      config.stageLayouts = items.filter(item => item.kind === "layout");
+      config.stageThemes = items.filter(item => item.kind === "theme");
+    }
   }
 
   function media(item) {
@@ -34,6 +62,7 @@ const StudioAssets = (() => {
     }
     if (item.kind === "layout") return `<div class="asset-layout-thumb">${layoutDiagram(item)}
       <iframe data-lib-layout-thumb="${esc(item.id)}" src="/stage.html" title="${esc(item.name)}的实景缩略图" tabindex="-1" loading="lazy"></iframe></div>`;
+    if (item.kind === "theme") return `<div class="asset-theme-thumb">${themeSwatch(item)}</div>`;
     if (item.kind === "font") return '<div class="asset-font-sample">用药科普<br>安心每一天</div>';
     return `<div class="asset-thumb motion" data-motion-preview="${esc(item.id)}">${SvgMotion.content({name: item.name, action: item.action}, 0.65)}</div>`;
   }
@@ -48,14 +77,20 @@ const StudioAssets = (() => {
       item.kind === "lottie" && !picking ? `<button type="button" class="outline" data-lib-palette="${esc(item.id)}">编辑配色</button>` : "",
       item.kind === "layout" ? `<button type="button" class="outline" data-lib-layout="${esc(item.id)}">预览布局</button>` : "",
       item.kind === "layout" && !picking ? `<button type="button" class="outline" data-lib-copy="${esc(item.id)}">复制为我的布局</button>` : "",
+      item.kind === "theme" ? `<button type="button" class="outline" data-lib-theme="${esc(item.id)}">预览主题</button>` : "",
+      item.kind === "theme" && !picking ? `<button type="button" class="outline" data-lib-copy-theme="${esc(item.id)}">复制为我的主题</button>` : "",
       item.kind === "motion" ? `<button type="button" class="outline" data-lib-play="${esc(item.id)}">播放预览</button>` : "",
       picking ? `<button type="button" class="primary" data-lib-use="${esc(item.id)}">使用此素材</button>` : "",
       !picking && (item.id.startsWith("user:") || item.id.startsWith("library:"))
         ? `<button type="button" class="textbtn" data-lib-archive="${esc(item.id)}">下架</button>` : "",
     ].join("");
+    const sourceLabel = item.source === "project" ? "项目收藏"
+      : item.source === "upload" ? "本地上传"
+      : item.source === "copy" ? (item.kind === "theme" ? "我的主题" : "我的布局")
+      : item.source;
     return `<article class="asset-card">${media(item)}<div class="asset-card-info">
       <h3>${esc(item.name)}</h3><p>${esc(item.useFor || [item.meta?.topic, item.meta?.ratio].filter(Boolean).join(" · "))}</p>
-      ${tags}<p class="asset-license">${esc([item.source === "project" ? "项目收藏" : item.source === "upload" ? "本地上传" : item.source === "copy" ? "我的布局" : item.source, item.license, item.credit].filter(Boolean).join(" · "))} ${terms}</p>
+      ${tags}<p class="asset-license">${esc([sourceLabel, item.license, item.credit].filter(Boolean).join(" · "))} ${terms}</p>
       ${actions ? `<div class="asset-actions">${actions}</div>` : ""}
       </div></article>`;
   }
@@ -82,7 +117,7 @@ const StudioAssets = (() => {
     };
 
     function draw() {
-      if (uploadButton) uploadButton.textContent = selected === "layout" ? "上传布局" : selected === "lottie" ? "上传 Lottie" :
+      if (uploadButton) uploadButton.textContent = selected === "layout" ? "上传布局" : selected === "theme" ? "上传主题" : selected === "lottie" ? "上传 Lottie" :
         ["mg","pending"].includes(selected) ? "AI 制作 MG" : "上传素材";
       root.querySelectorAll("[data-lib-kind]").forEach((b) => {
         b.setAttribute("aria-pressed", String(b.dataset.libKind === selected));
@@ -143,7 +178,7 @@ const StudioAssets = (() => {
     root.addEventListener("click", async (event) => {
       const button = event.target.closest("button");
       if (!button) return;
-      const { libKind, libUse, libArchive, libPlay, libLayout, libCopy, libMotion, libPalette, libDraft } = button.dataset;
+      const { libKind, libUse, libArchive, libPlay, libLayout, libCopy, libTheme, libCopyTheme, libMotion, libPalette, libDraft } = button.dataset;
       if (libKind) {
         selected = libKind;
         if (!picking) pageKind = selected;
@@ -162,6 +197,9 @@ const StudioAssets = (() => {
       } else if (libLayout || libCopy) {
         const item = items.find(({id}) => id === (libLayout || libCopy));
         if (item) layoutModal(item, Boolean(libCopy), options.manage);
+      } else if (libTheme || libCopyTheme) {
+        const item = items.find(({id}) => id === (libTheme || libCopyTheme));
+        if (item) themeModal(item, Boolean(libCopyTheme), options.manage);
       } else if (libArchive) {
         const item = items.find(({ id }) => id === libArchive);
         if (!item) return;
@@ -212,14 +250,34 @@ const StudioAssets = (() => {
     mount(dialogBody.querySelector("[data-library-root]"), {kinds:["layout"], manage:true});
   }
 
-  async function refreshLayoutChoices(managing) {
+  function manageThemes() {
+    openModal("管理主题", '<div class="asset-picker" data-library-root></div>', "asset-picker");
+    mount(dialogBody.querySelector("[data-library-root]"), {kinds:["theme"], manage:true});
+  }
+
+  async function refreshLayoutChoices(managing, kind = "layout") {
     syncLayouts((await jsonRequest("/api/library")).items);
     if (managing) render(true);
     if (route()[0] === "library") {
-      pageKind = "layout";
+      pageKind = kind;
       pageQuery = "";
       render(true);
     }
+  }
+
+  function previewThemeChoices() {
+    const list = config.stageThemes || [];
+    if (!list.length) return [["medical", "医疗蓝"], ["warm", "暖色"]];
+    return list.map(item => [
+      item.id === "builtin:theme/medical" ? "medical" : item.id === "builtin:theme/warm" ? "warm" : item.id,
+      item.name,
+    ]);
+  }
+
+  function resolvePreviewTheme(value) {
+    const targetId = value === "medical" ? "builtin:theme/medical" : value === "warm" ? "builtin:theme/warm" : value;
+    const hit = (config.stageThemes || []).find(item => item.id === targetId);
+    return hit || (value === "warm" ? "warm" : "medical");
   }
 
   const layoutKinds = {image:"AI 完整图", card:"信息图动效", scene:"代码动效场景", svg:"SVG 演示动画", asset:"素材库素材", mg:"MG 动画"};
@@ -233,7 +291,7 @@ const StudioAssets = (() => {
       const stages = [["explain","正文"], ...Object.keys(definition.stages || {}).map(stage => [stage, stage === "hook" ? "开场" : "结尾"])];
       panel.innerHTML = `<form class="layout-form">
         <div class="layout-preview-options">
-          <label class="field">主题<select name="theme">${opts([["medical","医疗蓝"],["warm","暖色"]],"medical")}</select></label>
+          <label class="field">主题<select name="theme">${opts(previewThemeChoices(),"medical")}</select></label>
           <label class="field">制作方式<select name="kind">${opts(entry.map(kind => [kind,layoutKinds[kind]]),entry.includes("card") ? "card" : entry[0])}</select></label>
           ${stages.length > 1 ? `<label class="field">区域方案<select name="stage">${opts(stages,"explain")}</select></label>` : ""}
         </div>
@@ -248,11 +306,11 @@ const StudioAssets = (() => {
       const stageView = form.querySelector("iframe");
       const alert = form.querySelector('[role="alert"]');
       const regions = () => definition.stages?.[form.elements.stage?.value]?.regions || definition.regions;
-      const names = {header:"页头",chapters:"章节",presenter:"主讲人",media:"内容区",subtitle:"字幕区",progress:"进度",disclaimer:"参考声明"};
+      const names = {header:"页头",chapters:"章节",presenter:"主讲人",media:"内容区",subtitle:"字幕区",progress:"进度",disclaimer:"参考声明",keypoints:"要点栏",answer:"回答区",headline:"大标题"};
       let ready = false;
       async function draw() {
         if (!ready || !form.isConnected) return;
-        const sample = StageStudio.samplePlan(definition,form.elements.theme.value,form.elements.kind.value,form.elements.stage?.value);
+        const sample = StageStudio.samplePlan(definition,resolvePreviewTheme(form.elements.theme.value),form.elements.kind.value,form.elements.stage?.value);
         try {
           await stageView.contentWindow.setPlan(sample);
           stageView.contentWindow.drawFrame(1.4);
@@ -313,6 +371,114 @@ const StudioAssets = (() => {
     });
   }
 
+  function themeModal(item, copy, managing) {
+    openModal(copy ? "复制为我的主题" : item.name, `<div class="asset-form layout-panel"><p role="status">正在读取主题…</p></div>`, "asset-form");
+    const panel = dialogBody.querySelector(".layout-panel");
+    Promise.all([jsonRequest(item.url), jsonRequest("/api/library")]).then(([definition, library]) => {
+      if (!panel.isConnected) return;
+      const layouts = (library.items || []).filter(entry => entry.kind === "layout");
+      const defaultLayout = layouts.find(entry => entry.id === "builtin:layout/info-classic") || layouts[0];
+      const images = (library.items || []).filter(entry => entry.kind === "image")
+        .sort((a, b) => Number((b.tags || []).includes("背景")) - Number((a.tags || []).includes("背景")));
+      const currentPrimary = definition.vars?.["--v-primary"] || "#1466cc";
+      const hexPrimary = /^#[0-9a-f]{6}$/i.test(currentPrimary) ? currentPrimary : "#1466cc";
+      const currentBg = definition.background?.assetId || "";
+      const layoutChoices = layouts.map(entry => [entry.id, entry.name]);
+      const bgChoices = [["", "无背景图（使用底色或渐变）"], ...images.map(entry => [entry.id, entry.name])];
+      panel.innerHTML = `<form class="layout-form">
+        <div class="layout-preview-options">
+          <label class="field">预览布局<select name="layoutId">${opts(layoutChoices, defaultLayout?.id || "")}</select></label>
+          <label class="field">制作方式<select name="kind">${opts(Object.entries(layoutKinds), "card")}</select></label>
+        </div>
+        <iframe class="layout-stage-preview" src="/stage.html" title="主题实时预览"></iframe>
+        ${copy ? `<label class="field">主题名称<input name="name" maxlength="80" required></label>
+          <label class="field">主色调（--v-primary）<div class="theme-color-row">
+            <input type="color" data-theme-color-picker value="${esc(hexPrimary)}" aria-label="主色调取色器">
+            <input name="primary" maxlength="40" value="${esc(currentPrimary)}" required></div></label>
+          <label class="field">背景图（素材库图片）<select name="backgroundAssetId">${opts(bgChoices, currentBg)}</select></label>` : ""}
+        <div class="asset-actions">
+          ${managing ? '<button type="button" class="outline" data-theme-back>返回管理主题</button>' : ""}
+          ${copy ? '<button type="submit" class="primary">另存主题</button>' : ""}
+        </div><p class="banner err" role="alert" hidden></p></form>`;
+      panel.querySelector("[data-theme-back]")?.addEventListener("click", manageThemes);
+      const form = panel.querySelector("form");
+      const stageView = form.querySelector("iframe");
+      const alert = form.querySelector('[role="alert"]');
+      const layoutCache = new Map();
+      if (copy) form.elements.name.value = (item.name + " 副本").slice(0, 80);
+      let ready = false;
+      async function loadLayoutDef(layoutId) {
+        if (!layoutCache.has(layoutId)) {
+          const entry = layouts.find(row => row.id === layoutId);
+          layoutCache.set(layoutId, await jsonRequest(entry.url));
+        }
+        return layoutCache.get(layoutId);
+      }
+      function currentThemeSpec() {
+        const vars = { ...definition.vars };
+        if (copy && form.elements.primary?.value.trim()) vars["--v-primary"] = form.elements.primary.value.trim();
+        const bgId = copy ? form.elements.backgroundAssetId?.value : (definition.background?.assetId || "");
+        return {
+          id: item.id,
+          base: definition.base,
+          vars,
+          glass: Boolean(definition.glass),
+          fadeColor: definition.fadeColor,
+          ...(bgId ? { background: { assetId: bgId, url: url(bgId) } } : {}),
+        };
+      }
+      async function draw() {
+        if (!ready || !form.isConnected) return;
+        alert.hidden = true;
+        try {
+          const layoutDef = await loadLayoutDef(form.elements.layoutId.value);
+          const sample = StageStudio.samplePlan(layoutDef, currentThemeSpec(), form.elements.kind.value);
+          await stageView.contentWindow.setPlan(sample);
+          stageView.contentWindow.drawFrame(1.4);
+        } catch (error) {
+          alert.hidden = false;
+          alert.textContent = error.message;
+        }
+      }
+      stageView.addEventListener("load", () => { ready = true; draw(); });
+      form.addEventListener("input", event => {
+        const el = event.target;
+        if (el.name === "name") return;
+        if (el.hasAttribute("data-theme-color-picker")) form.elements.primary.value = el.value;
+        else if (el.name === "primary" && /^#[0-9a-f]{6}$/i.test(el.value.trim())) {
+          const picker = form.querySelector("[data-theme-color-picker]");
+          if (picker) picker.value = el.value.trim();
+        }
+        draw();
+      });
+      form.addEventListener("submit", async event => {
+        event.preventDefault();
+        if (!copy) return;
+        const button = form.querySelector('button[type="submit"]');
+        button.disabled = true;
+        alert.hidden = true;
+        try {
+          const { item: created } = await post("copy-theme", {
+            originId: item.id,
+            name: form.elements.name.value,
+            primary: form.elements.primary.value.trim(),
+            backgroundAssetId: form.elements.backgroundAssetId.value,
+          });
+          await refreshLayoutChoices(managing, "theme");
+          if (managing) manageThemes();
+          else if (form.isConnected) dialog.close();
+          notify(`「${created.name}」已另存到素材库`, "ok");
+        } catch (error) {
+          alert.textContent = error.message;
+          alert.hidden = false;
+          button.disabled = false;
+        }
+      });
+    }).catch(error => {
+      if (panel.isConnected) panel.innerHTML = `<p class="banner err" role="alert">${esc(error.message)}</p>`;
+    });
+  }
+
   function submitForm(title, fileField, action, name = "", tags = "", managing = false) {
     openModal(title, `<form class="asset-form">${fileField}${descriptor}<p class="banner err" role="alert" hidden></p>
       <div class="asset-actions"><button type="submit" class="primary">收入素材库</button></div></form>`, "asset-form");
@@ -327,11 +493,14 @@ const StudioAssets = (() => {
       errorNode.hidden = true;
       try {
         const item = await action(Object.fromEntries(new FormData(form)));
-        if (item.kind === "layout") await refreshLayoutChoices(managing);
-        if (managing) manageLayouts();
+        if (item.kind === "layout" || item.kind === "theme") await refreshLayoutChoices(managing, item.kind);
+        if (managing) {
+          if (item.kind === "theme") manageThemes();
+          else manageLayouts();
+        }
         else if (form.isConnected) dialog.close();
         notify(`「${item.name}」已收入素材库`, "ok");
-        if (item.kind !== "layout" && route()[0] === "library") {
+        if (!["layout", "theme"].includes(item.kind) && route()[0] === "library") {
           pageKind = item.kind;
           pageQuery = "";
           render(true);
@@ -404,14 +573,22 @@ const StudioAssets = (() => {
     }
     panel.querySelector("[data-adopt-mg]").addEventListener("click",()=>decide(true));
     panel.querySelector("[data-discard-mg]").addEventListener("click",()=>decide(false));
-    panel.querySelector("[data-revise-mg]").addEventListener("click",()=>generateMG({...options,parent:item,description:item.description,theme:item.theme}));
+    panel.querySelector("[data-revise-mg]").addEventListener("click",()=>generateMG({
+      ...options, parent: item, description: item.description, theme: item.theme,
+      mediaSize: item.mediaSize || options.mediaSize,
+    }));
   }
 
   function generateMG(options = {}) {
     if (!config.deepseekKeyPresent) return openApiKeys("deepseek");
     const modelList = Object.entries(config.textModels || {});
     const selected = options.parent?.model || resolveTextModel(current()?.settings || data.settings);
+    const mediaSize = options.mediaSize || options.parent?.mediaSize || null;
+    const sizeNote = mediaSize
+      ? `<p class="small">适配当前模板内容尺寸：${mediaSize.w}×${mediaSize.h}${options.ratioLabel ? `（${esc(options.ratioLabel)}）` : ""}。</p>`
+      : "";
     const container = openMGPanel(options,options.parent ? "重新生成 MG 素材" : "AI 制作 MG 素材",`<form class="asset-form">
+      ${sizeNote}
       <label class="field">动作描述<textarea name="description" required maxlength="200" rows="3"
         ${options.parent ? "readonly" : ""}>${esc(options.description || "")}</textarea></label>
       ${options.parent ? '<label class="field">补充要求<textarea name="revision" required maxlength="220" rows="3"></textarea></label>' : ""}
@@ -434,7 +611,9 @@ const StudioAssets = (() => {
       if (close) close.disabled=true;
       errorBox.hidden=true;
       const mg={description:form.elements.description.value.trim(),revision:form.elements.revision?.value.trim() || "",
-        theme:form.elements.theme.value,...(options.parent ? {parentId:options.parent.id} : {})};
+        theme:form.elements.theme.value,
+        ...(mediaSize ? {mediaSize} : {}),
+        ...(options.parent ? {parentId:options.parent.id} : {})};
       const textModel=form.elements.model.value;
       const identity=JSON.stringify([mg,textModel]);
       if (identity !== signature) {
@@ -563,13 +742,16 @@ const StudioAssets = (() => {
   function upload(selected, managing) {
     if (selected === "lottie") return uploadLottie();
     const layout = selected === "layout";
-    const label = layout ? "布局 JSON 文件" : "图片或 SVG";
-    const types = layout ? ".json" : ".png,.jpg,.jpeg,.webp,.svg";
-    submitForm(layout ? "上传布局" : "上传素材", `<label class="field">${label}<input name="file" type="file" accept="${types}" required></label>`, async ({ file, ...values }) => {
-      const kind = layout ? "layout" : (/\.svg$/i.test(file.name) ? "svg" : "image");
-      const limit = {layout:64, svg:300, image:8192}[kind] * 1024;
-      if (!file.size || file.size > limit) throw Error("文件大小无效。图片上限 8 MB，SVG 上限 300 KB，布局上限 64 KB。");
+    const theme = selected === "theme";
+    const label = layout ? "布局 JSON 文件" : theme ? "主题 JSON 文件" : "图片或 SVG";
+    const types = layout || theme ? ".json" : ".png,.jpg,.jpeg,.webp,.svg";
+    const title = layout ? "上传布局" : theme ? "上传主题" : "上传素材";
+    submitForm(title, `<label class="field">${label}<input name="file" type="file" accept="${types}" required></label>`, async ({ file, ...values }) => {
+      const kind = layout ? "layout" : theme ? "theme" : (/\.svg$/i.test(file.name) ? "svg" : "image");
+      const limit = {layout:64, theme:16, svg:300, image:8192}[kind] * 1024;
+      if (!file.size || file.size > limit) throw Error("文件大小无效。图片上限 8 MB，SVG 上限 300 KB，布局上限 64 KB，主题上限 16 KB。");
       if (layout && !values.credit.trim()) throw Error("请填写布局的原始来源或署名。");
+      if (theme && !values.credit.trim()) throw Error("请填写主题的原始来源或署名。");
       return (await post("upload", { ...values, kind, data:await base64(file) })).item;
     }, "", "", managing);
   }
@@ -585,5 +767,5 @@ const StudioAssets = (() => {
 
   const motionUrl = id => "/api/library/motion/" + encodeURIComponent(id);
 
-  return { page, pick, collect, url, manageLayouts, layoutDiagram, motionUrl, generateMG };
+  return { page, pick, collect, url, manageLayouts, manageThemes, layoutDiagram, themeSwatch, motionUrl, generateMG };
 })();

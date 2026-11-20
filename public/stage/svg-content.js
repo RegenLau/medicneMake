@@ -224,50 +224,152 @@
     });
   }
 
-  function actionPoses(shot, progress, warm) {
+  function actionPoses(shot, progress, warm, surface, box = null) {
     const base = (action, time) => group("translate(-184 -124) scale(1 .91)", motions[action](clamp(time)));
     const beats = shot.svgBeats || [];
-    if (beats.length < 2) return base(shot.action, progress);
+    if (!box) {
+      if (beats.length < 2) return base(shot.action, progress);
+      const phases = beatPhases(beats, progress);
+      const size = beats.length === 2 ? .86 : .68;
+      const centers = beats.length === 2 ? [264, 696] : [167, 480, 793];
+      return beats.map((beat, index) => {
+        const partProgress = phases[index];
+        const visible = index === 0 ? 1 : ease(partProgress * 6);
+        const emphasis = partProgress < 1 && visible > 0;
+        const center = centers[index];
+        const shadow = surface ? surface.shadow : (warm ? "#e9dfce" : "#dbe9f5");
+        const labelFill = surface
+          ? (emphasis ? surface.labelActive : surface.label)
+          : (emphasis ? (warm ? "#ede0c8" : "#deedf9") : (warm ? "#f6ecdf" : "#eaf3fb"));
+        const labelColor = surface
+          ? (beat.action === "compare" ? "var(--v-coral)" : "var(--v-ink)")
+          : (beat.action === "compare" ? orange : ink);
+        const lineStroke = surface ? surface.connector : (warm ? "#cbb997" : "#afcde7");
+        return `<g data-svg-beat="${index}" opacity="${fmt(visible)}">
+          ${index ? path(`M${centers[index - 1] + 124} 389 Q${(centers[index - 1] + center) / 2} 369 ${center - 124} 389`,
+            "none", lineStroke, 3) : ""}
+          <ellipse cx="${center}" cy="434" rx="${fmt(176 * size)}" ry="12" fill="${shadow}"/>
+          ${group(`translate(${center} ${fmt(314 + 14 * (1 - visible))}) scale(${size}) translate(-480 -310)`,
+            base(beat.action, partProgress))}
+          ${rect(center - 110, 462, 220, 41, 20, labelFill, "none")}
+          <text x="${center}" y="490" text-anchor="middle" font-family='${font}'
+            font-size="26" font-weight="680" fill="${labelColor}">${text(beat.label)}</text>
+        </g>`;
+      }).join("");
+    }
+
+    const { vw, vh } = box;
+    const shadowColor = surface ? surface.shadow : (warm ? "#e9dfce" : "#dbe9f5");
+    if (beats.length < 2) {
+      const s = fmt(Math.min(vw / 560, (vh * 0.62) / 290, 1.02));
+      const cx = fmt(vw / 2);
+      const cy = fmt(vh * (vh <= 420 ? 0.56 : 0.57));
+      const sy = fmt(Math.min(vh - 28, cy + 146 * s));
+      return `<ellipse cx="${cx}" cy="${sy}" rx="${fmt(210 * s)}" ry="${fmt(Math.max(9, 14 * s))}" fill="${shadowColor}"/>` +
+        group(`translate(${cx} ${cy}) scale(${s}) translate(-480 -310)`, base(shot.action, progress));
+    }
 
     const phases = beatPhases(beats, progress);
-    const size = beats.length === 2 ? .86 : .68;
-    const centers = beats.length === 2 ? [264, 696] : [167, 480, 793];
+    const n = beats.length;
+    const padX = Math.max(24, vw * 0.055);
+    const slotW = (vw - padX * 2) / n;
+    const centers = beats.map((_, i) => fmt(padX + (i + 0.5) * slotW));
+    const scale = fmt(Math.min((slotW * 0.78) / 310, (vh * 0.46) / 280, n === 2 ? 0.86 : 0.72));
+    const pillH = vh <= 420 ? 34 : 40;
+    const pillW = fmt(Math.min(220, Math.max(118, slotW * 0.86)));
+    const labelY = fmt(vh - pillH - (vh <= 420 ? 14 : 20));
+    const shadowY = fmt(labelY - (vh <= 420 ? 18 : 22));
+    const propY = fmt(Math.max(vh * 0.34, shadowY - 112 * scale));
+    const fontSize = Math.round(Math.min(25, Math.max(16, pillW / 9.2)));
+    const lineStroke = surface ? surface.connector : (warm ? "#cbb997" : "#afcde7");
+
     return beats.map((beat, index) => {
       const partProgress = phases[index];
       const visible = index === 0 ? 1 : ease(partProgress * 6);
       const emphasis = partProgress < 1 && visible > 0;
       const center = centers[index];
-      const shadow = warm ? "#e9dfce" : "#dbe9f5";
-      const labelFill = emphasis ? (warm ? "#ede0c8" : "#deedf9") : (warm ? "#f6ecdf" : "#eaf3fb");
-      const labelColor = beat.action === "compare" ? orange : ink;
+      const labelFill = surface
+        ? (emphasis ? surface.labelActive : surface.label)
+        : (emphasis ? (warm ? "#ede0c8" : "#deedf9") : (warm ? "#f6ecdf" : "#eaf3fb"));
+      const labelColor = surface
+        ? (beat.action === "compare" ? "var(--v-coral)" : "var(--v-ink)")
+        : (beat.action === "compare" ? orange : ink);
+      const x1 = centers[index - 1] + pillW * 0.44;
+      const x2 = center - pillW * 0.44;
+      const connY = fmt(shadowY - 26 * scale);
+      const connector = index && x2 - x1 > 18
+        ? path(`M${fmt(x1)} ${connY} Q${fmt((x1 + x2) / 2)} ${fmt(connY - 18)} ${fmt(x2)} ${connY}`, "none", lineStroke, 3)
+        : "";
       return `<g data-svg-beat="${index}" opacity="${fmt(visible)}">
-        ${index ? path(`M${centers[index - 1] + 124} 389 Q${(centers[index - 1] + center) / 2} 369 ${center - 124} 389`,
-          "none", warm ? "#cbb997" : "#afcde7", 3) : ""}
-        <ellipse cx="${center}" cy="434" rx="${fmt(176 * size)}" ry="12" fill="${shadow}"/>
-        ${group(`translate(${center} ${fmt(314 + 14 * (1 - visible))}) scale(${size}) translate(-480 -310)`,
+        ${connector}
+        <ellipse cx="${center}" cy="${shadowY}" rx="${fmt(165 * scale)}" ry="${fmt(Math.max(8, 11 * scale))}" fill="${shadowColor}"/>
+        ${group(`translate(${center} ${fmt(propY + 12 * (1 - visible))}) scale(${scale}) translate(-480 -310)`,
           base(beat.action, partProgress))}
-        ${rect(center - 110, 462, 220, 41, 20, labelFill, "none")}
-        <text x="${center}" y="490" text-anchor="middle" font-family='${font}'
-          font-size="26" font-weight="680" fill="${labelColor}">${text(beat.label)}</text>
+        ${rect(fmt(center - pillW / 2), labelY, pillW, pillH, Math.round(pillH / 2), labelFill, "none")}
+        <text x="${center}" y="${fmt(labelY + pillH * 0.68)}" text-anchor="middle" font-family='${font}'
+          font-size="${fontSize}" font-weight="680" fill="${labelColor}">${text(beat.label)}</text>
       </g>`;
     }).join("");
   }
 
-  function content(shot, progress, theme, includeHeading = true) {
+  function content(shot, progress, theme, includeHeading = true, deck = null, size = null) {
     const warm = theme === "warm";
-    const heading = lines(shot.name, 19, 2);
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540"
+    const isDark = Boolean(deck && global.LayoutEngine?.isDarkTheme?.(deck));
+    const isGlass = Boolean(deck?.themeGlass);
+    const surface = isDark ? {
+      bg: "var(--v-card-bg)", hill: "var(--v-rail-bg)", shadow: "rgba(0,0,0,0.28)",
+      swoosh: "var(--v-primary)", connector: "var(--v-card-border)",
+      labelActive: "var(--v-primary-soft)", label: "var(--v-rail-bg)",
+      heading: "var(--v-ink)", warn: "var(--v-coral)",
+    } : isGlass ? {
+      bg: "none", hill: "var(--v-primary-soft)", shadow: "var(--v-rail-line)",
+      swoosh: "var(--v-primary)", connector: "var(--v-rail-line)",
+      labelActive: "var(--v-card-bg)", label: "var(--v-rail-bg)",
+      heading: "var(--v-ink)", warn: "var(--v-coral)",
+    } : null;
+    const rawW = size && Number.isFinite(size.w) ? Math.round(size.w) : 960;
+    const rawH = size && Number.isFinite(size.h) ? Math.round(size.h) : 540;
+    const isClassic = rawW === 960 && rawH === 540;
+    if (isClassic) {
+      const heading = lines(shot.name, 19, 2);
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540"
+        style="display:block;width:100%;height:100%;" role="img" aria-label="${text(shot.name)}">
+        <g stroke-linecap="round" stroke-linejoin="round">
+          ${rect(0, 0, 960, 540, 0, surface ? surface.bg : (warm ? "#fcf6ea" : "#f5faff"), "none")}
+          ${path("M0 436 Q247 410 479 462 T960 442 V540 H0 Z", surface ? surface.hill : (warm ? "#f7ecdc" : "#e7f2fc"), "none")}
+          ${shot.svgBeats?.length > 1 ? "" :
+            `<ellipse cx="483" cy="467" rx="235" ry="16" fill="${surface ? surface.shadow : (warm ? "#e9dfce" : "#dbe9f5")}"/>`}
+          ${path("M194 266 Q213 238 237 251 M705 212 Q719 190 742 196", "none", surface ? surface.swoosh : (warm ? "#82a69c" : "#a0c5e8"), 4)}
+          ${actionPoses(shot, progress, warm, surface)}
+          ${includeHeading ? `<g font-family='${font}' fill="${surface ? surface.heading : ink}">
+            ${heading.map((row, i) => `<text x="480" y="${80 + i * 48}" text-anchor="middle" font-weight="770" font-size="45">${row}</text>`).join("")}
+            ${shot.action === "compare" && !(shot.svgBeats?.length > 1) ? `<text x="480" y="159" text-anchor="middle" font-size="25" font-weight="670" fill="${surface ? surface.warn : "#a74d30"}">常见误区</text>` : ""}
+          </g>` : ""}
+        </g>
+      </svg>`;
+    }
+
+    const vw = Math.max(240, rawW);
+    const vh = Math.max(200, rawH);
+    const hillY = fmt(vh * 0.80);
+    const hillLow = fmt(vh * 0.76);
+    const hillDip = fmt(vh * 0.85);
+    const hillEnd = fmt(vh * 0.81);
+    const sx1 = fmt(vw * 0.16), sy1 = fmt(vh * 0.46);
+    const sx2 = fmt(vw * 0.76), sy2 = fmt(vh * 0.36);
+    const headFont = Math.round(Math.min(40, Math.max(24, Math.min(vw / 20, vh / 12))));
+    const maxChars = Math.max(12, Math.floor((vw * 0.84) / headFont));
+    const heading = lines(shot.name, maxChars, 2);
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${vw}" height="${vh}" viewBox="0 0 ${vw} ${vh}"
       style="display:block;width:100%;height:100%;" role="img" aria-label="${text(shot.name)}">
       <g stroke-linecap="round" stroke-linejoin="round">
-        ${rect(0, 0, 960, 540, 0, warm ? "#fcf6ea" : "#f5faff", "none")}
-        ${path("M0 436 Q247 410 479 462 T960 442 V540 H0 Z", warm ? "#f7ecdc" : "#e7f2fc", "none")}
-        ${shot.svgBeats?.length > 1 ? "" :
-          `<ellipse cx="483" cy="467" rx="235" ry="16" fill="${warm ? "#e9dfce" : "#dbe9f5"}"/>`}
-        ${path("M194 266 Q213 238 237 251 M705 212 Q719 190 742 196", "none", warm ? "#82a69c" : "#a0c5e8", 4)}
-        ${actionPoses(shot, progress, warm)}
-        ${includeHeading ? `<g font-family='${font}' fill="${ink}">
-          ${heading.map((row, i) => `<text x="480" y="${80 + i * 48}" text-anchor="middle" font-weight="770" font-size="45">${row}</text>`).join("")}
-          ${shot.action === "compare" && !(shot.svgBeats?.length > 1) ? '<text x="480" y="159" text-anchor="middle" font-size="25" font-weight="670" fill="#a74d30">常见误区</text>' : ""}
+        ${rect(0, 0, vw, vh, 0, surface ? surface.bg : (warm ? "#fcf6ea" : "#f5faff"), "none")}
+        ${path(`M0 ${hillY} Q${fmt(vw * 0.25)} ${hillLow} ${fmt(vw * 0.5)} ${hillDip} T${vw} ${hillEnd} V${vh} H0 Z`, surface ? surface.hill : (warm ? "#f7ecdc" : "#e7f2fc"), "none")}
+        ${path(`M${sx1} ${sy1} Q${fmt(sx1 + 18)} ${fmt(sy1 - 24)} ${fmt(sx1 + 40)} ${fmt(sy1 - 12)} M${sx2} ${sy2} Q${fmt(sx2 + 14)} ${fmt(sy2 - 20)} ${fmt(sx2 + 34)} ${fmt(sy2 - 14)}`, "none", surface ? surface.swoosh : (warm ? "#82a69c" : "#a0c5e8"), 4)}
+        ${actionPoses(shot, progress, warm, surface, { vw, vh })}
+        ${includeHeading ? `<g font-family='${font}' fill="${surface ? surface.heading : ink}">
+          ${heading.map((row, i) => `<text x="${fmt(vw / 2)}" y="${fmt(headFont * 1.4 + i * (headFont * 1.15))}" text-anchor="middle" font-weight="770" font-size="${headFont}">${row}</text>`).join("")}
+          ${shot.action === "compare" && !(shot.svgBeats?.length > 1) ? `<text x="${fmt(vw / 2)}" y="${fmt(headFont * 2.5)}" text-anchor="middle" font-size="${Math.round(headFont * 0.58)}" font-weight="670" fill="${surface ? surface.warn : "#a74d30"}">常见误区</text>` : ""}
         </g>` : ""}
       </g>
     </svg>`;

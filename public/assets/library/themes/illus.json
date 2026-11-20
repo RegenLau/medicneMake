@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "base": "warm",
+  "vars": {
+    "--v-bg": "#f4ede0",
+    "--v-ink": "#2f3d36",
+    "--v-ink-soft": "#64736a",
+    "--v-primary": "#4c7d61",
+    "--v-primary-deep": "#36604a",
+    "--v-primary-soft": "#e3eedf",
+    "--v-coral": "#d46e4d",
+    "--v-coral-soft": "#fbe9e1",
+    "--v-amber": "#c98a35",
+    "--v-amber-soft": "#fbf1df",
+    "--v-green": "#4c8a5c",
+    "--v-green-soft": "#e6f1e3",
+    "--v-card-bg": "rgba(255, 253, 248, 0.94)",
+    "--v-card-border": "rgba(76, 125, 97, 0.22)",
+    "--v-card-border-w": "1px",
+    "--v-card-shadow": "0 14px 30px rgba(73, 90, 70, 0.12)",
+    "--v-card-radius": "26px",
+    "--v-card-blur": "none",
+    "--v-ring-outer": "#d46e4d",
+    "--v-ring-track": "rgba(212, 110, 77, 0.22)",
+    "--v-ring-inner": "#fffdf8",
+    "--v-sub-hl": "#ffe08a",
+    "--v-band": "#3d5a4a",
+    "--v-band-ink": "#fff",
+    "--v-rail-bg": "rgba(255, 253, 248, 0.78)",
+    "--v-rail-ink": "#2f3d36",
+    "--v-rail-line": "rgba(76, 125, 97, 0.2)"
+  },
+  "background": {
+    "assetId": "builtin:image/bg-illustration"
+  },
+  "glass": false,
+  "fadeColor": "#f4ede0"
+}

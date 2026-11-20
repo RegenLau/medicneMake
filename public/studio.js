@@ -1498,7 +1498,7 @@ function setup(w) {
         "duration",
       ) +
       (motion || isTpl || isSvg
-        ? TemplateStudio.templateSetupHtml(w, data, esc, btn)
+        ? TemplateStudio.templateSetupHtml(w, data, esc, btn, { hideTheme: stageVideo })
         : styleChoice(w.style, "画面风格") +
           choice(
             "出镜形象",
@@ -1535,7 +1535,9 @@ function setup(w) {
         "primary widebtn",
       );
 
-  const themeName = TemplateVideo.THEMES.find((t) => t.id === (w.templateTheme || "medical"))?.name || "医疗白蓝风";
+  const themeName = stageVideo
+    ? StageStudio.themeName(w)
+    : (TemplateVideo.THEMES.find((t) => t.id === (w.templateTheme || "medical"))?.name || "医疗白蓝风");
   const presName = TemplateVideo.PRESENTERS.find((p) => p.id === (w.templatePresenter || "digital"))?.name || "数字人";
   const refSeconds = video ? videoReferenceSeconds(w) : null;
   const summaryRows = stageVideo ? [
@@ -2750,7 +2752,7 @@ async function poll(w, owner = w) {
             if (job.stageDraft) StageStudio.installDraft(w, job.stageDraft, result.output, job);
             else applyWrittenDraft(w, result.output);
           } else if (job.stageImageSlots) {
-            StageStudio.installImages(w, job.stageImageSlots, result.output);
+            StageStudio.installImages(w, job.stageImageSlots, result.output, job);
           } else if (job.target === "svg-speech") {
             if (job.stageSpeechIndex !== undefined) {
               StageStudio.installSpeech(w, job.stageSpeechIndex, job, result.output);
@@ -2952,7 +2954,7 @@ function authorize(w, count, kind, fn, voicedCount = count, draftOptions) {
       '</span><span class="pill">' +
       esc(kind === "video" ? w.settings.resolution : w.settings.imageSize) +
       '</span><span class="pill">画幅 ' +
-      esc(w.settings.ratio) +
+      esc(w.settings.sizeLabel || w.settings.ratio) +
       "</span></div>"
   );
   const speechSummary = usesSpeech

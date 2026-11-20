@@ -114,3 +114,31 @@ class MGGenerationTests(unittest.TestCase):
             self.assertEqual([],library.pending_items())
             with self.assertRaises(ValueError):
                 library.decide_pending(discard_id,True)
+
+    def test_custom_media_size_adapts_mg_viewbox_and_enforces_ratio(self):
+        wide_item = {"description": "药盒从左滑入", "theme": "medical", "mediaSize": {"w": 1120, "h": 388}}
+        vw, vh, *_ = mg_generation.canvas_for_media_size(wide_item["mediaSize"])
+        self.assertAlmostEqual(1120 / 388, vw / vh, delta=0.05)
+
+        wrong_ratio = example()  # 800x450 (16:9) should fail when 1120x388 is requested
+        fixed = deepcopy(example())
+        fixed["spec"]["svg"] = (
+            f'<svg viewBox="0 0 {vw} {vh}">'
+            '<rect data-part="box" x="200" y="120" width="160" height="90" fill="var(--v-primary)"/></svg>'
+        )
+        client = Mock(side_effect=[model_response(wrong_ratio), model_response(fixed)])
+        result = mg_generation.generate(client, "deepseek-flash", wide_item)
+        self.assertEqual(1, result["repairCount"])
+        self.assertIn("宽高比", result["repairReasons"][0])
+        self.assertEqual({"w": 1120, "h": 388}, result["mediaSize"])
+        sys_prompt = client.call_args.args[1]["messages"][0]["content"]
+        self.assertIn(f"0 0 {vw} {vh}", sys_prompt)
+        user_payload = json.loads(client.call_args.args[1]["messages"][1]["content"])
+        self.assertEqual({"w": vw, "h": vh, "ratio": round(vw / vh, 2)}, user_payload["canvasSize"])
+
+        # Confirmed wide MG asset reloads cleanly via motion_asset.mg_package without expected_ratio.
+        reloaded = motion_asset.mg_package(json.dumps(result["spec"]).encode(), asset_library.clean_svg)
+        self.assertEqual({"w": float(vw), "h": float(vh)}, reloaded["viewBox"])
+
+        with self.assertRaises(ValueError):
+            mg_generation.validate_request({**self.item, "mediaSize": {"w": 1000, "h": 100}})

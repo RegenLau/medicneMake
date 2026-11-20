@@ -173,6 +173,37 @@ class MixPlanningTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "保留原画面"):
             mix_plan.produce_shot(client, "deepseek-flash", item, self.library)
 
+    def test_produce_card_and_scene_carry_illustration_prompt(self):
+        for kind in ("card", "scene"):
+            self.assertIn("artPrompt", CATALOG["presenters"][kind]["options"])
+        shot = self.script["shots"][1]
+        art = "一只手把原包装药盒放进敞开的随身包内层。"
+        item = {**self.item, "presentation": "scene", "produceShot": {
+            "shot": shot, "previousParams": {"visual": "steps", "motion": "flow"},
+        }}
+        client = Mock(return_value=model_response({"plans": [
+            {"params": {"visual": "steps", "motion": "flow", "artPrompt": "  " + art + " "}, "reason": "插画展示收纳动作。"},
+        ]}))
+        content = mix_plan.produce_shot(client, "deepseek-flash", item, self.library)
+        self.assertEqual(art, content["artPrompt"])
+        instruction = client.call_args.args[1]["messages"][0]["content"]
+        self.assertIn("artPrompt", instruction)
+        item["produceShot"]["previousParams"] = {"visual": "steps", "motion": "flow", "artPrompt": art}
+        for params in ({"visual": "steps", "motion": "flow", "artPrompt": art},
+                       {"visual": "steps", "motion": "flow", "artPrompt": "长" * 301}):
+            with self.subTest(params=params), self.assertRaisesRegex(ValueError, "保留原画面"):
+                client = Mock(return_value=model_response({"plans": [{"params": params, "reason": "重新呈现本幕。"}]}))
+                mix_plan.produce_shot(client, "deepseek-flash", item, self.library)
+
+    def test_mix_keeps_illustration_prompt_for_card(self):
+        rows = [choice(self.script, 0, "card", params={"motionStyle": "reveal", "artPrompt": "药盒侧面的标签被放大镜照亮。"}),
+                choice(self.script, 1, "scene"), choice(self.script, 2, "card")]
+        result, client = self.arrange(rows)
+        contents = [row["content"] for row in result["shots"]]
+        self.assertEqual("药盒侧面的标签被放大镜照亮。", contents[0]["artPrompt"])
+        self.assertNotIn("artPrompt", contents[2])
+        self.assertIn("artPrompt", client.call_args.args[1]["messages"][0]["content"])
+
     def test_produce_rejects_cosmetic_or_equivalent_changes(self):
         self.supports.append("mg")
         asset = {"id": "builtin:lottie/box", "kind": "lottie", "name": "药盒", "tags": ["药盒"]}
@@ -295,6 +326,132 @@ class MixPlanningTests(unittest.TestCase):
         result, _ = self.arrange(rows)
         self.assertEqual(["card", "scene", "card"], [row["content"]["kind"] for row in result["shots"]])
         self.assertTrue(all(row["content"]["adjusted"] for row in result["shots"]))
+
+    def test_write_script_prompt_adds_qa_requirements_only_for_qa_layout(self):
+        raw = copy.deepcopy(self.script)
+        client = Mock(return_value=model_response(raw))
+        mix_plan.write_script(client, "deepseek-flash", {**self.item, "layoutId": "builtin:layout/qa-chat"}, 45, CATALOG)
+        qa_prompt = client.call_args.args[1]["messages"][0]["content"]
+        self.assertIn("问答对话布局", qa_prompt)
+        self.assertIn("points 都必须提供 question", qa_prompt)
+        self.assertIn("verdictTone", qa_prompt)
+
+        for other in ("builtin:layout/info-classic", "builtin:layout/headline", "builtin:layout/broadcast"):
+            with self.subTest(layout=other):
+                client.reset_mock()
+                mix_plan.write_script(client, "deepseek-flash", {**self.item, "layoutId": other}, 45, CATALOG)
+                prompt = client.call_args.args[1]["messages"][0]["content"]
+                self.assertNotIn("问答对话布局", prompt)
+                self.assertNotIn("verdictTone", prompt)
+                self.assertIn("accentPhrase", prompt)
+                self.assertIn("lead", prompt)
+
+    def test_write_script_sanitizes_and_truncates_layout_data_fields(self):
+        raw = copy.deepcopy(self.script)
+        raw["drugTags"] = [" 缓释片制剂太长 ", "处方药", "第三个标签"]
+        raw["shots"][0]["points"].update(
+            headline="漏服了，也只吃一次",
+            accentPhrase="也只吃一次",
+            lead="这是一句非常详细的补充解释文字超过三十个字需要被系统自动截断保留前三十个字",
+            question="昨天忘吃降压药今天能不能直接吃两片补回来请问医生这样安全吗会不会有危险",
+            answer="不行一次只能吃常规剂量绝对不能吃双倍哦",
+            verdictTone="no",
+        )
+        raw["shots"][1]["points"].update(
+            headline="整片吞服别掰开",
+            accentPhrase="不在标题里",
+            lead="   ",
+            question="缓释片能掰开吗？",
+            answer="不能掰开",
+            verdictTone="invalid-tone",
+        )
+        raw["shots"][2]["points"].update(
+            headline="记住规律服药九个字超长短语",
+            accentPhrase="记住规律服药九个字",
+            verdictTone="warn",
+        )
+        client = Mock(return_value=model_response(raw))
+        item = {**self.item, "layoutId": "builtin:layout/qa-chat", "drug": "硝苯地平缓释片"}
+        result = mix_plan.write_script(client, "deepseek-flash", item, 45, CATALOG)
+        prompt = client.call_args.args[1]["messages"][0]["content"]
+        self.assertIn("drugTags", prompt)
+
+        self.assertEqual(["缓释片制剂太", "处方药"], result["drugTags"])
+
+        p0 = result["shots"][0]["points"]
+        self.assertEqual("也只吃一次", p0["accentPhrase"])
+        self.assertEqual(30, len(p0["lead"]))
+        self.assertEqual(30, len(p0["question"]))
+        self.assertEqual(16, len(p0["answer"]))
+        self.assertEqual("no", p0["verdictTone"])
+
+        p1 = result["shots"][1]["points"]
+        self.assertNotIn("accentPhrase", p1)
+        self.assertNotIn("lead", p1)
+        self.assertEqual("缓释片能掰开吗？", p1["question"])
+        self.assertEqual("不能掰开", p1["answer"])
+        self.assertNotIn("verdictTone", p1)
+
+        p2 = result["shots"][2]["points"]
+        self.assertNotIn("accentPhrase", p2)  # > 8 chars dropped
+        self.assertEqual("warn", p2["verdictTone"])
+
+    def test_prompts_and_payloads_include_layout_media_dimensions(self):
+        import server
+
+        for lid, expected_size, expected_shape in (
+            ("builtin:layout/broadcast", "1280×504", "ultrawide"),
+            ("builtin:layout/qa-chat", "1120×388", "shallow-wide"),
+            ("builtin:layout/headline", "642×510", "narrow"),
+            ("builtin:layout/takeaway", "820×460", "compact"),
+        ):
+            with self.subTest(layout=lid):
+                raw = copy.deepcopy(self.script)
+                client = Mock(return_value=model_response(raw))
+                mix_plan.write_script(client, "deepseek-flash", {**self.item, "layoutId": lid}, 45, CATALOG, library=server.ASSETS)
+                script_prompt = client.call_args.args[1]["messages"][0]["content"]
+                self.assertIn(expected_size, script_prompt)
+
+                rows = [choice(self.script, i, "scene") for i in range(3)]
+                arrange_client = Mock(return_value=model_response({"shots": rows}))
+                mix_plan.arrange(arrange_client, "deepseek-flash", {**self.item, "layoutId": lid}, self.script, server.ASSETS)
+                arrange_sys = arrange_client.call_args.args[1]["messages"][0]["content"]
+                arrange_payload = json.loads(arrange_client.call_args.args[1]["messages"][1]["content"])
+                self.assertIn(expected_size, arrange_sys)
+                self.assertEqual(expected_shape, arrange_payload["layoutMedia"]["shape"])
+                if lid == "builtin:layout/headline":
+                    self.assertEqual("top", arrange_payload["layoutMedia"]["art"]["placement"])
+                    self.assertIn("顶部横向插画区", arrange_sys)
+
+    def test_write_script_auto_tightens_overlong_script(self):
+        overlong = copy.deepcopy(self.script)
+        for shot in overlong["shots"]:
+            shot["line"] = "孩子发烧时退烧药一定要按体重计算用量并且注意间隔时间不能随意叠加服用。" * 3
+            shot["cues"] = [{"text": shot["line"], "focus": "0", "weight": len(shot["line"])}]
+        tightened = copy.deepcopy(self.script)
+        client = Mock(side_effect=[model_response(overlong), model_response(tightened)])
+        result = mix_plan.write_script(client, "deepseek-flash", self.item, 30, CATALOG)
+        self.assertEqual(2, client.call_count)
+        self.assertLessEqual(sum(s["seconds"] for s in result["shots"]), 34)
+        self.assertEqual(tightened["shots"][0]["line"], result["shots"][0]["line"])
+
+    def test_write_script_returns_best_effort_after_tighten_attempts(self):
+        overlong = copy.deepcopy(self.script)
+        for shot in overlong["shots"]:
+            shot["line"] = "孩子发烧时退烧药一定要按体重计算用量并且注意间隔时间不能随意叠加服用。" * 3
+            shot["cues"] = [{"text": shot["line"], "focus": "0", "weight": len(shot["line"])}]
+        shorter_still_over = copy.deepcopy(self.script)
+        for shot in shorter_still_over["shots"]:
+            shot["line"] = "孩子发烧时退烧药一定要按体重计算用量并且注意间隔时间。" * 2
+            shot["cues"] = [{"text": shot["line"], "focus": "0", "weight": len(shot["line"])}]
+        client = Mock(side_effect=[
+            model_response(overlong),
+            model_response(shorter_still_over),
+            model_response(shorter_still_over),
+        ])
+        result = mix_plan.write_script(client, "deepseek-flash", self.item, 30, CATALOG)
+        self.assertEqual(3, client.call_count)
+        self.assertEqual(shorter_still_over["shots"][0]["line"], result["shots"][0]["line"])
 
 
 if __name__ == "__main__":

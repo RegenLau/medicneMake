@@ -274,7 +274,7 @@
       }).join("") + "</div>";
   }
 
-  function templateSetupHtml(w, dataStore, escFn, btnFn) {
+  function templateSetupHtml(w, dataStore, escFn, btnFn, opts = {}) {
     const theme = w.templateTheme || "medical";
     const presenter = w.templatePresenter || "digital";
     const rawAvatarMode = w.settings?.avatarMode ?? dataStore.settings?.avatarMode ?? defaults.avatarMode;
@@ -283,7 +283,7 @@
     const cfg = typeof config !== "undefined" ? config : global.config;
     const p = ensurePharmacist(dataStore);
     const avatarPreview = p.avatarImage || "/assets/template-doctor-digital.jpg";
-    return (
+    const themeBlock = opts.hideTheme ? "" : (
       '<div class="formrow"><span class="label">模板视觉风格</span><div class="tpl-theme-grid">' +
       TemplateVideo.THEMES.map(
         (t) =>
@@ -299,7 +299,10 @@
           escFn(t.desc) +
           "</small></span></button>",
       ).join("") +
-      "</div></div>" +
+      "</div></div>"
+    );
+    return (
+      themeBlock +
       '<div class="formrow"><span class="label">主讲人</span><div class="chips">' +
       TemplateVideo.PRESENTERS.map(
         (pr) =>

@@ -118,6 +118,65 @@ SIZES = {
         "1:1": "4096x4096",
     },
 }
+IMAGE_SIZE_TIERS = {
+    "1K": (1_120_000, 950_000, 2_500_000, 2048),
+    "2K": (4_194_304, 3_720_000, 4_600_000, 4096),
+    "4K": (14_500_000, 10_500_000, 16_700_000, 6192),
+}
+
+
+def parse_target_size(target):
+    if target is None:
+        return None
+    if not isinstance(target, dict):
+        raise ValueError("目标出图尺寸格式无效")
+    tw, th = target.get("w"), target.get("h")
+    if type(tw) not in (int, float) or type(th) not in (int, float) or not (math.isfinite(tw) and math.isfinite(th)):
+        raise ValueError("目标出图尺寸必须为有效数字")
+    tw, th = float(tw), float(th)
+    if not (64 <= tw <= 4096 and 64 <= th <= 4096 and 0.25 <= tw / th <= 4.0):
+        raise ValueError("目标出图尺寸超出支持范围")
+    return tw, th
+
+
+def resolve_image_size(settings):
+    tier = settings["imageSize"]
+    target = settings.get("targetSize")
+    if not target:
+        return SIZES[tier][settings["ratio"]]
+    tw, th = parse_target_size(target)
+    ar = tw / th
+    for preset in SIZES[tier].values():
+        pw, ph = (int(part) for part in preset.split("x"))
+        if abs(ar - pw / ph) / ar <= 0.015:
+            return preset
+    target_px, min_px, max_px, max_side = IMAGE_SIZE_TIERS[tier]
+    max_aligned = (max_side // 16) * 16
+    raw_w = math.sqrt(target_px * ar)
+    raw_h = math.sqrt(target_px / ar)
+    if max(raw_w, raw_h) > max_aligned:
+        scale = max_aligned / max(raw_w, raw_h)
+        raw_w *= scale
+        raw_h *= scale
+    pw = min(max_aligned, max(64, round(raw_w / 16) * 16))
+    ph = min(max_aligned, max(64, round(raw_h / 16) * 16))
+    while pw * ph > max_px and (pw > 64 or ph > 64):
+        cand = []
+        if pw > 64:
+            cand.append((abs((pw - 16) / ph - ar), pw - 16, ph))
+        if ph > 64:
+            cand.append((abs(pw / (ph - 16) - ar), pw, ph - 16))
+        _, pw, ph = min(cand)
+    while pw * ph < min_px and (pw < max_aligned or ph < max_aligned):
+        cand = []
+        if pw + 16 <= max_aligned:
+            cand.append((abs((pw + 16) / ph - ar), pw + 16, ph))
+        if ph + 16 <= max_aligned:
+            cand.append((abs(pw / (ph + 16) - ar), pw, ph + 16))
+        if not cand:
+            break
+        _, pw, ph = min(cand)
+    return f"{pw}x{ph}"
 STYLE = [
     "手绘动画风",
     "清新写实风",
@@ -1119,6 +1178,8 @@ def setting_valid(p):
         raise ValueError("图片模型或清晰度无效")
     if s["ratio"] not in SIZES["2K"] or not isinstance(s["watermark"], bool):
         raise ValueError("画幅或水印参数无效")
+    if p["kind"] == "images" and "targetSize" in s:
+        parse_target_size(s["targetSize"])
     if (
         s["videoModel"] not in VIDEO_MODELS
         or s["resolution"] not in VIDEO_MODELS[s["videoModel"]][1]
@@ -1172,7 +1233,7 @@ def image_references(p, item):
 
 def image_item(p, item, index, record=None):
     s = p["settings"]
-    size = SIZES[s["imageSize"]][s["ratio"]]
+    size = resolve_image_size(s)
     body = {
         "model": s["imageModel"],
         "prompt": item["prompt"],
@@ -2842,6 +2903,36 @@ def render_code_motion(p, job, save, speech_key, record, dashscope_key=""):
     }
 
 
+def stage_appearance(p, images=None, used=None):
+    appearance = code_motion_appearance(p)
+    raw = p.get("appearance", {})
+    theme_id = raw.get("themeId")
+    if theme_id is None:
+        return appearance
+    if not isinstance(theme_id, str) or not theme_id.strip():
+        raise ValueError("所选主题无效。")
+    definition, theme_item, theme_path = ASSETS.theme(theme_id)
+    base = definition["base"]
+    appearance.update(
+        theme=base,
+        themeId=theme_id,
+        themeVars=dict(definition["vars"]),
+        themeGlass=bool(definition.get("glass")),
+        themeFadeColor=definition.get("fadeColor") or ("#fdf5e7" if base == "warm" else "#edf6fe"),
+    )
+    if used is not None:
+        used.append((theme_path, theme_item))
+    if background := definition.get("background"):
+        bg_path, bg_item = ASSETS.resolve(background["assetId"], ("image",))
+        bg_url = asset_library.asset_url(background["assetId"])
+        appearance["themeBackground"] = bg_url
+        if images is not None:
+            images[bg_url] = bg_path.as_uri()
+        if used is not None:
+            used.append((bg_path, bg_item))
+    return appearance
+
+
 def validate_stage_video(p):
     settings = p.get("settings")
     if not isinstance(settings, dict) or settings.get("voice") not in (*SPEAKERS, "无配音"):
@@ -2850,14 +2941,13 @@ def validate_stage_video(p):
         raise ValueError("当前视频布局固定为 16:9。")
     stage_video.stage_input(p, ASSETS, media_path)
     stage_video.sound_settings(p, ASSETS)
-    code_motion_appearance(p)
+    appearance = stage_appearance(p)
     if not code_motion_ready():
         raise ValueError("视频合成需要 Node.js、Playwright 和 FFmpeg。")
     if settings["voice"] in SPEAKERS and not current_speech_key() and not has_template_speech(p):
         raise ValueError("请先配置火山语音，再合成带配音的视频。")
     if p.get("avatar") is not None:
         avatar = p["avatar"]
-        appearance = code_motion_appearance(p)
         if (not isinstance(avatar, dict) or avatar.get("enabled") is not True or settings["voice"] not in SPEAKERS
                 or appearance["presenter"] == "none" or avatar.get("presenter") != appearance["presenter"]):
             raise ValueError("数字人设置与当前主讲人不匹配。")
@@ -2938,10 +3028,19 @@ def render_motion_preview(asset, destination):
         scratch = Path(tmp)
         manifest = scratch / "preview.json"
         slide = {"name": "动画预览", "line": "", "type": "explain", "layoutMode": "explain", "seconds": duration}
+        vb = asset.get("viewBox") or (asset.get("animation") if isinstance(asset.get("animation"), dict) else None)
+        ar = (float(vb["w"]) / float(vb["h"])) if vb and vb.get("w") and vb.get("h") else 16 / 9
+        if abs(ar - 16 / 9) / (16 / 9) <= 0.02:
+            media_region = {"x": 0, "y": 0, "w": 100, "h": 100, "component": "media"}
+        elif ar > 16 / 9:
+            h_pct = (1280 / ar) / 720 * 100
+            media_region = {"x": 0, "y": (100 - h_pct) / 2, "w": 100, "h": h_pct, "component": "media"}
+        else:
+            w_pct = (720 * ar) / 1280 * 100
+            media_region = {"x": (100 - w_pct) / 2, "y": 0, "w": w_pct, "h": 100, "component": "media"}
         plan = {
             "fps": fps, "frames": round(duration * fps), "fontId": None, "images": {},
-            "layout": {"canvas": {"w": 1280, "h": 720}, "regions": {
-                "media": {"x": 0, "y": 0, "w": 100, "h": 100, "component": "media"}}},
+            "layout": {"canvas": {"w": 1280, "h": 720}, "regions": {"media": media_region}},
             "deck": {"title": "动画预览", "theme": asset.get("theme", "medical"), "presenter": "none",
                      "chapters": ["预览", "结束"], "slides": [slide]},
             "shots": [{"name": "动画预览", "line": "", "kind": "mg", "start": 0, "end": duration, "captions": [],
@@ -2965,7 +3064,7 @@ def render_motion_preview(asset, destination):
 
 def render_stage_video(p, job, save, speech_key, record=None, dashscope_key=""):
     layout, deck, shots, images, used = stage_video.stage_input(p, ASSETS, media_path)
-    appearance = code_motion_appearance(p)
+    appearance = stage_appearance(p, images, used)
     deck.update(appearance)
     deck["slides"] = [shot.pop("slide") for shot in shots]
     if appearance["presenter"] == "digital" and appearance["pharmacist"].get("avatarImage"):
@@ -3198,6 +3297,7 @@ def write_draft(p, job, save, record=None):
                 save()
                 script = mix_plan.write_script(
                     tracked_deepseek("视频脚本"), model, item, settings.get("duration"), ASSETS.stage_catalog(),
+                    library=ASSETS,
                 )
                 job["stageScript"] = script
                 save()
@@ -3339,7 +3439,7 @@ def job_costs(job):
     if legacy and p["kind"] == "draft" and job.get("output") and not any(k.startswith("text:") for k in recorded):
         rows.append(work_costs.entry("历史文字生成", "", "缺少 Token 用量", None))
     elif legacy and p["kind"] == "images" and p["mode"] == "ark":
-        size = SIZES[settings["imageSize"]][settings["ratio"]]
+        size = resolve_image_size(settings)
         for index, item in enumerate(p["items"][:len(job.get("results", []))]):
             if not any(k.startswith(f"image:{index}:") for k in recorded):
                 rows.append(work_costs.image_cost(settings["imageModel"], size, len(image_references(p, item)), index))
@@ -3425,8 +3525,9 @@ def preset_music_item(choice):
 def list_assets():
     items = ASSETS.items()
     return [
-        *(item for item in items if item["kind"] != "layout"),
+        *(item for item in items if item["kind"] not in ("layout", "theme")),
         *ASSETS.layout_items(items),
+        *ASSETS.theme_items(items),
         *(library_music_item(track) for track in music_gen.list_music_library(GENERATED_MUSIC_DIR)),
         *(preset_music_item(choice) for choice, path in MUSIC_TRACKS.items() if path.is_file()),
         *({"id": "builtin:motion/" + action, "kind": "motion", "name": label, "action": action,
@@ -3482,6 +3583,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "stageRender": STAGE_RENDER,
                     "stageShotProduction": True,
                     "stageLayouts": ASSETS.layout_items(),
+                    "stageThemes": ASSETS.theme_items(),
                     "layoutVariants": asset_library.LAYOUT_VARIANTS,
                     "stageCatalog": ASSETS.stage_catalog(),
                     "motionPalette": motion_asset.THEME_PALETTE,
@@ -3593,7 +3695,7 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         if (
             self.path not in ("/api/jobs", "/api/costs", "/api/ark-key", "/api/deepseek-key", "/api/speech-key", "/api/dashscope-key", "/api/mureka-key", "/api/upload-frame", "/api/generate-music", "/api/music-library/rename", "/api/music-library/delete",
-                              "/api/library/upload", "/api/library/collect-image", "/api/library/copy-layout", "/api/library/motion-palette", "/api/library/mg-decide", "/api/library/archive")
+                              "/api/library/upload", "/api/library/collect-image", "/api/library/copy-layout", "/api/library/copy-theme", "/api/library/motion-palette", "/api/library/mg-decide", "/api/library/archive")
             or not self.allowed()
             or self.headers.get("Origin") not in (ORIGIN, f"http://localhost:{PORT}")
             or self.headers.get_content_type() != "application/json"
@@ -3604,7 +3706,7 @@ class Handler(SimpleHTTPRequestHandler):
             max_bytes = 8_000_000 if self.path == "/api/upload-frame" else (100000 if self.path in ("/api/jobs", "/api/costs", "/api/generate-music") else 4096)
             if self.path == "/api/library/upload":
                 max_bytes = 11_200_000
-            elif self.path in ("/api/library/collect-image", "/api/library/copy-layout", "/api/library/motion-palette"):
+            elif self.path in ("/api/library/collect-image", "/api/library/copy-layout", "/api/library/copy-theme", "/api/library/motion-palette"):
                 max_bytes = 32_000
             if not 0 < n <= max_bytes:
                 raise ValueError("请求大小无效")
@@ -3623,6 +3725,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(200, {"item": ASSETS.copy_motion_palette(p, render_motion_preview)})
             if self.path == "/api/library/copy-layout":
                 return self.send_json(200, {"item": ASSETS.copy_layout(p)})
+            if self.path == "/api/library/copy-theme":
+                return self.send_json(200, {"item": ASSETS.copy_theme(p)})
             if self.path == "/api/library/collect-image":
                 source = media_path(p.get("url"))
                 if source.suffix not in (".png", ".jpg", ".webp") or source.stat().st_size > asset_library.LIMITS["image"]:

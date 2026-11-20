@@ -50,6 +50,55 @@ class StageLayoutTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             asset_library.validate_layout(invalid)
 
+    def test_all_five_new_layouts_pass_validation_and_library_lookup(self):
+        new_layouts = (
+            ("builtin:layout/chapter-nav", "chapter-nav.json"),
+            ("builtin:layout/broadcast", "broadcast.json"),
+            ("builtin:layout/takeaway", "takeaway.json"),
+            ("builtin:layout/qa-chat", "qa-chat.json"),
+            ("builtin:layout/headline", "headline.json"),
+        )
+        for layout_id, filename in new_layouts:
+            with self.subTest(layout_id=layout_id):
+                definition, item, path = server.ASSETS.layout(layout_id)
+                self.assertEqual(item["kind"], "layout")
+                self.assertEqual(path.name, filename)
+                self.assertEqual(asset_library.validate_layout(definition), definition)
+                self.assertEqual(
+                    set(definition["supports"]),
+                    {"image", "card", "scene", "svg", "asset", "mg"},
+                )
+
+    def test_rejects_new_variant_used_on_wrong_component(self):
+        wrong_pairs = (
+            ("header", "nav-panel"),
+            ("header", "pill"),
+            ("chapters", "ticker"),
+            ("presenter", "flush"),
+            ("media", "card"),
+            ("subtitle", "avatar"),
+            ("disclaimer", "bar"),
+            ("progress", "inline-right"),
+            ("keypoints", "bubble"),
+            ("answer", "poster"),
+            ("headline", "list"),
+        )
+        for component, wrong_variant in wrong_pairs:
+            with self.subTest(component=component, variant=wrong_variant):
+                invalid = copy.deepcopy(self.layout)
+                invalid["regions"][component] = {
+                    "x": 0,
+                    "y": 0,
+                    "w": 50 if component != "media" else 75,
+                    "h": 50 if component != "media" else 75,
+                    "component": component,
+                    "variant": wrong_variant,
+                }
+                if component == "media":
+                    invalid["regions"]["media"]["y"] = 10
+                with self.assertRaises(ValueError):
+                    asset_library.validate_layout(invalid)
+
 
 if __name__ == "__main__":
     unittest.main()
