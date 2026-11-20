@@ -44,6 +44,7 @@ function svgBeatFields(block, shotIndex) {
     return '<fieldset class="svg-beat-fields"><legend>动作 ' + (index + 1) + '</legend>' +
       '<label class="field">道具动作<select' + target + ' data-svg-field="action">' +
       opts(options, beat.action) + '</select></label>' +
+      btn("从素材库选动效", "library-pick-motion", "textbtn", `${shotIndex}:${index}`) +
       '<label class="field">画面标签<input maxlength="10"' + target + ' data-svg-field="label" value="' +
       esc(beat.label) + '"></label>' +
       '<label class="field">口播台词<textarea rows="2" maxlength="55"' + target + ' data-svg-field="line">' +

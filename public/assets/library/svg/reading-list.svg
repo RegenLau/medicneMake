@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 220" role="img" aria-label="阅读清单">
+  <rect x="22" y="18" width="196" height="184" rx="32" fill="#e6f4f4"/>
+  <rect x="64" y="38" width="112" height="144" rx="15" fill="#fff" stroke="#0d7680" stroke-width="5"/>
+  <path d="M84 76l6 6 11-14m-17 42 6 6 11-14m-17 42 6 6 11-14" fill="none" stroke="#0d7680" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M113 76h41m-41 34h35m-35 34h26" fill="none" stroke="#85b8c0" stroke-width="5" stroke-linecap="round"/>
+</svg>

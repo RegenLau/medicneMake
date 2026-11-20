@@ -572,7 +572,7 @@ def _save_library_raw(library_dir, entries):
         tmp.unlink(missing_ok=True)
 
 
-def list_music_library(library_dir):
+def list_music_library(library_dir, *, include_archived=False):
     """Return all valid saved project BGM tracks, syncing with files on disk."""
     lib = Path(library_dir)
     if not lib.is_dir():
@@ -631,14 +631,14 @@ def list_music_library(library_dir):
             _save_library_raw(lib, valid)
         except OSError:
             pass
-    return valid
+    return valid if include_archived else [entry for entry in valid if not entry.get("archived")]
 
 
 def resolve_library_track(library_dir, track_id):
     if not isinstance(track_id, str) or not track_id.strip():
         raise ValueError("请选择有效的项目背景音乐。")
     lib = Path(library_dir).resolve()
-    for entry in list_music_library(lib):
+    for entry in list_music_library(lib, include_archived=True):
         if entry["id"] == track_id.strip():
             file_path = (lib / entry["filename"]).resolve()
             if lib in file_path.parents and file_path.is_file():
@@ -651,7 +651,7 @@ def rename_library_track(library_dir, track_id, new_title):
     if len(clean_title) < 1:
         raise ValueError("请输入新的背景音乐名称。")
     lib = Path(library_dir).resolve()
-    entries = list_music_library(lib)
+    entries = list_music_library(lib, include_archived=True)
     updated = None
     for entry in entries:
         if entry["id"] != track_id:
@@ -678,9 +678,20 @@ def rename_library_track(library_dir, track_id, new_title):
     return updated, entries
 
 
+def archive_library_track(library_dir, track_id):
+    entries = list_music_library(library_dir, include_archived=True)
+    entry = next((entry for entry in entries if entry["id"] == track_id), None)
+    if entry is None:
+        raise ValueError("未找到要下架的背景音乐。")
+    if not entry.get("archived"):
+        entry["archived"] = True
+        _save_library_raw(library_dir, entries)
+    return [entry for entry in entries if not entry.get("archived")]
+
+
 def delete_library_track(library_dir, track_id):
     lib = Path(library_dir).resolve()
-    entries = list_music_library(lib)
+    entries = list_music_library(lib, include_archived=True)
     kept = []
     removed = False
     for entry in entries:
@@ -694,7 +705,7 @@ def delete_library_track(library_dir, track_id):
     if not removed:
         raise ValueError("未找到要删除的背景音乐。")
     _save_library_raw(lib, kept)
-    return kept
+    return [entry for entry in kept if not entry.get("archived")]
 
 
 def generate_music(
@@ -758,7 +769,7 @@ def generate_music(
         "spentCny": spent_cny,
         "createdAt": int(time.time()),
     }
-    existing = list_music_library(lib_path)
+    existing = list_music_library(lib_path, include_archived=True)
     entries = [entry, *[item for item in existing if item["id"] != track_id]]
     _save_library_raw(lib_path, entries)
     return entry

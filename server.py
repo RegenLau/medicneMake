@@ -21,10 +21,11 @@ from http.client import HTTPException
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import unquote, urlencode, urlsplit
+from urllib.parse import quote, unquote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 import draft_content
+import asset_library
 import svg_motion
 import music_gen
 import work_costs
@@ -41,6 +42,7 @@ MEDIA = DATA / "media"
 JOBS = DATA / "jobs"
 AVATAR_CACHE = DATA / "avatar_cache"
 GENERATED_MUSIC_DIR = PUBLIC / "assets" / "music" / "generated"
+ASSETS = asset_library.LocalLibrary(DATA / "library", PUBLIC / "assets" / "library")
 KEY_STORAGE = "mac-keychain" if sys.platform == "darwin" else "windows-dpapi" if os.name == "nt" else "session"
 if sys.platform == "darwin":
     import mac_keychain
@@ -759,6 +761,8 @@ def media_path(url):
         path = PUBLIC / url.lstrip("/")
     elif re.fullmatch(r"/assets/template-[a-z0-9-]+\.(jpg|png|webp)", url):
         path = PUBLIC / url.lstrip("/")
+    elif url.startswith("/library/"):
+        path, _ = ASSETS.resolve(unquote(url.removeprefix("/library/")), ("image",))
     else:
         raise ValueError("请选择本作品的本地素材")
     if not path.is_file():
@@ -899,7 +903,13 @@ def code_motion_payload_script(p):
     for key in ("shortTitle", "chapters", "disclaimer"):
         if key in p and p[key] is not None:
             raw[key] = p[key]
-    return draft_content.code_motion_script(raw)
+    script = draft_content.code_motion_script(raw)
+    for scene, item in zip(script["scenes"], p["items"]):
+        for key, kinds in (("libraryArtId", ("image", "svg")), ("sfxId", ("sfx",))):
+            if key in item:
+                ASSETS.resolve(item[key], kinds)
+                scene[key] = item[key]
+    return script
 
 
 def code_motion_shot_captions(scene, start, audible):
@@ -963,6 +973,8 @@ def setting_valid(p):
             validate_motion_template(p)
         else:
             code_motion_payload_script(p)
+            if "fontId" in settings:
+                ASSETS.resolve(settings["fontId"], ("font",))
         appearance = code_motion_appearance(p)
         if not code_motion_ready():
             raise ValueError("代码动效需要 Node.js、Playwright 和 FFmpeg。请按使用说明安装。")
@@ -1638,7 +1650,7 @@ def generate_music_request(p):
                     "output": generated,
                 },
             )
-    return {**generated, "library": music_gen.list_music_library(GENERATED_MUSIC_DIR)}
+    return {**generated, "library": music_gen.list_music_library(GENERATED_MUSIC_DIR, include_archived=True)}
 
 
 def music_mix(duration, voiced, music_index=2, is_generated=False, voice_index=0):
@@ -1661,6 +1673,37 @@ def music_mix(duration, voiced, music_index=2, is_generated=False, voice_index=0
         "[voice][ducked]amix=inputs=2:duration=first:normalize=0,"
         "alimiter=limit=0.95:level=false:latency=1[mix]"
     )
+
+
+def library_sound_mix(shots, music, track, duration, voiced):
+    sound_inputs, delays, used = [], [], []
+    for shot in shots:
+        if "sfxId" not in shot:
+            continue
+        path, item = ASSETS.resolve(shot["sfxId"], ("sfx",))
+        index = 2 + bool(music) + len(delays)
+        delay = round((shot["start"] + 0.16) * 1000)
+        sound_inputs.extend(["-i", path])
+        delays.append(f"[{index}:a]volume=-12dB,adelay={delay}:all=1[sfx{len(delays)}]")
+        used.append((path, item))
+    base = music_mix(duration, voiced, is_generated=track.startswith("library:")) if music else ""
+    if not delays:
+        return [], ["-filter_complex", base, "-map", "[mix]"] if base else ["-map", "0:a:0"], used
+    source = base.removesuffix("[mix]") + "[base]" if base else "[0:a]anull[base]"
+    parts = "[base]" + "".join(f"[sfx{index}]" for index in range(len(delays)))
+    mix = ";".join([source, *delays,
+                    f"{parts}amix=inputs={len(delays) + 1}:duration=first:normalize=0,"
+                    "alimiter=limit=0.89:level=false:latency=1[mix]"])
+    return sound_inputs, ["-filter_complex", mix, "-map", "[mix]"], used
+
+
+def asset_versions(assets):
+    unique = {item["id"]: (path, item) for path, item in assets}
+    return [
+        {**{key: item[key] for key in ("id", "kind", "name", "license", "credit", "termsUrl") if item.get(key)},
+         "sha256": item.get("sha256") or asset_library.digest(path)}
+        for path, item in unique.values()
+    ]
 
 
 def build_template_speech_wav(entries, target_wav, scratch_dir):
@@ -2639,6 +2682,8 @@ def render_code_motion(p, job, save, speech_key, record, dashscope_key=""):
     script = ({"title": p["title"], "scenes": p["items"]} if template_info else code_motion_payload_script(p))
     fps = 24 if template_info else CODE_MOTION_FPS
     appearance = code_motion_appearance(p)
+    font = ASSETS.resolve(p["settings"]["fontId"], ("font",)) if not template_info and p["settings"].get("fontId") else None
+    used_assets = [font] if font else []
     base = job["id"]
     folder = JOBS / base
     folder.mkdir(parents=True, exist_ok=True)
@@ -2674,12 +2719,19 @@ def render_code_motion(p, job, save, speech_key, record, dashscope_key=""):
         elapsed = end = start + seconds
         if cues:
             cues[-1]["end"] = end
-        shots.append({**scene, "start": start, "end": end, "captions": cues})
+        shot = {**scene, "start": start, "end": end, "captions": cues}
+        if not template_info and scene.get("libraryArtId"):
+            image = ASSETS.resolve(scene["libraryArtId"], ("image", "svg"))
+            used_assets.append(image)
+            shot["libraryArtUrl"] = image[0].as_uri()
+        shots.append(shot)
         entries.append((audio, seconds))
         durations.append(seconds)
 
     voiced = any(audio for audio, _ in entries)
     music, track, music_url, music_meta = resolve_video_music(p)
+    if music:
+        used_assets.append((music, library_music_item(music_meta) if music_meta else preset_music_item(track)))
     frames = round(elapsed * fps)
     duration = frames / fps
     avatar = p.get("avatar")
@@ -2713,6 +2765,7 @@ def render_code_motion(p, job, save, speech_key, record, dashscope_key=""):
             "hasAvatarFrames": bool(avatar_mp4),
             "templateInfo": template_info,
             "localAvatar": media_path(portrait).as_uri() if portrait else None,
+            "fontId": font[1]["id"] if font else None,
         })
         job["progress"] = f"逐帧渲染代码动效（{len(shots)} 幕 · {frames} 帧）"
         save()
@@ -2728,12 +2781,12 @@ def render_code_motion(p, job, save, speech_key, record, dashscope_key=""):
         job["progress"] = "合成代码动效、配音与 MP4"
         save()
         music_input = ["-stream_loop", "-1", "-i", music] if music else []
-        mix = (["-filter_complex", music_mix(duration, voiced, is_generated=track.startswith("library:")),
-                "-map", "[mix]"] if music else ["-map", "0:a:0"])
+        sfx_input, mix, sounds = library_sound_mix(shots, music, track, duration, voiced)
+        versions = asset_versions([*used_assets, *sounds])
         output = scratch / "output.mp4"
         run_ffmpeg(
             "-i", voice, "-framerate", fps, "-start_number", 0, "-i", scratch / "frame-%05d.jpg",
-            *music_input, "-map", "1:v:0", *mix, "-t", f"{duration:.3f}",
+            *music_input, *sfx_input, "-map", "1:v:0", *mix, "-t", f"{duration:.3f}",
             "-c:v", "libx264", "-preset", "fast", "-crf", 18, "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", output,
         )
@@ -2748,6 +2801,7 @@ def render_code_motion(p, job, save, speech_key, record, dashscope_key=""):
         "url": f"/media/{base}.mp4", "poster": f"/media/{base}.jpg", "captions": f"/media/{base}.vtt",
         "burnedCaptions": True, "music": track, "shotSeconds": durations,
         **({"musicUrl": music_url, "musicMeta": music_meta} if music_url else {}),
+        **({"assets": versions} if versions else {}),
     }
 
 
@@ -3050,6 +3104,42 @@ def cost_details(request):
             "dashscopePrice": work_costs.DASHSCOPE_PRICE, "murekaPrice": work_costs.MUREKA_PRICE}
 
 
+BUILTIN_MUSIC_CREDITS = {
+    "bedb95f1a36f": "Clean Soul · Kevin MacLeod",
+    "fa687d97d550": "Friday Morning · Kevin MacLeod",
+    "bc4296a1138c": "Carefree · Kevin MacLeod",
+    "2142ab73a83b": "Solace · Scott Buckley",
+}
+
+
+def library_music_item(track):
+    credit = BUILTIN_MUSIC_CREDITS.get(track["id"], "")
+    return {
+        "id": "library:" + track["id"], "kind": "music", "name": track["title"],
+        "url": track["url"], "tags": [value for key in ("mood", "styleLabel") if (value := track.get(key))],
+        "source": "项目曲库" if track.get("provider") == "library" else track.get("provider", "项目曲库"),
+        "license": "CC BY 4.0" if credit else "待核对",
+        "credit": credit,
+        **({"termsUrl": "/assets/music/generated/" + quote("配乐来源与署名.md")} if credit else {}),
+    }
+
+
+def preset_music_item(choice):
+    name = {"calm": "舒缓钢琴", "light": "轻快木琴"}[choice]
+    return {"id": "builtin:music/" + choice, "choice": choice, "kind": "music", "name": name,
+            "url": "/assets/music/" + choice + ".flac", "tags": [], "source": "工作台预设", "license": "待核对"}
+
+
+def list_assets():
+    return [
+        *ASSETS.items(),
+        *(library_music_item(track) for track in music_gen.list_music_library(GENERATED_MUSIC_DIR)),
+        *(preset_music_item(choice) for choice, path in MUSIC_TRACKS.items() if path.is_file()),
+        *({"id": "builtin:motion/" + action, "kind": "motion", "name": label, "action": action,
+           "source": "内置", "license": "项目自制", "tags": []} for action, label in svg_motion.ACTIONS.items()),
+    ]
+
+
 class Handler(SimpleHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -3083,7 +3173,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "avatarLipSync": True,
                     "musicModels": music_gen.MUSIC_MODELS,
                     "musicModel": music_gen.DEFAULT_MUSIC_MODEL,
-                    "musicLibrary": music_gen.list_music_library(GENERATED_MUSIC_DIR),
+                    "musicLibrary": music_gen.list_music_library(GENERATED_MUSIC_DIR, include_archived=True),
                     "workCosts": True,
                     "videoBackgroundMusic": True,
                     "videoAutoMusicGeneration": False,
@@ -3101,7 +3191,16 @@ class Handler(SimpleHTTPRequestHandler):
                 },
             )
         if path == "/api/music-library":
-            return self.send_json(200, {"tracks": music_gen.list_music_library(GENERATED_MUSIC_DIR)})
+            return self.send_json(200, {"tracks": music_gen.list_music_library(GENERATED_MUSIC_DIR, include_archived=True)})
+        if path == "/api/library":
+            with CACHE_LOCK:
+                return self.send_json(200, {"items": list_assets()})
+        if path.startswith("/library/"):
+            try:
+                file, _ = ASSETS.resolve(unquote(path.removeprefix("/library/")))
+            except ValueError:
+                return self.send_error(404)
+            return self.file_response(file)
         if m := re.fullmatch(r"/api/jobs/([a-f0-9-]{36})", path):
             file = JOBS / (m[1] + ".json")
             if file.is_file():
@@ -3150,6 +3249,8 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(end - begin + 1))
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("X-Content-Type-Options", "nosniff")
+        if file.suffix == ".svg":
+            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
         if file.suffix in (".html", ".css", ".js"):
             self.send_header("Cache-Control", "no-cache")
         if ranged:
@@ -3170,7 +3271,8 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         if (
-            self.path not in ("/api/jobs", "/api/costs", "/api/ark-key", "/api/deepseek-key", "/api/speech-key", "/api/dashscope-key", "/api/mureka-key", "/api/upload-frame", "/api/generate-music", "/api/music-library/rename", "/api/music-library/delete")
+            self.path not in ("/api/jobs", "/api/costs", "/api/ark-key", "/api/deepseek-key", "/api/speech-key", "/api/dashscope-key", "/api/mureka-key", "/api/upload-frame", "/api/generate-music", "/api/music-library/rename", "/api/music-library/delete",
+                              "/api/library/upload", "/api/library/collect-image", "/api/library/archive")
             or not self.allowed()
             or self.headers.get("Origin") not in (ORIGIN, f"http://localhost:{PORT}")
             or self.headers.get_content_type() != "application/json"
@@ -3179,6 +3281,10 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             n = int(self.headers.get("Content-Length", "0"))
             max_bytes = 8_000_000 if self.path == "/api/upload-frame" else (100000 if self.path in ("/api/jobs", "/api/costs", "/api/generate-music") else 4096)
+            if self.path == "/api/library/upload":
+                max_bytes = 11_200_000
+            elif self.path == "/api/library/collect-image":
+                max_bytes = 32_000
             if not 0 < n <= max_bytes:
                 raise ValueError("请求大小无效")
             p = json.loads(self.rfile.read(n))
@@ -3186,6 +3292,16 @@ class Handler(SimpleHTTPRequestHandler):
                 raise ValueError("请求格式无效")
             if self.path == "/api/upload-frame":
                 return self.send_json(200, save_uploaded_frame(p))
+            if self.path == "/api/library/upload":
+                return self.send_json(200, {"item": ASSETS.upload(p, FFMPEG)})
+            if self.path == "/api/library/collect-image":
+                source = media_path(p.get("url"))
+                if source.suffix not in (".png", ".jpg", ".webp") or source.stat().st_size > asset_library.LIMITS["image"]:
+                    raise ValueError("请选择不超过 8 MB 的现有配图。")
+                return self.send_json(200, {"item": ASSETS.add("image", source.read_bytes(), p, FFMPEG, "project")})
+            if self.path == "/api/library/archive":
+                ASSETS.archive(p.get("id"))
+                return self.send_json(200, {"ok": True})
             if self.path == "/api/generate-music":
                 return self.send_json(200, generate_music_request(p))
             if self.path == "/api/music-library/rename":
@@ -3194,7 +3310,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(200, {"track": track, "library": library})
             if self.path == "/api/music-library/delete":
                 with CACHE_LOCK:
-                    library = music_gen.delete_library_track(GENERATED_MUSIC_DIR, p.get("id"))
+                    music_gen.archive_library_track(GENERATED_MUSIC_DIR, p.get("id"))
+                    library = music_gen.list_music_library(GENERATED_MUSIC_DIR, include_archived=True)
                 return self.send_json(200, {"library": library})
             if self.path == "/api/costs":
                 return self.send_json(200, cost_details(p))

@@ -286,7 +286,10 @@ function buildCodeMotionPreviewShots(w, template) {
     }
     const end = start + seconds;
     if (captions.length) captions.at(-1).end = end;
-    const shot = { ...block, start, end, captions };
+    const shot = {
+      ...block, start, end, captions,
+      ...(block.libraryArtId ? { libraryArtUrl: StudioAssets.url(block.libraryArtId) } : {}),
+    };
     start = end;
     return shot;
   });
@@ -312,6 +315,7 @@ function refreshCodeMotionPreview(w, index, frame = app.querySelector("#code-mot
     shots,
     appearance: template?.appearance || codeMotionAppearance(w),
     templateInfo: template?.templateInfo,
+    fontId: template ? undefined : w.settings.fontId,
   });
   const seek = app.querySelector("#code-motion-seek");
   const shot = shots[safeIndex];
@@ -334,6 +338,8 @@ function bindCodeMotionPreview(w, index) {
   if (!frame || !seek || !play) return;
   let animation;
   let resume = false;
+  const sfx = !TemplateStudio.isTemplateVideo(w) && w.blocks[index]?.sfxId;
+  const sound = sfx ? new Audio(StudioAssets.url(sfx)) : null;
   const draw = (time) => {
     const start = Number(seek.dataset.start || 0);
     const dur = Number(seek.dataset.duration || seek.max || 6);
@@ -341,6 +347,7 @@ function bindCodeMotionPreview(w, index) {
     frame.contentWindow?.drawMotionFrame?.(start + time);
   };
   const pause = () => {
+    sound?.pause();
     cancelAnimationFrame(animation);
     animation = undefined;
     play.textContent = "播放本幕";
@@ -362,14 +369,24 @@ function bindCodeMotionPreview(w, index) {
     }
     const maxVal = Number(seek.max);
     const offset = resume && Number(seek.value) < maxVal ? Number(seek.value) : 0;
+    let soundPending = Boolean(sound && offset <= 0.16);
+    if (sound) sound.currentTime = 0;
     resume = true;
     const start = performance.now();
     play.textContent = "暂停";
     const advance = (now) => {
-      if (!frame.isConnected) return;
+      if (!frame.isConnected) {
+        pause();
+        return;
+      }
       const time = Math.min(maxVal, offset + (now - start) / 1000);
       seek.value = time.toFixed(2);
       draw(time);
+      if (soundPending && time >= 0.16) {
+        soundPending = false;
+        sound.volume = 10 ** (-12 / 20);
+        sound.play().catch(() => {});
+      }
       if (time < maxVal) animation = requestAnimationFrame(advance);
       else pause();
     };
@@ -503,6 +520,12 @@ function codeMotionEditor(w) {
     opts(CODE_MOTION_TONES.map((t) => [t.id, t.name]), block.tone) +
     "</select></label>" +
     "</div>" +
+    '<div class="asset-inline">' +
+    btn(esc(block.libraryArtName || "选配图或 SVG"), "cm-pick-asset", "outline", "art") +
+    (block.libraryArtId ? btn("移除配图", "cm-remove-asset", "textbtn", "art") : "") +
+    btn(esc(block.sfxName || "选出场音效"), "cm-pick-asset", "outline", "sfx") +
+    (block.sfxId ? btn("移除音效", "cm-remove-asset", "textbtn", "sfx") : "") +
+    "</div>" +
     `<label class="field" style="margin-top:8px">对应顶部章节<select data-motion-scene="${selected}" data-motion-select="chapterIndex">` +
     meta.chapters.map((ch, ci) => `<option value="${ci}"${block.chapterIndex === ci ? " selected" : ""}>${esc(ch || `章节 ${ci + 1}`)}</option>`).join("") +
     "</select></label>" +
@@ -535,7 +558,10 @@ function codeMotionEditor(w) {
         `<button type="button" class="chip${avatarMode === "wan2.2-s2v" ? " selected" : ""}" data-action="tpl-avatar-mode" data-val="wan2.2-s2v" aria-pressed="${avatarMode === "wan2.2-s2v"}">万相数字人（生动）</button>` +
         `<button type="button" class="chip${avatarMode === "static" ? " selected" : ""}" data-action="tpl-avatar-mode" data-val="static" aria-pressed="${avatarMode === "static"}">静态肖像</button></div>`
       : "") +
-    "</section>" +
+    '<div class="asset-inline"><span class="small">视频字体</span>' +
+    btn(esc(w.settings.fontName || "选择字体"), "cm-pick-asset", "outline", "font") +
+    (w.settings.fontId ? btn("恢复默认", "cm-remove-asset", "textbtn", "font") : "") +
+    "</div></section>" +
     '<section class="vstudio-section"><span class="label">背景音乐</span>' +
     StudioMusic.renderMusicStudioCard(w, { showModeChips: true }) +
     "</section>" +
@@ -683,6 +709,29 @@ function handleCodeMotionChange(w, el) {
 }
 
 function handleCodeMotionAction(w, action, val) {
+  if (action === "cm-pick-asset" || action === "cm-remove-asset") {
+    const fields = {
+      art: ["libraryArt", ["image", "svg"]],
+      sfx: ["sfx", ["sfx"]],
+      font: ["font", ["font"]],
+    }[val];
+    const target = val === "font" ? w.settings : selectedScenes.get(w);
+    if (!fields || !target) return true;
+    const [key, kinds] = fields;
+    const change = (item) => {
+      if (item) {
+        target[key + "Id"] = item.id;
+        target[key + "Name"] = item.name;
+      } else {
+        delete target[key + "Id"];
+        delete target[key + "Name"];
+      }
+      editedLibraryChoice(w);
+    };
+    if (action === "cm-remove-asset") change(null);
+    else StudioAssets.pick(kinds, change, { topic: w.topic, ratio: w.settings.ratio });
+    return true;
+  }
   if (!isCodeMotion(w)) return false;
   const meta = normalizeCodeMotionWork(w);
   if (action === "cm-inspector-tab") {
@@ -861,6 +910,8 @@ function composeCodeMotion(w) {
       items: cleanItems,
       labels: cleanItems.map((it) => it.title),
       ...(block.beats?.length ? { beats: block.beats } : {}),
+      ...(block.libraryArtId ? { libraryArtId: block.libraryArtId } : {}),
+      ...(block.sfxId ? { sfxId: block.sfxId } : {}),
       seconds: block.seconds,
     };
   });

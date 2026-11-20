@@ -283,5 +283,5 @@
     return TemplateVideo.renderFrameHtml(deck, index, frameOptions(deck, index, progress, options));
   }
 
-  global.SvgMotion = { frame, frameOptions, templateDeck };
+  global.SvgMotion = { frame, frameOptions, templateDeck, content };
 })(globalThis);

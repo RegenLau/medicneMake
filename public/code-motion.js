@@ -327,8 +327,10 @@
     const meta = resolveSceneMeta(shot, index, total);
     const { visual, motif, tone, items, listTitle, takeaway } = meta;
     const uid = `s${index}`;
-    const hasMotif = motif !== "none";
-    const motifHtml = hasMotif ? motifMarkup(motif, uid) : "";
+    const hasMotif = Boolean(shot.libraryArtUrl) || motif !== "none";
+    const motifHtml = shot.libraryArtUrl
+      ? `<img class="cm-library-art" src="${esc(shot.libraryArtUrl)}" alt="">`
+      : hasMotif ? motifMarkup(motif, uid) : "";
     const count = items.length;
     const headerInline = hasMotif && ["compare", "steps", "timeline", "warning"].includes(visual);
 
@@ -840,7 +842,8 @@
   }
 
   /* ===== Public Player API (used by Preview iframe & Playwright MP4 Exporter) ===== */
-  window.setMotionPlan = ({ title, shortTitle, chapters, disclaimer, shots, appearance = {}, localAvatar, templateInfo }) => {
+  window.setMotionPlan = ({ title, shortTitle, chapters, disclaimer, shots, appearance = {}, localAvatar, templateInfo, fontId }) => {
+    canvas.classList.toggle("cm-library-font", fontId === "builtin:font/noto-sans-sc");
     timeline = Array.isArray(shots) ? shots : [];
     templateMotion = Boolean(templateInfo);
     const resolvedChapters = Array.isArray(chapters) && chapters.length >= 2

@@ -8,11 +8,13 @@
     <link rel="icon" type="image/png" href="/assets/platform-logo.png" />
     <link rel="stylesheet" href="/studio.css" />
     <link rel="stylesheet" href="/template-renderer.css" />
+    <link rel="stylesheet" href="/assets/library/fonts/studio-fonts.css" />
     <script src="/video-content.js" defer></script>
     <script src="/template-renderer.js" defer></script>
     <script src="/template-studio.js" defer></script>
     <script src="/svg-motion.js" defer></script>
     <script src="/svg-motion-studio.js" defer></script>
+    <script src="/asset-library.js" defer></script>
     <script src="/studio.js" defer></script>
     <script src="/code-motion-studio.js" defer></script>
   </head>
@@ -26,6 +28,9 @@
         <span class="divider" aria-hidden="true"></span>
         <span class="workspace">科普工作台</span>
         <div class="grow"></div>
+        <button type="button" class="nav-btn" data-action="asset-library" id="nav-library">
+          素材库
+        </button>
         <button type="button" class="nav-btn" data-action="works" id="nav-works">
           我的作品
         </button>

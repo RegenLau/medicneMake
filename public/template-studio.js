@@ -81,6 +81,7 @@
     if (slide.job) return "生成中";
     if (slide.contentImage) {
       if (slide.imageSource === "ark") return "AI 配图";
+      if (slide.imageSource === "library") return "素材库复用";
       if (slide.imageSource === "upload" || slide.contentImage.startsWith("/media/")) return "自定义图";
       return "预设信息图";
     }
@@ -482,6 +483,7 @@
       const modelName = cfg?.imageModels?.[slide.imageModel]?.[0] || "火山方舟 AI 生成";
       return `${modelName}${slide.imageSize ? " · " + slide.imageSize : ""}`;
     }
+    if (slide.imageSource === "library") return "素材库复用";
     if (slide.imageSource === "upload" || slide.contentImage.startsWith("/media/")) {
       return "本地上传图 · 16:9 恒定槽位";
     }
@@ -799,6 +801,8 @@
       '<span class="small">' + escFn(slideOriginLabel(slide)) + "</span>" +
       "</div>" +
       '<div class="tpl-image-actions">' +
+      btnFn("从素材库选择", "library-pick-template-picture", "outline", idx, busy ? "disabled" : "") +
+      (slide.contentImage?.startsWith("/media/") ? btnFn("收入素材库", "library-collect-template-picture", "textbtn", idx, busy ? "disabled" : "") : "") +
       btnFn(
         slide.contentImage ? "AI 重新生成" : (slide.type === "cover" ? "AI 生成开场图" : "AI 生成配图"),
         "tpl-reimage",

@@ -18,6 +18,10 @@ try {
   await page.goto(new URL("../public/code-motion.html", import.meta.url).href);
   await page.evaluate(async data => {
     window.setMotionPlan(data);
+    if (data.fontId) {
+      const loaded = await document.fonts.load('650 30px "Studio Noto Sans SC"', "用药");
+      if (!loaded.length) throw Error("素材库字体未加载。");
+    }
     await document.fonts.ready;
   }, plan);
   // A job accepted before the service reload may still carry the earlier frame-level array.
@@ -25,7 +29,12 @@ try {
   for (let frame = 0; frame < frameCount; frame++) {
     const suffix = String(frame).padStart(5, "0") + ".jpg";
     const avatar = plan.hasAvatarFrames ? pathToFileURL(join(output, "avatar-" + suffix)).href : null;
-    await page.evaluate(([time, portrait]) => window.drawMotionFrame(time, portrait), [frame / plan.fps, avatar]);
+    await page.evaluate(async ([time, portrait]) => {
+      window.drawMotionFrame(time, portrait);
+      const art = document.querySelector(".cm-library-art");
+      if (art && !art.complete) await art.decode();
+      if (art && !art.naturalWidth) throw Error("分镜素材未加载。");
+    }, [frame / plan.fps, avatar]);
     const name = "frame-" + suffix;
     await page.screenshot({ type: "jpeg", quality: 96, path: join(output, name) });
   }

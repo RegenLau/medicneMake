@@ -399,26 +399,27 @@ function videoMusicSettings(w) {
 }
 
 function musicLibrary() {
-  return Array.isArray(config?.musicLibrary) ? config.musicLibrary : [];
+  return (config?.musicLibrary || []).filter((track) => !track.archived);
 }
 
 function findLibraryTrack(choice) {
   if (typeof choice !== "string" || !choice.startsWith("library:")) return null;
   const id = choice.slice("library:".length);
-  return musicLibrary().find((t) => t.id === id) || null;
+  return (config?.musicLibrary || []).find((t) => t.id === id) || null;
 }
 
 function automaticMusicTrack(w) {
   const topic = w?.topic?.trim() || w?.templateDeck?.title?.trim() || w?.title?.trim() || "";
   const available = autoMusicRules
     .map((rule) => ({ keywords: rule.keywords, track: findLibraryTrack("library:" + rule.trackId) }))
-    .filter(({ track }) => track);
+    .filter(({ track }) => track && !track.archived);
   const selected = available.find(({ keywords }) => keywords.some((word) => topic.includes(word))) ?? available.at(-1);
   return selected?.track ?? null;
 }
 
 function musicFieldHtml(currentVal, label = "配乐方式") {
-  const lib = musicLibrary();
+  const selected = findLibraryTrack(currentVal);
+  const lib = selected?.archived ? [...musicLibrary(), selected] : musicLibrary();
   const builtins = Object.entries(musicLabels)
     .map(([v, text]) => `<option value="${esc(v)}"${v === currentVal ? " selected" : ""}>${esc(text)}</option>`)
     .join("");
@@ -504,7 +505,7 @@ function renderLibraryTrackCard(track, { compact = false, automatic = false } = 
     '<audio class="bgm-audio" controls preload="metadata" src="' + esc(track.url) + '"></audio>' +
     '<div class="bgm-library-actions">' +
     btn("重命名", "rename-bgm", "outline", track.id) +
-    btn("从项目库删除", "delete-bgm", "textbtn danger", track.id) +
+    (track.archived ? '<span class="small">已下架 · 旧作品仍可使用</span>' : btn("下架", "delete-bgm", "textbtn", track.id)) +
     "</div>" +
     "</div>"
   );
@@ -513,6 +514,7 @@ function renderLibraryTrackCard(track, { compact = false, automatic = false } = 
 function renderMusicStudioCard(w, { compact = false, showModeChips = false } = {}) {
   if (!config?.videoBackgroundMusic || !w) return "";
   const choice = videoMusic(w);
+  const pickHtml = '<div class="asset-inline">' + btn("从素材库选曲", "library-pick-music", "outline") + '</div>';
   const chipsHtml = showModeChips
     ? '<div class="chips" style="margin-top:6px">' +
       Object.entries(musicLabels)
@@ -528,17 +530,15 @@ function renderMusicStudioCard(w, { compact = false, showModeChips = false } = {
       renderLibraryPickerHtml(choice)
     : "";
 
-  if (choice === "off") {
-    return chipsHtml;
-  }
+  if (choice === "off") return chipsHtml + pickHtml;
 
   if (choice.startsWith("library:")) {
-    return chipsHtml + renderLibraryTrackCard(findLibraryTrack(choice), { compact });
+    return chipsHtml + pickHtml + renderLibraryTrackCard(findLibraryTrack(choice), { compact });
   }
 
   if (choice === "calm" || choice === "light") {
     return (
-      chipsHtml +
+      chipsHtml + pickHtml +
       '<div class="bgm-card is-preset' + (compact ? " is-compact" : "") + '">' +
       '<div class="bgm-card-head"><strong>内置配乐 · ' + esc(musicLabels[choice]) + "</strong>" +
       '<span class="bgm-badge">预设曲目</span></div>' +
@@ -548,7 +548,7 @@ function renderMusicStudioCard(w, { compact = false, showModeChips = false } = {
   }
 
   const track = automaticMusicTrack(w);
-  return chipsHtml + (track
+  return chipsHtml + pickHtml + (track
     ? renderLibraryTrackCard(track, { compact, automatic: true })
     : '<p class="bgm-desc">自动搭配曲目暂不可用。可手动选曲，否则成片无背景音乐。</p>');
 }
@@ -598,38 +598,25 @@ async function renameLibraryMusic(trackId) {
   }
 }
 
+async function archiveMusic(trackId) {
+  const res = await jsonRequest("/api/music-library/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: trackId }),
+  });
+  config.musicLibrary = res.library;
+}
+
 async function deleteLibraryMusic(trackId) {
   const track = musicLibrary().find((t) => t.id === trackId);
-  if (!track) return;
-  if (!window.confirm(`确定从项目目录删除背景音乐「${track.title}」吗？删除后无法恢复。`)) return;
-  try {
-    const res = await jsonRequest("/api/music-library/delete", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: trackId }),
-    });
-    if (Array.isArray(res.library)) config.musicLibrary = res.library;
-    const libKey = "library:" + trackId;
-    if (data.settings.music === libKey) data.settings.music = "auto";
-    for (const work of data.works) {
-      if (work.settings?.music === libKey) {
-        work.settings.music = "auto";
-        if (work.video) work.videoDirty = true;
-      }
-      if (work.customMusic?.id === trackId) {
-        work.customMusic = null;
-      }
-    }
-    save();
-    if (dialog.open && modalType === "settings") {
-      const scope = modalScope === "global" ? null : data.works.find((x) => x.id === modalScope) || null;
-      prefs(scope);
-    }
-    render(true);
-    notify(`已删除背景音乐：${track.title}`, "ok");
-  } catch (error) {
-    notify(error.message || "删除失败", "err");
+  if (!track || !window.confirm(`下架「${track.title}」？已使用的作品仍可导出。`)) return;
+  await archiveMusic(trackId);
+  if (dialog.open && modalType === "settings") {
+    const scope = modalScope === "global" ? null : data.works.find((x) => x.id === modalScope) || null;
+    prefs(scope);
   }
+  render(true);
+  notify(`已下架背景音乐：${track.title}`, "ok");
 }
 
 window.StudioMusic = {
@@ -688,8 +675,13 @@ function updateTopbar() {
       ico("settings");
   }
   const worksEl = $("#nav-works");
+  const onLibrary = route()[0] === "library";
+  const libraryEl = $("#nav-library");
+  libraryEl.classList.toggle("active", onLibrary);
+  if (onLibrary) libraryEl.setAttribute("aria-current", "page");
+  else libraryEl.removeAttribute("aria-current");
   if (worksEl) {
-    const onWorks = route()[0] !== "work" && tab === "works";
+    const onWorks = route()[0] !== "work" && !onLibrary && tab === "works";
     worksEl.classList.toggle("active", onWorks);
     if (onWorks) worksEl.setAttribute("aria-current", "page");
     else worksEl.removeAttribute("aria-current");
@@ -1722,7 +1714,7 @@ function revealSelectedScene() {
 }
 
 function pictureControls(w, b, i, quiet = false) {
-  const origin = config.imageModels[b.imageModel]?.[0] || "火山方舟生成";
+  const origin = b.image?.startsWith("/library/") ? "素材库复用" : (config.imageModels[b.imageModel]?.[0] || "火山方舟生成");
   return (
     '<div class="picture-slot" data-picture="' +
     i +
@@ -1757,16 +1749,18 @@ function pictureControls(w, b, i, quiet = false) {
             (styles[b.imageStyle] ? " · " + esc(styles[b.imageStyle]) : "") +
             "</span>"
           : '<span class="small">暂未添加配图</span>') +
+        '<div class="asset-inline">' +
+        (b.image?.startsWith("/media/") ? btn("收入素材库", "library-collect-picture", "textbtn", i) : "") +
         (w.stage === "review"
           ? ""
-          : btn(
+          : btn("从素材库选择", "library-pick-picture", "outline", i) + btn(
               b.image ? "重新生成这张图" : w.type === "video" ? "生成这张分镜图" :
                 b.suggestedImage ? "生成本段建议配图" : "为这段配图",
               "reimage",
               quiet ? "textbtn" : "outline",
               i,
             )) +
-        "</div>") +
+        "</div></div>") +
     "</div>"
   );
 }
@@ -1918,7 +1912,7 @@ function renderPictureDialog(w) {
     w.type === "video" ? "分镜 " + (index + 1) : block.name || "段落 " + (index + 1);
 
   const body =
-    arkKeyWarning() +
+    '<div class="asset-inline">' + btn("从素材库选择", "library-pick-picture", "outline", index) + "</div>" + arkKeyWarning() +
     '<label class="field">' + (w.type === "video" ? "本幕首帧画面（选填）" : "画面描述（选填）") +
     '<textarea id="imageprompt" rows="3" maxlength="1800" placeholder="例如：近景，一只手把药盒转到侧面，手指停在印日期的位置">' +
     esc(prompt) +
@@ -2248,7 +2242,8 @@ function editor(w) {
     const hasSvgBeats = isSvg && Boolean(block?.beats?.length);
     const svgActionPanel = isSvg && block && !hasSvgBeats
       ? '<label class="field">道具动作<select data-svg-action="' + selected + '">' +
-        opts(Object.entries(config.svgMotion.actions), block.action) + '</select></label>'
+        opts(Object.entries(config.svgMotion.actions), block.action) + '</select></label>' +
+        btn("从素材库选动效", "library-pick-motion", "textbtn", selected)
       : "";
     const shotPanel = block
       ? '<div class="vstudio-panel">' +
@@ -2468,6 +2463,11 @@ function detail(w) {
           '">') +
       "</video></div>" +
       '<div id="video-stale" class="banner warn" hidden>内容或背景音乐已修改。返回编辑并重新合成后，成片会同步更新。</div>' +
+      ((w.video.assets || []).some((item) => item.credit) ?
+        '<details class="transcript"><summary>素材署名</summary><ul>' +
+        w.video.assets.filter((item) => item.credit).map((item) =>
+          `<li>${esc(item.credit)} · ${esc(item.license)}${item.termsUrl ? ` · <a href="${esc(item.termsUrl)}" target="_blank" rel="noopener">授权详情</a>` : ""}</li>`).join("") +
+        '</ul></details>' : "") +
       '<div class="dividerline"></div><details class="transcript" open><summary>' +
       w.blocks.length +
       (isTpl ? " 页模板与口播台词" : " 幕分镜与口播台词") +
@@ -2727,6 +2727,7 @@ async function poll(w, owner = w) {
             }
             w.renderMode = job.payload.mode;
             w.stage = "draft";
+            if (job.payload.codeMotion === true) w.editing = false;
             w.videoDirty = false;
             w.viewingSetup = false;
           } else if (job.target === "write-draft") {
@@ -3329,6 +3330,12 @@ function render(preserveScroll = false) {
   if (stopSvgPlayback) stopSvgPlayback();
   if (!config) return;
   const prevScroll = window.scrollY;
+  if (route()[0] === "library") {
+    updateTopbar();
+    StudioAssets.page();
+    if (!preserveScroll) window.scrollTo(0, 0);
+    return;
+  }
   const w = current();
   if (route()[0] !== "work" || !w) {
     home();
@@ -3365,6 +3372,51 @@ function changed(w) {
   save();
   const state = $("#save-state");
   if (state) state.textContent = savedLabel(w);
+}
+
+function editedLibraryChoice(w) {
+  if (w.video) w.videoDirty = true;
+  changed(w);
+  render(true);
+}
+
+function useLibraryPicture(w, index, isTemplate = false) {
+  if (!w) return;
+  const target = isTemplate ? w.templateDeck?.slides[index] : w.blocks[index];
+  if (!target || target.job) return;
+  StudioAssets.pick(["image"], (item) => {
+    if (target.job) return;
+    if (isTemplate) {
+      target.contentImage = item.url;
+      target.imageSource = "library";
+      target.imageModel = "";
+      target.imageSize = "";
+      TemplateStudio.syncBlocksFromDeck(w);
+    } else {
+      target.image = item.url;
+      target.imageModel = "";
+      target.imageSize = "";
+      target.imageStyle = "";
+      target.storyboardFrame = false;
+    }
+    editedLibraryChoice(w);
+    notify(`已选用「${item.name}」`, "ok");
+  }, { topic: w.topic, ratio: isTemplate ? "16:9" : w.settings.ratio, style: isTemplate ? w.templateDeck.theme : styles[w.style] });
+}
+
+function collectLibraryPicture(w, index, isTemplate = false) {
+  if (!w) return;
+  const target = isTemplate ? w.templateDeck?.slides[index] : w.blocks[index];
+  const image = isTemplate ? target?.contentImage : target?.image;
+  if (!image?.startsWith("/media/")) return;
+  StudioAssets.collect(image, {
+    name: (target.name || target.headline || w.title || "配图").slice(0, 80),
+    topic: (w.topic || w.title || "").slice(0, 200),
+    ratio: isTemplate ? "16:9" : w.settings.ratio,
+    style: isTemplate ? w.templateDeck.theme : (styles[target.imageStyle] || styles[w.style] || ""),
+    prompt: target.imagePrompt || target.prompt || "",
+    model: target.imageModel || "",
+  });
 }
 
 function applySettingMutation(s, key, val) {
@@ -3849,6 +3901,44 @@ document.addEventListener("click", async (e) => {
   try {
     if (w && isCodeMotion(w) && handleCodeMotionAction(w, action, v)) return;
     switch (action) {
+      case "asset-library":
+        navigate("library");
+        break;
+      case "library-pick-picture":
+      case "library-pick-template-picture":
+        useLibraryPicture(w, Number(v), action === "library-pick-template-picture");
+        break;
+      case "library-collect-picture":
+      case "library-collect-template-picture":
+        collectLibraryPicture(w, Number(v), action === "library-collect-template-picture");
+        break;
+      case "library-pick-motion": {
+        if (!isSvgVideo(w)) break;
+        const [shotIndex, beatIndex] = v.split(":").map(Number);
+        const block = w.blocks[shotIndex];
+        if (!block) break;
+        StudioAssets.pick(["motion"], (item) => {
+          if (beatIndex !== undefined) {
+            updateSvgBeat(w, { value: item.action, dataset: { svgShot: shotIndex, svgBeat: beatIndex, svgField: "action" } });
+            render(true);
+          } else {
+            block.action = item.action;
+            editedLibraryChoice(w);
+          }
+        });
+        break;
+      }
+      case "library-pick-music": {
+        const target = (dialog.open && modalScope && modalScope !== "global")
+          ? data.works.find((work) => work.id === modalScope) : w;
+        if (target?.type !== "video") break;
+        StudioAssets.pick(["music"], (item) => {
+          target.settings.music = item.choice || item.id;
+          editedLibraryChoice(target);
+          notify(`已选用「${item.name}」`, "ok");
+        });
+        break;
+      }
       case "home":
         tab = "examples";
         navigate("home");
