@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "aspect": "16:9",
+  "canvas": {"w": 1280, "h": 720},
+  "regions": {
+    "header": {"x": 2.5, "y": 2.7777777777777777, "w": 95, "h": 11.666666666666666, "component": "header", "variant": "namecard"},
+    "media": {"x": 2.5, "y": 17.22222222222222, "w": 64.0625, "h": 63.888888888888886, "component": "media"},
+    "keypoints": {"x": 68.125, "y": 17.22222222222222, "w": 29.375, "h": 63.888888888888886, "component": "keypoints", "variant": "list"},
+    "subtitle": {"x": 0, "y": 83.88888888888889, "w": 100, "h": 16.11111111111111, "component": "subtitle", "variant": "pill"}
+  },
+  "stages": {
+    "hook": {
+      "regions": {
+        "media": {"x": 0, "y": 0, "w": 100, "h": 86.11111111111111, "component": "media", "variant": "hook"},
+        "subtitle": {"x": 0, "y": 86.11111111111111, "w": 100, "h": 13.88888888888889, "component": "subtitle", "variant": "band"}
+      }
+    },
+    "outro": {
+      "regions": {
+        "header": {"x": 0, "y": 0, "w": 100, "h": 10.277777777777779, "component": "header", "variant": "pill-title+chapter-rail"},
+        "media": {"x": 0, "y": 10.277777777777779, "w": 100, "h": 77.5, "component": "media", "variant": "outro"},
+        "subtitle": {"x": 0, "y": 87.77777777777777, "w": 100, "h": 12.222222222222223, "component": "subtitle", "variant": "band"}
+      }
+    }
+  },
+  "supports": ["image", "card", "scene", "svg", "asset", "mg"]
+}

@@ -1722,6 +1722,7 @@
       focusRegions,
       question: String(s.question || (type === "cover" ? headline : "")).trim().slice(0, 50),
       answer: String(s.answer || (type === "cover" ? (s.lead || "") : "")).trim().slice(0, 90),
+      verdictTone: ["ok", "no", "warn"].includes(s.verdictTone) ? s.verdictTone : "",
       outroNote: String(s.outroNote || "").trim().slice(0, 60),
       outroImage: String(s.outroImage || "").trim(),
       outroImagePrompt: String(s.outroImagePrompt || "").trim().slice(0, 400),
@@ -1751,6 +1752,10 @@
     const disclaimer = base.disclaimer !== undefined
       ? String(base.disclaimer).trim().slice(0, 60)
       : DEFAULT_DISCLAIMER;
+    const drug = base.drug !== undefined ? String(base.drug || "").trim().slice(0, 20) : "";
+    const drugTags = Array.isArray(base.drugTags)
+      ? base.drugTags.map((t) => String(t || "").trim().slice(0, 6)).filter(Boolean).slice(0, 2)
+      : [];
     return {
       theme: base.theme === "warm" ? "warm" : "medical",
       ...(base.themeId ? { themeId: String(base.themeId) } : {}),
@@ -1758,6 +1763,8 @@
       ...(base.themeBackground ? { themeBackground: String(base.themeBackground) } : {}),
       ...(base.themeGlass !== undefined ? { themeGlass: Boolean(base.themeGlass) } : {}),
       ...(base.themeFadeColor ? { themeFadeColor: String(base.themeFadeColor) } : {}),
+      ...(drug ? { drug } : {}),
+      ...(drugTags.length ? { drugTags } : {}),
       presenter: PRESENTERS.some((p) => p.id === base.presenter) ? base.presenter : "digital",
       title,
       shortTitle,

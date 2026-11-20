@@ -25,13 +25,16 @@ USER_ID = re.compile(r"user:[0-9a-f]{32}")
 LIMITS = {"image": 8 * 1024 * 1024, "svg": 300 * 1024, "layout": 64 * 1024, "theme": 16 * 1024,
           "lottie": motion_asset.LOTTIE_LIMIT, "mg": motion_asset.MG_LIMIT}
 LAYOUT_VARIANTS = {
-    "header": ("pill-title+chapter-rail",),
-    "chapters": ("rail",),
-    "presenter": ("column-card",),
-    "media": ("hook", "outro"),
-    "subtitle": ("band",),
-    "disclaimer": ("note",),
+    "header": ("pill-title+chapter-rail", "breadcrumb", "ticker", "namecard", "question"),
+    "chapters": ("rail", "nav-panel"),
+    "presenter": ("column-card", "avatar"),
+    "media": ("hook", "outro", "flush"),
+    "subtitle": ("band", "card", "pill", "tab-band", "inline"),
+    "disclaimer": ("note", "inline-right"),
     "progress": ("bar",),
+    "keypoints": ("list",),
+    "answer": ("bubble",),
+    "headline": ("poster",),
 }
 LAYOUT_CONTENTS = frozenset(("image", "card", "scene", "svg", "asset", "mg"))
 REGION_FIELDS = frozenset(("x", "y", "w", "h", "component"))

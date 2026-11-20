@@ -15,9 +15,15 @@ const StudioAssets = (() => {
   let pageQuery = "";
 
   function layoutDiagram(item) {
-    const labels = {header:"页头",chapters:"章节",presenter:"主讲",media:"内容",subtitle:"字幕"};
+    const labels = {header:"页头",chapters:"章节",presenter:"主讲",media:"内容",subtitle:"字幕",keypoints:"要点",answer:"回答",headline:"标题"};
+    const headerLabels = {breadcrumb:"路径",ticker:"信息条",namecard:"名片",question:"提问"};
+    const labelFor = (key, region) => {
+      if (key === "chapters" && region.variant === "nav-panel") return "导航";
+      if (key === "header" && headerLabels[region.variant]) return headerLabels[region.variant];
+      return labels[key] || "";
+    };
     return '<span class="stage-layout-mini" aria-hidden="true">' + Object.entries(item.regions || {}).map(([key, region]) =>
-      `<span class="layout-region region-${esc(key)}" style="left:${Number(region.x)}%;top:${Number(region.y)}%;width:${Number(region.w)}%;height:${Number(region.h)}%">${labels[key] || ""}</span>`).join("") + "</span>";
+      `<span class="layout-region region-${esc(key)}" style="left:${Number(region.x)}%;top:${Number(region.y)}%;width:${Number(region.w)}%;height:${Number(region.h)}%">${labelFor(key, region)}</span>`).join("") + "</span>";
   }
 
   function themeSwatch(item) {
@@ -300,7 +306,7 @@ const StudioAssets = (() => {
       const stageView = form.querySelector("iframe");
       const alert = form.querySelector('[role="alert"]');
       const regions = () => definition.stages?.[form.elements.stage?.value]?.regions || definition.regions;
-      const names = {header:"页头",chapters:"章节",presenter:"主讲人",media:"内容区",subtitle:"字幕区",progress:"进度",disclaimer:"参考声明"};
+      const names = {header:"页头",chapters:"章节",presenter:"主讲人",media:"内容区",subtitle:"字幕区",progress:"进度",disclaimer:"参考声明",keypoints:"要点栏",answer:"回答区",headline:"大标题"};
       let ready = false;
       async function draw() {
         if (!ready || !form.isConnected) return;

@@ -291,6 +291,302 @@
     return ` style="position:absolute;left:${px(region.x, w)};top:${px(region.y, h)};width:${px(region.w, w)};height:${px(region.h, h)}"`;
   }
 
+  function formatClock(seconds) {
+    const total = Math.max(0, Math.floor(Number(seconds) || 0));
+    const mins = Math.floor(total / 60);
+    const secs = total % 60;
+    return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  }
+
+  function formatDurationApprox(chaptersCount, totalDuration) {
+    const base = `共 ${chaptersCount} 章`;
+    const dur = Number(totalDuration) || 0;
+    if (dur <= 0) return base;
+    if (dur >= 60) return `${base} · 约 ${Math.max(1, Math.round(dur / 60))} 分钟`;
+    return `${base} · 约 ${Math.max(1, Math.round(dur))} 秒`;
+  }
+
+  function renderEmblemSvg(size = 24) {
+    return `<div class="pt-author-emblem"><svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v16M4 12h16"/></svg></div>`;
+  }
+
+  function renderMiniAvatar(deck, mapSrc, emblemSize = 22) {
+    if (deck.presenter === "none") return `<div class="pt-mini-avatar">${renderEmblemSvg(emblemSize)}</div>`;
+    const avatarSrc = mapSrc(TemplateVideo.resolveAvatarSrc(deck));
+    return `<div class="pt-mini-avatar"><div class="pt-avatar-inner"><img src="${xmlEsc(avatarSrc)}" alt="" /></div></div>`;
+  }
+
+  function keypointItemState(index, focusVal) {
+    const key = String(focusVal ?? "all");
+    if (key === "outro") return { cls: "done", icon: "✓" };
+    if (/^\d+$/.test(key)) {
+      const k = Number(key);
+      if (index < k) return { cls: "done", icon: "✓" };
+      if (index === k) return { cls: "on", icon: String(index + 1) };
+      return { cls: "todo", icon: String(index + 1) };
+    }
+    return { cls: "", icon: String(index + 1) };
+  }
+
+  function highlightAccentPhrase(headline, accentPhrase) {
+    const text = String(headline || "");
+    const phrase = String(accentPhrase || "").trim();
+    if (!phrase) return xmlEsc(text);
+    const pos = text.indexOf(phrase);
+    if (pos < 0) return xmlEsc(text);
+    const cls = phrase.length <= 5 ? ' class="pt-em-nowrap"' : "";
+    return xmlEsc(text.slice(0, pos)) + `<em${cls}>${xmlEsc(phrase)}</em>` + xmlEsc(text.slice(pos + phrase.length));
+  }
+
+  function isV2Regions(regions) {
+    if (!regions) return false;
+    if (regions.keypoints || regions.answer || regions.headline) return true;
+    if (["breadcrumb", "ticker", "namecard", "question"].includes(regions.header?.variant)) return true;
+    if (regions.chapters?.variant === "nav-panel") return true;
+    if (regions.presenter?.variant === "avatar") return true;
+    if (regions.media?.variant === "flush") return true;
+    if (["card", "pill", "tab-band", "inline"].includes(regions.subtitle?.variant)) return true;
+    if (regions.disclaimer?.variant === "inline-right") return true;
+    return false;
+  }
+
+  function renderNavPanel(deck, chapIdx, chapProgress, isOutro, totalDuration, mapSrc, placementAttr) {
+    const a = deck.pharmacist;
+    const activeIdx = isOutro ? deck.chapters.length - 1 : chapIdx;
+    const pct = isOutro ? 100 : Math.max(0, Math.min(1, Number(chapProgress) || 0)) * 100;
+    const chapsHtml = deck.chapters.map((name, ci) => {
+      const done = ci < activeIdx;
+      const on = ci === activeIdx;
+      const cls = done ? "pt-nav-chap done" : on ? "pt-nav-chap on" : "pt-nav-chap";
+      const badge = done ? "✓" : String(ci + 1);
+      const bar = on ? `<span class="pt-nav-chap-bar"><span class="pt-nav-chap-bar-fill" style="width:${pct.toFixed(2)}%"></span></span>` : "";
+      return `<div class="${cls}" data-chap-index="${ci}"><b class="pt-nav-chap-num">${badge}</b><span class="pt-nav-chap-label">${xmlEsc(name || `章节 ${ci + 1}`)}</span>${bar}</div>`;
+    }).join("");
+    const whoSub = [a.role, a.hospital].filter(Boolean).join(" · ");
+    const avatarHtml = deck.presenter === "none" ? "" : renderMiniAvatar(deck, mapSrc, 22);
+    return `
+      <aside class="pt-nav-panel"${placementAttr}>
+        <div class="pt-nav-kick">用药问答</div>
+        <div class="pt-nav-topic">${xmlEsc(deck.title)}</div>
+        <div class="pt-nav-meta">${xmlEsc(formatDurationApprox(deck.chapters.length, totalDuration))}</div>
+        <div class="pt-nav-chaps">${chapsHtml}</div>
+        <div class="pt-nav-who">
+          ${avatarHtml}
+          <div class="pt-nav-who-meta">
+            <strong>${xmlEsc(a.name || "药师")}</strong>
+            ${whoSub ? `<span>${xmlEsc(whoSub)}</span>` : ""}
+          </div>
+        </div>
+        ${deck.disclaimer ? `<div class="pt-nav-disc">${xmlEsc(deck.disclaimer)}</div>` : ""}
+      </aside>
+    `;
+  }
+
+  function renderBreadcrumbHeader(deck, chapIdx, currentTime, totalDuration, placementAttr) {
+    const chapName = deck.chapters[chapIdx] || `章节 ${chapIdx + 1}`;
+    const hasDur = Number(totalDuration) > 0;
+    const clockHtml = hasDur
+      ? `<div class="pt-clock">${formatClock(currentTime)} / ${formatClock(totalDuration)}</div>`
+      : "";
+    return `
+      <header class="pt-header-breadcrumb"${placementAttr}>
+        <div class="pt-crumb">第 ${chapIdx + 1} 章 · <b>${xmlEsc(chapName)}</b></div>
+        ${clockHtml}
+      </header>
+    `;
+  }
+
+  function renderTickerHeader(deck, idx, placementAttr) {
+    const titleText = deck.shortTitle || deck.title;
+    const drug = String(deck.drug || "").trim();
+    const drugTags = Array.isArray(deck.drugTags) ? deck.drugTags.filter(Boolean).slice(0, 2) : [];
+    const drugPart = drug
+      ? `<span class="pt-ticker-sep"></span><small class="pt-ticker-label">本期药品</small><strong class="pt-ticker-drug">${xmlEsc(drug)}</strong>${drugTags.map((t) => `<span class="pt-ticker-tag">${xmlEsc(t)}</span>`).join("")}`
+      : "";
+    return `
+      <header class="pt-header-ticker"${placementAttr}>
+        <span class="pt-ticker-pill">用药提醒</span>
+        <strong class="pt-ticker-title">${xmlEsc(titleText)}</strong>
+        ${drugPart}
+        <span class="pt-ticker-count">第 ${idx + 1} / ${deck.slides.length} 幕</span>
+      </header>
+    `;
+  }
+
+  function renderNamecardHeader(deck, slide, chapIdx, isOutro, mapSrc, placementAttr) {
+    const a = deck.pharmacist;
+    const titleText = slide.headline || slide.name || deck.title;
+    const dotsHtml = deck.chapters.map((_, ci) => `<i class="${isOutro || ci <= chapIdx ? "on" : ""}"></i>`).join("");
+    return `
+      <header class="pt-header-namecard"${placementAttr}>
+        ${renderMiniAvatar(deck, mapSrc, 22)}
+        <div class="pt-nc-id">
+          <div class="pt-nc-id-top">
+            <strong>${xmlEsc(a.name || "药师")}</strong>
+            ${a.role ? `<span class="pt-nc-badge">${xmlEsc(a.role)}</span>` : ""}
+          </div>
+          ${a.hospital ? `<div class="pt-nc-hosp">${xmlEsc(a.hospital)}</div>` : ""}
+        </div>
+        <span class="pt-nc-sep"></span>
+        <div class="pt-nc-title">${xmlEsc(titleText)}</div>
+        <div class="pt-nc-dots">${dotsHtml}</div>
+      </header>
+    `;
+  }
+
+  function renderQuestionHeader(deck, slide, idx, placementAttr) {
+    let qCount = 0;
+    for (let i = 0; i <= idx; i += 1) {
+      if (String(deck.slides[i]?.question || "").trim()) qCount += 1;
+    }
+    const qNum = String(Math.max(1, qCount)).padStart(2, "0");
+    const qText = String(slide.question || "").trim() || slide.headline || slide.name || deck.title;
+    return `
+      <header class="pt-header-question"${placementAttr}>
+        <div class="pt-ask-q">问</div>
+        <div class="pt-ask-bubble">
+          <span class="pt-ask-pill">问题 ${qNum}</span>
+          <span class="pt-ask-text">${xmlEsc(qText)}</span>
+          <small class="pt-ask-from">来自患者提问</small>
+        </div>
+      </header>
+    `;
+  }
+
+  function renderPresenterAvatar(layout, region, deck, mapSrc, placementAttr) {
+    const pxW = region.w * layout.canvas.w / 100;
+    const smClass = pxW < 90 ? " is-sm" : "";
+    const inner = deck.presenter === "none"
+      ? renderEmblemSvg(pxW < 90 ? 26 : 38)
+      : `<div class="pt-avatar-inner"><img src="${xmlEsc(mapSrc(TemplateVideo.resolveAvatarSrc(deck)))}" alt="" /></div>`;
+    return `<div class="pt-presenter-avatar${smClass}"${placementAttr}>${inner}</div>`;
+  }
+
+  function renderKeypoints(slide, focusVal, placementAttr) {
+    const rawList = Array.isArray(slide.points) && slide.points.length
+      ? slide.points
+      : (Array.isArray(slide.items) ? slide.items : []);
+    const items = rawList.map((pt) => (typeof pt === "string" ? pt : (pt?.title || ""))).map((s) => String(s).trim()).filter(Boolean).slice(0, 4);
+    const takeaway = String(slide.takeaway || slide.footerNote || "").trim();
+    const quoteHtml = takeaway
+      ? `<div class="pt-kp-quote"><small>记住这一句</small><span class="pt-kp-quote-text">${xmlEsc(takeaway)}</span></div>`
+      : "";
+    if (!items.length && takeaway) {
+      return `<aside class="pt-keypoints"${placementAttr}>${quoteHtml}</aside>`;
+    }
+    if (!items.length) {
+      const fbTitle = slide.headline || slide.name || "核心要点";
+      const fbLead = String(slide.lead || "").trim();
+      return `
+        <aside class="pt-keypoints"${placementAttr}>
+          <div class="pt-kp-card">
+            <h5>本节要点</h5>
+            <div class="pt-kp-fallback-title">${xmlEsc(fbTitle)}</div>
+            ${fbLead ? `<p class="pt-kp-fallback-lead">${xmlEsc(fbLead)}</p>` : ""}
+          </div>
+        </aside>
+      `;
+    }
+    const denseCls = items.length >= 4 ? " is-dense" : "";
+    const rows = items.map((text, i) => {
+      const st = keypointItemState(i, focusVal);
+      return `<div class="pt-kp-item${st.cls ? " " + st.cls : ""}" data-kp-index="${i}"><i>${st.icon}</i><span>${xmlEsc(text)}</span></div>`;
+    }).join("");
+    return `
+      <aside class="pt-keypoints"${placementAttr}>
+        <div class="pt-kp-card">
+          <h5>本节要点</h5>
+          <div class="pt-kp-items${denseCls}">${rows}</div>
+        </div>
+        ${quoteHtml}
+      </aside>
+    `;
+  }
+
+  function renderAnswerBubble(deck, slide, placementAttr) {
+    const a = deck.pharmacist;
+    const meta = [a.name || "药师", a.role, a.hospital].filter(Boolean).join(" · ");
+    const rawAns = String(slide.answer || "").trim().slice(0, 16);
+    let verdictHtml = "";
+    if (rawAns) {
+      const tone = ["ok", "no", "warn"].includes(slide.verdictTone) ? slide.verdictTone : "ok";
+      const hasMark = /^[✓✗!✔✘]/.test(rawAns);
+      const prefix = hasMark ? "" : ({ ok: "✓ ", no: "✗ ", warn: "! " }[tone]);
+      verdictHtml = `<span class="pt-answer-verdict is-${tone}">${xmlEsc(prefix + rawAns)}</span>`;
+    }
+    return `
+      <div class="pt-answer-bubble"${placementAttr}>
+        <div class="pt-answer-head">
+          <strong>药师回答</strong>
+          <span class="pt-answer-meta">${xmlEsc(meta)}</span>
+          ${verdictHtml}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderHeadlinePoster(deck, slide, chapIdx, mapSrc, placementAttr) {
+    const a = deck.pharmacist;
+    const chapName = deck.chapters[chapIdx] || `章节 ${chapIdx + 1}`;
+    const headlineText = slide.headline || slide.name || deck.title;
+    const titleHtml = highlightAccentPhrase(headlineText, slide.accentPhrase);
+    const leadText = String(slide.lead || "").trim();
+    const whoSub = [a.role, a.hospital].filter(Boolean).join(" · ");
+    const avatarHtml = deck.presenter === "none" ? "" : renderMiniAvatar(deck, mapSrc, 20);
+    return `
+      <aside class="pt-headline-poster"${placementAttr}>
+        <div class="pt-poster-kicker">第 ${chapIdx + 1} 章 · ${xmlEsc(chapName)}</div>
+        <div class="pt-poster-head">
+          <h3 class="pt-poster-h3">${titleHtml}</h3>
+          ${leadText ? `<p class="pt-poster-lead">${xmlEsc(leadText)}</p>` : ""}
+        </div>
+        <div class="pt-poster-who">
+          ${avatarHtml}
+          <span class="pt-poster-who-text"><strong>${xmlEsc(a.name || "药师")}</strong>${xmlEsc(whoSub)}</span>
+        </div>
+      </aside>
+    `;
+  }
+
+  function renderSubtitleFooter(deck, regions, subtitleRaw, subtitleHtml, placementAttr) {
+    const variant = regions?.subtitle?.variant || "band";
+    if (!["card", "pill", "tab-band", "inline"].includes(variant)) {
+      return `
+        <footer class="pt-footer"${placementAttr}>
+          ${subtitleRaw ? `<div class="pt-subtitle">${subtitleHtml}</div>` : ""}
+        </footer>
+      `;
+    }
+    if (variant === "tab-band") {
+      const a = deck.pharmacist;
+      const meta = [a.role, a.hospital].filter(Boolean).join(" · ");
+      return `
+        <footer class="pt-footer pt-sub-custom pt-sub-tab-band"${placementAttr}>
+          <div class="pt-sub-tab-name">${xmlEsc(a.name || "药师")}${meta ? ` <em>${xmlEsc(meta)}</em>` : ""}</div>
+          <div class="pt-sub-tab-body"><div class="pt-subtitle${subtitleRaw ? "" : " is-empty"}">${subtitleHtml}</div></div>
+        </footer>
+      `;
+    }
+    return `
+      <footer class="pt-footer pt-sub-custom pt-sub-${variant}"${placementAttr}>
+        <div class="pt-subtitle${subtitleRaw ? "" : " is-empty"}">${subtitleHtml}</div>
+      </footer>
+    `;
+  }
+
+  function fitPosterHeadline(container) {
+    const h3 = container.querySelector(".pt-poster-h3");
+    if (!h3) return;
+    const sizes = [84, 76, 70, 64];
+    h3.classList.remove("is-clamped");
+    for (const size of sizes) {
+      h3.style.fontSize = size + "px";
+      const maxH = Math.ceil(size * 1.24 * 2 + 16);
+      if (h3.scrollHeight <= maxH && h3.scrollWidth <= h3.clientWidth + 1) return;
+    }
+    h3.classList.add("is-clamped");
+  }
+
   function render(layout, rawDeck, slideIndex, options) {
     const { normalizeDeck, getSlideCues, stripTrailingSubtitlePunctuation, highlightText, computeDeckProgress } = TemplateVideo;
     const opts = options || {};
@@ -301,6 +597,7 @@
     const focusKey = opts.focus !== undefined
       ? String(opts.focus || "all")
       : (slide.layoutMode === "hook" && !slide.contentImage ? "answer" : "all");
+    const cueFocus = opts.cueFocus !== undefined ? String(opts.cueFocus || "all") : focusKey;
     const isOutro = focusKey === "outro";
     const chaptersHtml = deck.chapters.map((name, ci) => {
       let cls = "pt-chap";
@@ -335,7 +632,15 @@
     const regions = regionsFor(layout, opts.stage || effectiveLayout);
     const media = regions?.media;
     const attach = (name) => placement(layout, regions?.[name]);
-    const legacyStage = regions ? media.variant : effectiveLayout;
+    const isV2 = isV2Regions(regions);
+    const legacyStage = regions
+      ? (media?.variant === "hook" || media?.variant === "outro" ? media.variant : "explain")
+      : effectiveLayout;
+    const presenterVariant = regions?.presenter?.variant || "column-card";
+    const mediaClasses = ["pt-media-slot", "media-slot"];
+    if (media?.variant === "flush") mediaClasses.push("pt-media-flush");
+    if (regions?.answer) mediaClasses.push("pt-media-in-answer");
+
     let bodyHtml;
     let bodyPlacement = "";
     if (legacyStage === "outro" || legacyStage === "hook") {
@@ -347,10 +652,12 @@
       const mediaHtml = opts.renderMedia ? opts.renderMedia(slide)
         : Contents.image.html(slide, { mapSrc, focus: focusKey, hasOutroImage });
       if (regions) bodyPlacement = ' style="position:absolute;inset:0;height:auto;padding:0"';
+      const inlinePresenter = (!regions || (regions.presenter && presenterVariant !== "avatar"))
+        ? renderLeftBlock(deck, mapSrc, ringProgress, attach("presenter"), !regions?.disclaimer)
+        : "";
       bodyHtml = `
-        ${!regions || regions.presenter
-          ? renderLeftBlock(deck, mapSrc, ringProgress, attach("presenter"), !regions?.disclaimer) : ""}
-        <section class="pt-media-slot media-slot"${attach("media")}>
+        ${inlinePresenter}
+        <section class="${mediaClasses.join(" ")}"${attach("media")}>
           ${mediaHtml}
           ${opts.contentTitle ? `<h2 class="stage-media-title">${xmlEsc(opts.contentTitle)}</h2>` : ""}
         </section>
@@ -358,9 +665,19 @@
     }
 
     const headerTitle = deck.shortTitle || deck.title;
-    const headerHtml = (regions ? !regions.header : effectiveLayout === "hook")
-      ? ""
-      : `
+    let headerHtml = "";
+    if (regions ? Boolean(regions.header) : effectiveLayout !== "hook") {
+      const hVariant = regions?.header?.variant || "pill-title+chapter-rail";
+      if (hVariant === "breadcrumb") {
+        headerHtml = renderBreadcrumbHeader(deck, chapIdx, opts.currentTime, opts.totalDuration, attach("header"));
+      } else if (hVariant === "ticker") {
+        headerHtml = renderTickerHeader(deck, idx, attach("header"));
+      } else if (hVariant === "namecard") {
+        headerHtml = renderNamecardHeader(deck, slide, chapIdx, isOutro || cueFocus === "outro", mapSrc, attach("header"));
+      } else if (hVariant === "question") {
+        headerHtml = renderQuestionHeader(deck, slide, idx, attach("header"));
+      } else {
+        headerHtml = `
         <header class="pt-header"${attach("header")}>
           <div class="pt-title-pill">
             <span class="pt-title-dot"></span>
@@ -368,13 +685,42 @@
           </div>
           ${regions?.chapters ? "" : `<div class="pt-chapters">${chaptersHtml}</div>`}
         </header>`;
-    const chapters = regions?.chapters ? `<div class="pt-chapters pt-region-chapters"${attach("chapters")}>${chaptersHtml}</div>` : "";
+      }
+    }
+
+    let chapters = "";
+    if (regions?.chapters) {
+      chapters = regions.chapters.variant === "nav-panel"
+        ? renderNavPanel(deck, chapIdx, opts.chapterProgress ?? ringProgress, isOutro || cueFocus === "outro", opts.totalDuration, mapSrc, attach("chapters"))
+        : `<div class="pt-chapters pt-region-chapters"${attach("chapters")}>${chaptersHtml}</div>`;
+    }
+
+    const avatarPresenter = regions?.presenter && presenterVariant === "avatar"
+      ? renderPresenterAvatar(layout, regions.presenter, deck, mapSrc, attach("presenter"))
+      : "";
+    const answerHtml = regions?.answer
+      ? renderAnswerBubble(deck, slide, attach("answer"))
+      : "";
+    const keypointsHtml = regions?.keypoints
+      ? renderKeypoints(slide, cueFocus, attach("keypoints"))
+      : "";
+    const headlineHtml = regions?.headline
+      ? renderHeadlinePoster(deck, slide, chapIdx, mapSrc, attach("headline"))
+      : "";
     const disclaimer = regions?.disclaimer
-      ? `<div class="pt-disclaimer pt-region-disclaimer"${attach("disclaimer")}>${xmlEsc(deck.disclaimer)}</div>` : "";
+      ? (regions.disclaimer.variant === "inline-right"
+        ? `<div class="pt-disclaimer-inline-right"${attach("disclaimer")}>${xmlEsc(deck.disclaimer || "")}</div>`
+        : `<div class="pt-disclaimer pt-region-disclaimer"${attach("disclaimer")}>${xmlEsc(deck.disclaimer)}</div>`)
+      : "";
     const progressBar = regions?.progress
-      ? `<div class="pt-region-progress"${attach("progress")}><span style="width:${ringProgress * 100}%"></span></div>` : "";
+      ? `<div class="pt-region-progress${regions.progress.variant === "bar" ? " pt-progress-bar" : ""}"${attach("progress")}><span style="width:${ringProgress * 100}%"></span></div>`
+      : "";
+    const footerHtml = renderSubtitleFooter(deck, regions, subtitleRaw, subtitleHtml, attach("subtitle"));
     const themeMeta = themeFrameMeta(deck, mapSrc);
-    return `
+    const v2Class = isV2 ? " pt-layout-v2" : "";
+
+    if (!isV2) {
+      return `
       <div class="pt-frame theme-${deck.theme} layout-${effectiveLayout}${themeMeta.classSuffix}"${themeMeta.styleAttr}>
         <div class="pt-glow-1"></div>
         <div class="pt-glow-2"></div>
@@ -385,28 +731,48 @@
         </div>
         ${disclaimer}
         ${progressBar}
-        <footer class="pt-footer"${attach("subtitle")}>
-          ${subtitleRaw ? `<div class="pt-subtitle">${subtitleHtml}</div>` : ""}
-        </footer>
+        ${footerHtml}
+      </div>
+    `;
+    }
+
+    // Draw order: background -> answer (below media) -> media -> other components -> subtitle
+    return `
+      <div class="pt-frame theme-${deck.theme} layout-${effectiveLayout}${v2Class}${themeMeta.classSuffix}"${themeMeta.styleAttr}>
+        <div class="pt-glow-1"></div>
+        <div class="pt-glow-2"></div>
+        ${answerHtml}
+        <div class="pt-body"${bodyPlacement}>
+          ${bodyHtml}
+        </div>
+        ${headerHtml}
+        ${chapters}
+        ${avatarPresenter}
+        ${keypointsHtml}
+        ${headlineHtml}
+        ${disclaimer}
+        ${progressBar}
+        ${footerHtml}
       </div>
     `;
   }
 
   function update(container, state) {
-    if (state.subtitle !== undefined) {
+    const s = state || {};
+    if (s.subtitle !== undefined) {
       const subtitle = container.querySelector(".pt-subtitle");
       if (subtitle) {
-        subtitle.innerHTML = TemplateVideo.highlightText(
-          TemplateVideo.stripTrailingSubtitlePunctuation(state.subtitle),
-          state.highlightWords || [],
-          "pt-sub-hl",
-        );
+        const clean = TemplateVideo.stripTrailingSubtitlePunctuation(s.subtitle);
+        subtitle.innerHTML = TemplateVideo.highlightText(clean, s.highlightWords || [], "pt-sub-hl");
+        if (subtitle.closest(".pt-footer.pt-sub-custom")) {
+          subtitle.classList.toggle("is-empty", !clean);
+        }
       }
     }
-    if (state.progress !== undefined) {
+    if (s.progress !== undefined) {
       const ring = container.querySelector(".pt-avatar-progress circle");
       const bar = container.querySelector(".pt-region-progress span");
-      const progress = Math.max(0, Math.min(1, state.progress));
+      const progress = Math.max(0, Math.min(1, s.progress));
       if (ring) {
         const circumference = 2 * Math.PI * Number(ring.getAttribute("r"));
         ring.setAttribute("opacity", progress > 0.002 ? "1" : "0");
@@ -416,10 +782,38 @@
       }
       if (bar) bar.style.width = `${progress * 100}%`;
     }
-    const avatar = container.querySelector(".pt-avatar-inner img");
-    if (avatar && state.avatarFrame && avatar.getAttribute("src") !== state.avatarFrame) avatar.src = state.avatarFrame;
-    if (avatar && !avatar.complete) return avatar.decode();
+    if (s.chapterProgress !== undefined) {
+      const fill = container.querySelector(".pt-nav-chap-bar-fill");
+      if (fill) {
+        const p = Math.max(0, Math.min(1, Number(s.chapterProgress) || 0));
+        fill.style.width = `${(p * 100).toFixed(2)}%`;
+      }
+    }
+    if (s.currentTime !== undefined && Number(s.totalDuration) > 0) {
+      const clock = container.querySelector(".pt-clock");
+      if (clock) clock.textContent = `${formatClock(s.currentTime)} / ${formatClock(s.totalDuration)}`;
+    }
+    if (s.keypointsFocus !== undefined) {
+      const items = container.querySelectorAll(".pt-kp-item[data-kp-index]");
+      items.forEach((el) => {
+        const idx = Number(el.dataset.kpIndex);
+        const st = keypointItemState(idx, s.keypointsFocus);
+        el.classList.remove("done", "on", "todo");
+        if (st.cls) el.classList.add(st.cls);
+        const badge = el.querySelector("i");
+        if (badge) badge.textContent = st.icon;
+      });
+    }
+    fitPosterHeadline(container);
+    const avatars = [...container.querySelectorAll(".pt-avatar-inner img")];
+    if (s.avatarFrame) {
+      for (const avatar of avatars) {
+        if (avatar.getAttribute("src") !== s.avatarFrame) avatar.src = s.avatarFrame;
+      }
+    }
+    const pending = avatars.filter((img) => !img.complete).map((img) => img.decode());
+    if (pending.length) return Promise.all(pending);
   }
 
-  global.LayoutEngine = { render, update, mediaSize, renderAvatarProgress, isDarkTheme, safeThemeVars, safeColor };
+  global.LayoutEngine = { render, update, mediaSize, renderAvatarProgress, isDarkTheme, safeThemeVars, safeColor, fitPosterHeadline };
 })(globalThis);

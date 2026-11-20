@@ -207,13 +207,29 @@ const StageStudio = (() => {
   }
 
   function samplePlan(layout, theme, kind, stage = "explain") {
-    const title = "先核对说明书";
-    const line = "读清楚手边这份资料，再记下需要核对的地方。";
-    const points = [{title:"找到对应栏目", detail:"对照手里的外包装"}, {title:"记下疑问", detail:"带上说明书问药师"}];
-    const slide = {name:title, headline:title, line, type:"steps", layoutMode:stage, chapterIndex:0,
-      question:"说明书先看哪里？", answer:"先找到对应栏目", takeaway:"记下需要核对的地方",
-      points:points.map(({title,detail}) => ({title,desc:detail})), steps:points.map(({title,detail}) => ({title,desc:detail}))};
-    const shot = {...slide, kind, items:points, start:0, end:4, captions:[{start:0,end:4,text:line,focus:stage === "outro" ? "outro" : "all"}]};
+    const title = "漏服了，也只吃一次";
+    const line = "间隔还不到一半，想起来就补上，千万不要吃双倍。";
+    const points = [
+      {title:"先判断离下次服药还有多久", detail:"看是否超过服药间隔的一半"},
+      {title:"没过半时想起来就补一次", detail:"按常规剂量补服，次日照常吃"},
+      {title:"已经过半就跳过这一次", detail:"等到下次服药时间再按常规吃"},
+      {title:"千万不要一次吃双倍剂量", detail:"避免血药浓度骤升引发低血压"},
+    ];
+    const slide = {
+      name:"漏服如何处理", headline:title, accentPhrase:"也只吃一次",
+      lead:"不论补服还是到点服药，每次都只吃平时的常规剂量。",
+      line, type:"steps", layoutMode:stage, chapterIndex:1,
+      question:"昨天忘吃降压药，今天吃两片补回来，行吗？",
+      answer:"不行，只吃常规剂量", verdictTone:"no",
+      takeaway:"一次只吃常规量，漏服绝不加倍补",
+      highlightWords:["想起来就补上","吃双倍"],
+      points:points.map(({title,detail}) => ({title,desc:detail})),
+      steps:points.slice(0,3).map(({title,detail}) => ({title,desc:detail})),
+    };
+    const shot = {
+      ...slide, kind, items:points, start:0, end:4,
+      captions:[{start:0,end:4,text:"间隔还不到一半，想起来就补上",focus:stage === "outro" ? "outro" : "1",highlightWords:["想起来就补上"]}],
+    };
     if (kind === "image") slide.contentImage = "/assets/template-info-tablet.jpg";
     if (kind === "scene") Object.assign(shot,{visual:"steps",motion:"flow",motif:"checklist",tone:"primary"});
     if (kind === "svg") {
@@ -234,8 +250,18 @@ const StageStudio = (() => {
             : {}),
         }
       : { theme: theme === "warm" ? "warm" : "medical" };
-    return {layout, previewStage:stage, deck:{title:"看懂用药信息",shortTitle:"用药信息",...themeDeck,presenter:"digital",
-      pharmacist:{...TemplateStudio.ensurePharmacist(data)},chapters:["先核对","再记录"],slides:[slide]}, shots:[shot]};
+    return {
+      layout, previewStage:stage,
+      deck:{
+        title:"降压药忘吃了，要不要补？", shortTitle:"降压药漏服怎么补？",
+        drug:"硝苯地平缓释片", drugTags:["缓释片","处方药"],
+        ...themeDeck, presenter:"digital",
+        pharmacist:{...TemplateStudio.ensurePharmacist(data)},
+        chapters:["先判断时间","补还是不补","千万别加倍","何时问药师"],
+        slides:[slide],
+      },
+      shots:[shot],
+    };
   }
 
   function modeControls(w) {

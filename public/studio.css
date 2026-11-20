@@ -3897,7 +3897,7 @@ dialog p b {
 .stage-layout-mini .layout-region { position: absolute; overflow: hidden; border: 1px solid var(--brand-50);
   display: grid; place-items: center; background: var(--brand-200); color: var(--brand-800); border-radius: 4px;
   font-size: min(11px, 4.5cqi); line-height: 1; }
-.stage-layout-mini .region-header, .stage-layout-mini .region-subtitle, .stage-layout-mini .region-presenter { background: var(--brand-100); }
+.stage-layout-mini .region-header, .stage-layout-mini .region-subtitle, .stage-layout-mini .region-presenter, .stage-layout-mini .region-chapters, .stage-layout-mini .region-keypoints, .stage-layout-mini .region-answer, .stage-layout-mini .region-headline { background: var(--brand-100); }
 .stage-layout-manage { align-self: stretch; min-height: 88px; text-align: center; }
 .asset-layout-thumb { position: relative; aspect-ratio: 16 / 9; overflow: hidden; }
 .asset-layout-thumb > .stage-layout-mini { border-radius: 0; }

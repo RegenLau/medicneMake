@@ -71,12 +71,33 @@
     return { index: cueIndex === 0 ? index - 1 : index, cue: before, alpha: 1 - Math.max(0, phase) };
   }
 
+  function computeChapterProgress(time, current) {
+    const chapIdx = Number(deck.slides[current]?.chapterIndex) || 0;
+    let chapStart = plan.shots[current].start;
+    let chapEnd = plan.shots[current].end;
+    for (let i = current - 1; i >= 0; i -= 1) {
+      if ((Number(deck.slides[i]?.chapterIndex) || 0) !== chapIdx) break;
+      chapStart = plan.shots[i].start;
+    }
+    for (let i = current + 1; i < plan.shots.length; i += 1) {
+      if ((Number(deck.slides[i]?.chapterIndex) || 0) !== chapIdx) break;
+      chapEnd = plan.shots[i].end;
+    }
+    const dur = chapEnd - chapStart;
+    return dur > 0 ? Math.max(0, Math.min(1, (time - chapStart) / dur)) : 0;
+  }
+
   function frameSignature(time) {
     const index = locate(time);
     const shot = plan.shots[index];
     const localTime = Math.max(0, time - shot.start);
     const cue = Contents.activeCue(shot, localTime);
-    if (plan.hasAvatarFrames || deck.presenter !== "none" || plan.layout.regions.progress ||
+    const hasDynamicRegion = Boolean(
+      plan.layout.regions.progress ||
+      plan.layout.regions.chapters?.variant === "nav-panel" ||
+      plan.layout.regions.header?.variant === "breadcrumb",
+    );
+    if (plan.hasAvatarFrames || deck.presenter !== "none" || hasDynamicRegion ||
         !Contents[shot.kind].isStatic?.(shot, localTime) || transitionProgress(index, localTime) !== 1 ||
         legacyImageFade(index, time, cue)) return null;
     return `${index}/${shot.captions.indexOf(cue)}`;
@@ -92,9 +113,12 @@
     const renderer = Contents[shot.kind];
     const code = shot.kind === "card" || shot.kind === "scene";
     const layoutFocus = plan.previewStage === "outro" ? "outro" : code ? "all" : focus;
+    const cueFocus = plan.previewStage === "outro" ? "outro" : focus;
     const stage = plan.previewStage || (layoutFocus === "outro" && !slide.outroImage ? "outro"
       : slide.layoutMode === "hook" && !slide.contentImage ? "hook" : "explain");
-    const progress = Math.max(0, Math.min(1, time / plan.shots.at(-1).end));
+    const totalDuration = Number(plan.shots.at(-1)?.end) || 0;
+    const progress = totalDuration > 0 ? Math.max(0, Math.min(1, time / totalDuration)) : 0;
+    const chapterProgress = computeChapterProgress(time, current);
     const highlightWords = cue?.highlightWords?.length ? cue.highlightWords
       : code ? (shot.labels || shot.items?.map((item) => item.title) || []) : slide.highlightWords;
     const subtitle = cue?.text ?? slide.line;
@@ -108,7 +132,9 @@
     const mountKey = `${current}/${stage}/${code ? "code" : progress}`;
     if (mounted !== mountKey) {
       root.innerHTML = LayoutEngine.render(plan.layout, deck, current, {
-        focus: layoutFocus, stage, progress: code ? 1 : progress, imgMap,
+        focus: layoutFocus, cueFocus, stage, progress: code ? 1 : progress,
+        chapterProgress, currentTime: time, totalDuration: plan.hideClock ? 0 : totalDuration,
+        imgMap,
         subtitleText: subtitle || (code ? " " : ""), highlightWords,
         contentTitle: context.layoutTitle ? slide.name : "",
         renderMedia: () => "",
@@ -138,7 +164,14 @@
         root.insertAdjacentHTML("beforeend", `<div style="position:absolute;inset:0;opacity:${fade.alpha};background:${fill}">${previous}</div>`);
       }
     }
-    const state = { avatarFrame, ...(code ? { progress } : {}) };
+    const state = {
+      avatarFrame,
+      ...(code ? { progress } : {}),
+      chapterProgress: cueFocus === "outro" ? 1 : chapterProgress,
+      currentTime: time,
+      totalDuration: plan.hideClock ? 0 : totalDuration,
+      keypointsFocus: cueFocus,
+    };
     if (code && lastSubtitle !== cue) {
       state.subtitle = subtitle;
       state.highlightWords = highlightWords;
