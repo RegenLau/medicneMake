@@ -67,19 +67,21 @@ class LottieTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,"授权原文"):
                 library.upload({**fields, "sourceUrl":"https://example.invalid/public"}, None, render)
 
-    def test_mix_only_uses_matching_confirmed_motion_assets(self):
+    def test_legacy_mg_arrange_only_uses_matching_confirmed_motion_assets(self):
         import mix_plan
 
         script = script_fixture()
-        item = {"topic": "随身药盒和药片", "layoutId": "builtin:layout/info-classic", "presentation": "mix", "imageBudget": 0}
-        rows = [choice(script, 0, "mg", params={"assetId":"builtin:lottie/capsule"}),
-                choice(script, 1, "asset", params={"assetId":"builtin:lottie/capsule"}),
-                choice(script, 2, "mg", params={"assetId":"pending:not-confirmed"})]
+        item = {"topic": "随身药盒和药片", "layoutId": "builtin:layout/info-classic", "presentation": "mg", "imageBudget": 0}
+        rows = [
+            {"index": 0, "params": {"assetId": "builtin:lottie/capsule"}, "reason": "展示药片外观。"},
+            {"index": 1, "params": {"assetId": "pending:not-confirmed"}, "reason": "未确认素材应拒绝。"},
+            {"index": 2, "params": {}, "mgRequest": "时钟指针指向服药时间。", "reason": "建议制作草稿。"},
+        ]
         client = Mock(return_value=model_response({"shots": rows}))
-        result = mix_plan.arrange(client, "deepseek-flash", item, script, server.ASSETS)
-        self.assertEqual(["mg","scene","scene"], [shot["content"]["kind"] for shot in result["shots"]])
+        result = mix_plan.arrange(client, "deepseek-flash", item, script, server.ASSETS, allow_legacy=True)
+        self.assertEqual("builtin:lottie/capsule", result["shots"][0]["content"]["assetId"])
+        self.assertNotIn("assetId", result["shots"][1]["content"])
+        self.assertEqual("时钟指针指向服药时间。", result["shots"][2]["content"]["mgRequest"])
         payload = json.loads(client.call_args.args[1]["messages"][1]["content"])
-        self.assertIn("builtin:lottie/capsule", payload["availableByPresenter"]["mg"])
-        self.assertNotIn("builtin:lottie/capsule", payload["availableByPresenter"]["asset"])
-        matching = next(asset for asset in payload["candidateAssets"] if asset["id"] == "builtin:lottie/capsule")
-        self.assertEqual({"id","name","tags","useFor"}, set(matching))
+        matching = next(asset for asset in payload["shots"][0]["candidateAssets"] if asset["id"] == "builtin:lottie/capsule")
+        self.assertEqual({"id", "name", "tags", "useFor", "kind"}, set(matching))

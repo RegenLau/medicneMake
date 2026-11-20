@@ -66,7 +66,7 @@ class StageLayoutTests(unittest.TestCase):
                 self.assertEqual(asset_library.validate_layout(definition), definition)
                 self.assertEqual(
                     set(definition["supports"]),
-                    {"image", "card", "scene", "svg", "asset", "mg"},
+                    {"image", "card", "scene", "svg", "asset", "mg", "clip"},
                 )
 
     def test_rejects_new_variant_used_on_wrong_component(self):

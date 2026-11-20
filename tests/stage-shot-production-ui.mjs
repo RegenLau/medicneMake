@@ -46,7 +46,7 @@ try {
   await page.locator('[data-action="new"][data-val="video"]').click();
   await button("信息图模板").click();
   await page.locator("#topic").fill("出门怎么带药");
-  await page.getByRole("spinbutton", { name: "AI 出图上限" }).fill("0");
+  assert.equal(await page.getByRole("spinbutton", { name: "AI 出图上限" }).count(), 0);
   await page.evaluate(() => {
     if (!config.stageShotProduction || config.keyPresent) throw Error("Use an isolated, updated fixture workbench.");
     const w = current();
@@ -77,9 +77,19 @@ try {
   await screenshot("01-定位缺少口播");
 
   await select(1);
+  // Retired draft/editor mode buttons are gone; new AI video buttons exist.
+  assert.equal(await button("SVG 演示动画").count(), 0);
+  assert.equal(await button("MG 动画").count(), 0);
+  assert.equal(await button("素材库素材").count(), 0);
+  assert.equal(await button("AI 演示视频").count(), 1);
+  assert.equal(await button("AI MG 动画").count(), 1);
+
   await button("代码动效场景").click();
+  // Clear form to exercise legacy scene-production path and test duplicate rejection
+  await page.locator('[data-stage-field="form"]').selectOption("");
+  await frame();
   const original = await shots();
-  await button("制作本幕").click();
+  await button("重新制作本幕").click();
   await page.getByRole("dialog").getByText(/保留口播、要点和其他幕/).waitFor();
   await page.waitForFunction(() => !document.querySelector("#notice").textContent);
   await screenshot("02-手动制作本幕");
@@ -95,14 +105,7 @@ try {
   assert.deepEqual([after[0], after[2]], [original[0], original[2]]);
   for (const key of ["line", "points", "cues", "seconds", "chapterIndex"]) assert.deepEqual(after[1][key], original[1][key]);
 
-  await button("SVG 演示动画").click();
-  // The previous Mix plan is cached for SVG, so its original preview is restored.
-  assert.equal((await shots())[1].content.beats[0].action, "travel");
-  await button("制作本幕").click();
-  await page.getByLabel("画面要求").fill("突出药盒标签");
-  await confirm();
-  await finishedShot();
-  assert.equal((await shots())[1].content.beats[0].action, "carton");
+  // Duplicate rejection + retry recovery works cleanly on scene production
   await button("重新制作本幕").click();
   await page.getByLabel("画面要求").fill("测试重复画面");
   await confirm();
@@ -116,30 +119,21 @@ try {
   assert.deepEqual(submitted.at(-1), failed);
   await production.getByRole("button", {name:"关闭提示"}).click();
   await frame();
-  assert.equal((await shots())[1].content.beats[0].action, "carton");
-  await button("重新制作本幕").click();
-  await confirm();
-  await finishedShot();
-  assert.equal((await shots())[1].content.beats[0].action, "travel");
-  await screenshot("03-SVG重新制作后预览");
-  await button("代码动效场景").click();
   assert.equal((await shots())[1].content.visual, "mechanism");
-  await button("SVG 演示动画").click();
-  assert.equal((await shots())[1].content.beats[0].action, "travel");
+
+  // Local form switching works with zero paid calls
+  const beforeSwitchCount = submitted.length;
+  await button("换个版式").click();
+  await frame();
+  assert.equal(submitted.length, beforeSwitchCount);
+  assert((await shots())[1].content.form);
+  await screenshot("03-切换版式后预览");
+
   await page.reload();
   await frame();
   await select(1);
   await button("重新制作本幕").waitFor();
 
-  await button("MG 动画").click();
-  await button("制作 MG 草稿").click();
-  const mg = page.locator("#stage-mg-panel");
-  await mg.getByRole("button", { name:"生成草稿并计费" }).waitFor();
-  assert.equal(await page.getByRole("dialog").count(), 0);
-  await mg.getByRole("button", { name:"收起" }).click();
-  await page.getByRole("tab", {name:"全片设置"}).click();
-  await page.getByRole("spinbutton", {name:"AI 出图上限"}).fill("1");
-  await page.getByRole("tab", {name:"本幕内容"}).click();
   await button("AI 完整图").click();
   await page.evaluate(() => { config.keyPresent = true; });
   imageResult = {status:"running",progress:"正在生成测试配图"};
@@ -158,24 +152,14 @@ try {
   assert.deepEqual(submitted.at(-1), imageJob);
   assert.equal((await shots())[1].content.image,"/assets/template-info-tablet.jpg");
   await page.frameLocator("#stage-preview").locator(".pt-media-img").waitFor();
-  await button("SVG 演示动画").click();
   await select(2);
   await page.getByLabel("本幕口播").fill("记下每次用药时间。");
-  await button("素材库素材").click();
   await select(1);
-  await button("合成视频").click();
-  assert.match(await notice(), /第 3 幕「记录时间」缺少素材/);
-  assert.equal(await focused(), "stage-choose");
-  await button("选择图片或 SVG").click();
-  await page.getByRole("dialog").getByRole("button", { name:"SVG 图形", exact:true }).click();
-  await page.getByRole("dialog").getByRole("article").filter({ hasText:"阅读清单" })
-    .getByRole("button", { name:"使用此素材" }).click();
-  await frame();
 
   await button("合成视频").click();
   await confirm();
   await page.locator("video.video-player").waitFor({ timeout:75000 });
-  assert.deepEqual(submitted.at(-1).items.map(shot => shot.content.kind), ["scene", "svg", "asset"]);
+  assert.deepEqual(submitted.at(-1).items.map(shot => shot.content.kind), ["scene", "image", "card"]);
   const result = await page.evaluate(() => current().video);
   const file = join(sandbox, ".studio", result.url.slice(1));
   const duration = Number(execFileSync("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", file]));

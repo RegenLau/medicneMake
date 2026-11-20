@@ -91,9 +91,16 @@ def render(shots, folder, ffmpeg, layout, avatar_url):
                                ensure_ascii=False), encoding="utf-8")
     temp = folder / "svg-template-source.tmp.mp4"
     target = folder / "svg-template-source.mp4"
+    env = dict(os.environ)
+    if os.name != "nt":
+        tmpdir = env.get("TMPDIR", "")
+        if not tmpdir or not Path(tmpdir).is_dir() or not os.access(tmpdir, os.W_OK | os.X_OK) or "antigravity-tmp" in tmpdir or len(tmpdir) > 60:
+            if Path("/tmp").is_dir() and os.access("/tmp", os.W_OK | os.X_OK):
+                env["TMPDIR"] = "/tmp"
     try:
         result = subprocess.run(
             [shutil.which("node"), str(ROOT / "render_svg_video.mjs"), chrome_bin(), ffmpeg, str(plan), str(temp)],
+            env=env,
             capture_output=True,
             timeout=600,
         )

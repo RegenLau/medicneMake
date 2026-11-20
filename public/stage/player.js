@@ -8,7 +8,7 @@
   addEventListener("resize", fit);
   fit();
 
-  let plan, deck, imgMap, mounted, content, lastSubtitle;
+  let plan, deck, imgMap, mounted, content, stickerDom, lastSubtitle;
 
   async function setPlan(input) {
     for (const shot of plan?.shots || []) Contents[shot.kind].dispose?.(shot);
@@ -25,6 +25,7 @@
     imgMap = new Map(Object.entries(input.images || {}));
     root.classList.toggle("cm-library-font", input.fontId === "builtin:font/noto-sans-sc");
     mounted = null;
+    stickerDom = null;
     lastSubtitle = null;
     if (input.fontId) {
       const fonts = await document.fonts.load('650 30px "Studio Noto Sans SC"', "用药");
@@ -102,8 +103,9 @@
     );
     if (plan.hasAvatarFrames || deck.presenter !== "none" || hasDynamicRegion ||
         !Contents[shot.kind].isStatic?.(shot, localTime) || transitionProgress(index, localTime) !== 1 ||
-        legacyImageFade(index, time, cue)) return null;
-    return `${index}/${shot.captions.indexOf(cue)}`;
+        legacyImageFade(index, time, cue) || global.StageStickers?.isDynamic(shot, localTime)) return null;
+    const stickerKey = global.StageStickers ? global.StageStickers.stateKey(shot, localTime) : "";
+    return `${index}/${shot.captions.indexOf(cue)}/${stickerKey}`;
   }
 
   function drawFrame(time, avatarFrame) {
@@ -115,7 +117,8 @@
     const focus = cue?.focus || "all";
     const renderer = Contents[shot.kind];
     const code = shot.kind === "card" || shot.kind === "scene";
-    const layoutFocus = plan.previewStage === "outro" ? "outro" : code ? "all" : focus;
+    const keepMounted = code || shot.kind === "clip";
+    const layoutFocus = plan.previewStage === "outro" ? "outro" : keepMounted ? "all" : focus;
     const cueFocus = plan.previewStage === "outro" ? "outro" : focus;
     const stage = plan.previewStage || (layoutFocus === "outro" && !slide.outroImage ? "outro"
       : slide.layoutMode === "hook" && !slide.contentImage ? "hook" : "explain");
@@ -125,30 +128,35 @@
     const highlightWords = cue?.highlightWords?.length ? cue.highlightWords
       : code ? (shot.labels || shot.items?.map((item) => item.title) || []) : slide.highlightWords;
     const subtitle = cue?.text ?? slide.line;
+    const slotDesc = LayoutEngine.describeMediaSlot ? LayoutEngine.describeMediaSlot(plan.layout, stage) : null;
     const context = {
       size: LayoutEngine.mediaSize(plan.layout, stage),
+      slotDesc,
+      layout: plan.layout,
+      stage,
       theme: deck.theme,
       compatibility: plan.compatibility,
-      imageFocus: plan.imageFocus === true,
       focus, slide, imgMap, mapSrc, deck, index: current, total: plan.shots.length,
       layoutTitle: shot.kind === "svg" && !plan.compatibility,
     };
-    const mountKey = `${current}/${stage}/${code ? "code" : progress}`;
+    const mountKey = `${current}/${stage}/${keepMounted ? "keep" : progress}`;
     if (mounted !== mountKey) {
       root.innerHTML = LayoutEngine.render(plan.layout, deck, current, {
-        focus: layoutFocus, cueFocus, stage, progress: code ? 1 : progress,
+        focus: layoutFocus, cueFocus, stage, progress: keepMounted ? 1 : progress,
         chapterProgress, currentTime: time, totalDuration: plan.hideClock ? 0 : totalDuration,
         imgMap,
-        subtitleText: subtitle || (code ? " " : ""), highlightWords,
+        subtitleText: subtitle || (keepMounted ? " " : ""), highlightWords,
         contentTitle: context.layoutTitle ? slide.name : "",
         renderMedia: () => "",
       });
       const slot = root.querySelector(".media-slot");
       content = slot ? renderer.mount(slot, shot, context) : null;
+      stickerDom = slot && global.StageStickers ? global.StageStickers.mount(slot, shot, context) : null;
       mounted = mountKey;
       lastSubtitle = null;
     }
     if (content) renderer.draw(content, shot, localTime, context);
+    if (stickerDom && global.StageStickers) global.StageStickers.draw(stickerDom, shot, localTime, context);
     const slot = root.querySelector(".media-slot");
     if (slot && !plan.compatibility && current > 0) {
       MgKit.transition(slot, shot.transition || "fade", transitionProgress(current, localTime));
@@ -161,6 +169,7 @@
       if (fade.alpha === 1) {
         root.innerHTML = previous;
         mounted = null;
+        stickerDom = null;
       } else {
         const fallback = deck.theme === "warm" ? "#fdf5e7" : "#edf6fe";
         const candidate = deck.themeFadeColor || deck.themeVars?.["--v-bg"] || fallback;
@@ -170,13 +179,13 @@
     }
     const state = {
       avatarFrame,
-      ...(code ? { progress } : {}),
+      ...(keepMounted ? { progress } : {}),
       chapterProgress: cueFocus === "outro" ? 1 : chapterProgress,
       currentTime: time,
       totalDuration: plan.hideClock ? 0 : totalDuration,
       keypointsFocus: cueFocus,
     };
-    if (code && lastSubtitle !== cue) {
+    if (keepMounted && lastSubtitle !== cue) {
       state.subtitle = subtitle;
       state.highlightWords = highlightWords;
       lastSubtitle = cue;
@@ -184,18 +193,33 @@
     return LayoutEngine.update(root, state);
   }
 
-  const eventPriority = {"warning": 6, "outro": 5, "check": 4, "scene-in": 3, "beat-in": 2, "item-focus": 1};
+  const eventPriority = {
+    "warning": 7, "outro": 6, "cross": 5, "check": 4, "count": 4,
+    "flip": 3, "draw": 3, "scene-in": 3, "beat-in": 2, "item-focus": 1,
+  };
 
   function collectEvents() {
+    const stickerEvents = [];
     const events = plan.shots.flatMap((shot, index) => {
       const slide = deck.slides[index];
-      const local = [...Contents[shot.kind].events(shot, {slide, theme:deck.theme, index, total:deck.slides.length})];
+      const duration = shot.end - shot.start;
+      const local = [...Contents[shot.kind].events(shot, {
+        slide, theme: deck.theme, index, total: deck.slides.length, layout: plan.layout,
+        slotDesc: LayoutEngine.describeMediaSlot ? LayoutEngine.describeMediaSlot(plan.layout, "explain") : null,
+      })];
       if (index > 0) local.push({t:0, type:"scene-in"});
       if (index === deck.slides.length - 1) {
         const outro = shot.captions.find(cue => cue.focus === "outro") || shot.captions.at(-1);
         local.push({t:outro ? outro.start - shot.start : 0, type:"outro"});
       }
-      return local.filter(event => Number.isFinite(event.t) && event.t >= 0 && event.t < shot.end - shot.start)
+      if (global.StageStickers) {
+        for (const ev of global.StageStickers.events(shot)) {
+          if (Number.isFinite(ev.t) && ev.t >= 0 && ev.t < duration) {
+            stickerEvents.push({...ev, shot: index, t: shot.start + ev.t});
+          }
+        }
+      }
+      return local.filter(event => Number.isFinite(event.t) && event.t >= 0 && event.t < duration)
         .map(event => ({...event, shot:index, t:shot.start + event.t}));
     });
     const rank = (a,b) => (eventPriority[b.type] || 0) - (eventPriority[a.type] || 0) || a.t - b.t;
@@ -206,7 +230,7 @@
       selected.push(event);
       count.set(event.shot, (count.get(event.shot) || 0) + 1);
     }
-    return selected.sort((a,b) => a.t - b.t);
+    return [...selected, ...stickerEvents].sort((a,b) => a.t - b.t);
   }
 
   global.setPlan = setPlan;

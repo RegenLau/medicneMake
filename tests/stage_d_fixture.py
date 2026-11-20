@@ -10,6 +10,16 @@ def fixture_deepseek(path, body=None, **kwargs):
         return {"data": [{"id": "deepseek-flash"}]}
     assert path == "/chat/completions"
     payload = json.loads(body["messages"][1]["content"])
+    if "candidateStickers" in payload:
+        return model_response({"shots": [
+            {"index": i, "stickers": (
+                [{"assetId": "builtin:image/fluent-warning", "cue": 0, "keyword": "", "anchor": "media-tr", "size": "m", "enter": "pop", "hold": "stay", "sfx": "auto", "reason": "关键提醒"}]
+                if i == 0 else []
+            )}
+            for i in payload.get("targetIndices", [])
+        ]})
+    if "clipStyle" in payload and "shot" in payload:
+        return model_response({"clipPrompt": "柔和自然光线，近景展示双手核对药盒外包装并放入随身收纳包，画面干净无文字。"})
     if "previousParams" in payload:
         kind = payload["kind"]
         previous = payload["previousParams"]
@@ -34,12 +44,12 @@ def fixture_deepseek(path, body=None, **kwargs):
     for index in payload["targetIndices"]:
         shot = payload["shots"][index]
         kind, params = [
-            ("image", {"imagePrompt": "药盒封面"}),
-            ("svg", {"beats": [{"action": "travel", "line": shot["line"], "label": "药盒放进包"}]}),
+            ("scene", {"visual": "hook", "motion": "focus-zoom"}),
+            ("scene", {"visual": "steps", "motion": "flow"}),
             ("card", {"motionStyle": "reveal"}),
         ][index]
         if len(payload["targetIndices"]) == 1:
             kind, params = "scene", {"visual": "steps", "motion": "flow"}
         choices.append({"index": index, "kind": kind, "reason": f'「{shot["name"]}」直接展示{shot["line"]}',
-                        "fallback": "scene", "params": params, "priority": 80})
+                        "fallback": "scene", "params": params})
     return model_response({"shots": choices})

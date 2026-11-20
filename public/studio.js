@@ -188,7 +188,7 @@ let data = loadState(),
   exampleCursor = 0;
 
 const defaultVoice = "男声";
-const voiceOptions = [["男声", "男声 · 云舟 2.0"], "流畅女声 2.0", ["女声", "小何 2.0"], "无配音"];
+const voiceOptions = [["男声", "男声 · 云舟 2.0"], "流畅女声 2.0", ["女声", "小何 2.0"], ["医生音色", "医生音色 · 定制男声"], ["刘飞 2.0", "男声 · 刘飞 2.0"], "无配音"];
 const voiceLabels = Object.fromEntries(voiceOptions.map((item) => Array.isArray(item) ? item : [item, item]));
 const voiceLabel = (v) => voiceLabels[v] || v || "";
 const musicLabels = { auto: "自动搭配", off: "无背景音乐", calm: "舒缓钢琴", light: "轻快木琴" };
@@ -2751,6 +2751,8 @@ async function poll(w, owner = w) {
           } else if (job.target === "write-draft") {
             if (job.stageDraft) StageStudio.installDraft(w, job.stageDraft, result.output, job);
             else applyWrittenDraft(w, result.output);
+          } else if (job.stageClipShot !== undefined) {
+            StageStudio.installClip(w, job.stageClipShot, result.output, job);
           } else if (job.stageImageSlots) {
             StageStudio.installImages(w, job.stageImageSlots, result.output, job);
           } else if (job.target === "svg-speech") {
@@ -2857,7 +2859,7 @@ function createJob(w, target, items, settings = w.settings, id = crypto.randomUU
   const payload = {
     id,
     mode: "ark",
-    kind: target === "compose" ? "video" : target === "write-draft" ? "draft" : target === "svg-speech" ? "svg-speech" : "images",
+    kind: target === "compose" ? "video" : target === "write-draft" ? "draft" : target === "svg-speech" ? "svg-speech" : target === "stage-clip" ? "stage-clip" : "images",
     settings: { ...settings, mode: "ark" },
     style: w.style,
     items,
@@ -4655,8 +4657,11 @@ document.addEventListener("click", async (e) => {
           break;
         }
         if (j.target === "write-draft") {
-          if (j.stageDraft === "produce" || j.stageDraft === "replan") {
-            const detail = j.stageDraft === "produce" ? `继续制作第 ${j.stageShotIndex + 1} 幕画面。` : "继续编排分镜画面。";
+          if (["produce", "replan", "stickers", "clip-prompt"].includes(j.stageDraft)) {
+            const detail = j.stageDraft === "produce" ? `继续制作第 ${j.stageShotIndex + 1} 幕画面。`
+              : j.stageDraft === "stickers" ? "继续自动匹配贴纸。"
+              : j.stageDraft === "clip-prompt" ? `继续生成第 ${j.stageShotIndex + 1} 幕视频描述。`
+              : "继续编排分镜画面。";
             authorize({ ...w, settings:j.payload.settings }, 1, "draft", () => sendJob(w), 1, {detail});
             break;
           }
@@ -4666,6 +4671,11 @@ document.addEventListener("click", async (e) => {
             break;
           }
           authorize(w, w.type === "article" && !j.partial ? 2 : 1, "draft", () => sendJob(w));
+          break;
+        }
+        if (j.stageClipShot !== undefined) {
+          retryPayload = () => sendJob(w, owner);
+          openModal("继续生成 AI 视频", `<p>继续查询或提交第 ${j.stageClipShot + 1} 幕 AI 视频任务。已提交到方舟的任务会复用，不重复计费。</p><div class="actions dialog-actions">${btn("取消","close","secondary")}${btn("确认继续","confirm-paid","primary")}</div>`, "confirm");
           break;
         }
         if (j.stageImageSlots) {
@@ -4697,7 +4707,7 @@ document.addEventListener("click", async (e) => {
       }
       case "abort-job": {
         const owner = v === "" || v == null ? w : w.blocks[Number(v)];
-        if (owner.job?.target === "write-draft" && !["produce","replan"].includes(owner.job.stageDraft)) w.viewingSetup = true;
+        if (owner.job?.target === "write-draft" && !["produce","replan","stickers","clip-prompt"].includes(owner.job.stageDraft)) w.viewingSetup = true;
         if (owner === w && portraitRejected(owner.job)) rememberRejectedFrame(w);
         const leaderId = owner.job?.referenceLeader ? owner.job.payload.id : "";
         if (leaderId) {

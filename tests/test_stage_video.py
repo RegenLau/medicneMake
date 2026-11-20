@@ -166,6 +166,33 @@ class StageVideoTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 server.parse_target_size(bad)
 
+    def test_render_subprocess_env_replaces_missing_or_ephemeral_tmpdir(self):
+        env = server.render_subprocess_env({
+            "PATH": "/usr/bin",
+            "TMPDIR": "/nonexistent/antigravity-tmp/run-deadbeef",
+        })
+        self.assertEqual(env["TMPDIR"], "/tmp")
+        env_ephemeral = server.render_subprocess_env({
+            "PATH": "/usr/bin",
+            "TMPDIR": "/Users/test/.t3/userdata/antigravity-tmp/abc/run-123456",
+        })
+        self.assertEqual(env_ephemeral["TMPDIR"], "/tmp")
+
+    def test_extract_render_error_preserves_playwright_launch_errors(self):
+        stderr = (
+            "node:internal/modules/run_main:107\n"
+            "    triggerUncaughtException(\n"
+            "    ^\n\n"
+            "browserType.launch: ENOENT: no such file or directory, mkdtemp '/tmp/dead/playwright-abc'\n"
+            "    at /app/scripts/render-stage.mjs:11:32\n"
+        ).encode("utf-8")
+        with patch("sys.stderr"):
+            msg = server.extract_render_error(stderr)
+        self.assertIn("browserType.launch: ENOENT", msg)
+        with patch("sys.stderr"):
+            self.assertEqual(server.extract_render_error(b"Error: \xe5\x88\x86\xe9\x95\x9c\xe7\xb4\xa0\xe6\x9d\x90\xe6\x9c\xaa\xe5\x8a\xa0\xe8\xbd\xbd\xe3\x80\x82\n"), "分镜素材未加载。")
+            self.assertEqual(server.extract_render_error(b""), "请核对 Chrome 和 Playwright 安装。")
+
 
 if __name__ == "__main__":
     unittest.main()

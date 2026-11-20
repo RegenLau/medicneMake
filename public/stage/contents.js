@@ -37,26 +37,23 @@
       const urls = [slide?.contentImage, slide?.outroImage].filter(Boolean).map((u) => (mapSrc ? mapSrc(u) : u));
       await Promise.all(urls.map(probeAspect));
     },
-    html(slide, { mapSrc, focus, hasOutroImage, imageFocus = false, theme, size, compatibility }) {
+    html(slide, { mapSrc, hasOutroImage, size, compatibility }) {
       const url = hasOutroImage ? slide.outroImage : slide.contentImage;
       if (!url) return TemplateVideo.renderFallbackCard(slide, "all");
       const mapped = mapSrc(url);
       const natAr = imageAspects.get(mapped);
       const slotAr = size && size.w > 0 && size.h > 0 ? size.w / size.h : null;
       const useContain = Boolean(!compatibility && natAr && slotAr && Math.abs(natAr - slotAr) / slotAr > 0.12);
-      const box = !useContain && imageFocus && TemplateVideo.resolveFocusBox(slide, focus);
-      const scale = box ? 1.045 : 1;
-      const style = box ? ` style="transform:scale(${scale});transform-origin:${box.x + box.w / 2}% ${box.y + box.h / 2}%"` : "";
       const cls = useContain ? "pt-media-img is-contain" : "pt-media-img";
-      return `<img class="${cls}" src="${attr(mapped)}" alt=""${style} />` +
-        (box ? TemplateVideo.renderSpotlightSvg(slide, focus, theme) : "");
+      return `<img class="${cls}" src="${attr(mapped)}" alt="" />`;
     },
     mount(slot) { return { slot }; },
     draw(dom, shot, time, ctx) {
       const focus = activeCue(shot, time)?.focus ?? ctx.focus;
-      if (dom.focus !== focus || !dom.mounted) {
-        dom.slot.innerHTML = image.html(ctx.slide, { ...ctx, focus, hasOutroImage: focus === "outro" && Boolean(ctx.slide.outroImage) });
-        dom.focus = focus;
+      const outro = focus === "outro" && Boolean(ctx.slide.outroImage);
+      if (dom.outro !== outro || !dom.mounted) {
+        dom.slot.innerHTML = image.html(ctx.slide, { ...ctx, hasOutroImage: outro });
+        dom.outro = outro;
         dom.mounted = true;
       }
     },
@@ -79,14 +76,44 @@
     return events;
   }
 
+  function resolveForm(shot) {
+    return shot?.form && global.InfoForms?.has(shot.form) ? global.InfoForms.get(shot.form) : null;
+  }
+
+  function formContext(shot, ctx) {
+    return {
+      ...ctx,
+      shot,
+      variant: shot.variant,
+      artUrl: shot.artUrl,
+      slotDesc: ctx.slotDesc || (global.InfoForms ? global.InfoForms.resolveSlot(ctx) : null),
+    };
+  }
+
+  function formDataFor(form, shot) {
+    return shot.formData && typeof shot.formData === "object" ? shot.formData : form.fromPoints(shot);
+  }
+
   const card = {
     mount(slot, shot, ctx) {
+      const form = resolveForm(shot);
+      if (form) {
+        const fctx = formContext(shot, ctx);
+        const data = formDataFor(form, shot);
+        slot.innerHTML = form.html(data, fctx);
+        return { slot, form, data, fctx };
+      }
       if (!shot.artUrl) return { slot };
       const artShot = StageSceneContent.cardArtShot(shot, ctx.slide);
       return { ...scene.mount(slot, artShot, ctx), artShot };
     },
-    draw(dom, shot, time, { slide }) {
+    draw(dom, shot, time, ctx) {
+      if (dom.form) {
+        dom.form.animate(dom.slot, dom.data, time, { ...dom.fctx, ...ctx, shot });
+        return;
+      }
       if (dom.artShot) return scene.draw(dom, dom.artShot, time);
+      const { slide } = ctx;
       const focus = activeCue(shot, time)?.focus || "all";
       if (dom.focus !== focus) {
         dom.slot.innerHTML = TemplateVideo.renderFallbackCard(slide, focus);
@@ -97,11 +124,23 @@
       }
       StageSceneContent.animateTemplateCard(dom, slide, time, focus, Math.max(0.5, shot.end - shot.start));
     },
-    events: cardEvents,
+    events(shot, ctx) {
+      const form = resolveForm(shot);
+      if (form) return form.events(formDataFor(form, shot), formContext(shot, ctx));
+      return cardEvents(shot, ctx);
+    },
   };
 
   const scene = {
-    mount(slot, shot, { index, total }) {
+    mount(slot, shot, ctx) {
+      const form = resolveForm(shot);
+      if (form) {
+        const fctx = formContext(shot, ctx);
+        const data = formDataFor(form, shot);
+        slot.innerHTML = form.html(data, fctx);
+        return { slot, form, data, fctx };
+      }
+      const { index, total } = ctx;
       slot.innerHTML = StageSceneContent.buildDynamicSceneHtml(shot, index, total);
       const one = (name) => slot.querySelector(`[data-cm-${name}]`);
       const all = (name) => [...slot.querySelectorAll(`[data-cm-${name}]`)];
@@ -114,8 +153,18 @@
         dots: all("dot"), nodes: all("node"), nodeFills: all("node-fill"), pills: all("pill"),
       };
     },
-    draw(dom, shot, time) { StageSceneContent.animateDynamicScene(dom, shot, dom.meta, time); },
-    events: (shot, {index, total}) => StageSceneContent.sceneEvents(shot, index, total),
+    draw(dom, shot, time, ctx) {
+      if (dom.form) {
+        dom.form.animate(dom.slot, dom.data, time, { ...dom.fctx, ...ctx, shot });
+        return;
+      }
+      StageSceneContent.animateDynamicScene(dom, shot, dom.meta, time);
+    },
+    events(shot, ctx) {
+      const form = resolveForm(shot);
+      if (form) return form.events(formDataFor(form, shot), formContext(shot, ctx));
+      return StageSceneContent.sceneEvents(shot, ctx.index, ctx.total);
+    },
   };
 
   const svg = {

@@ -3927,11 +3927,17 @@ dialog p b {
 .stage-rail .scene-choice-title { display: block; font-weight: 650; }
 .stage-rail .scene-choice-meta { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
 
-.stage-budget input { max-width: 8rem; }
 .stage-decision { display: grid; justify-items: start; gap: 6px; margin: 4px 0; }
 .stage-decision p { margin: 0; }
 .stage-adjusted { color: var(--warning, #9b5320); }
 .stage-kind-badge { display: inline-block; margin-right: 8px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; }
+.stage-legacy-badge { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; color: var(--muted); background: var(--soft); border: 1px dashed var(--line); }
+.stage-sticker-card { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 10px; margin-bottom: 8px; display: grid; gap: 6px; background: var(--surface, #fff); }
+.stage-sticker-head { display: flex; align-items: center; gap: 8px; }
+.stage-sticker-thumb { width: 34px; height: 34px; object-fit: contain; border-radius: 6px; background: var(--soft); padding: 3px; flex: none; }
+.stage-clip-frame-row { display: grid; gap: 6px; margin: 6px 0; }
+.stage-clip-thumb { width: 100%; max-height: 150px; object-fit: cover; border-radius: var(--radius-sm); border: 1px solid var(--line); }
+.asset-thumb.video video { width: 100%; height: 100%; object-fit: cover; display: block; border-radius: inherit; }
 .stage-overwrite { display: flex; gap: 8px; align-items: center; }
 
 .motion-preview-video { display: block; width:100%; border-radius:var(--radius-md); margin: 4px 0 12px; }

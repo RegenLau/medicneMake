@@ -44,7 +44,7 @@ try {
   await page.locator('[data-action="new"][data-val="video"]').click();
   await button("信息图模板").click();
   await page.locator("#topic").fill("孩子发烧，退烧药怎么吃");
-  await page.getByRole("spinbutton", { name: "AI 出图上限" }).fill("0");
+  assert.equal(await page.getByRole("spinbutton", { name: "AI 出图上限" }).count(), 0);
   await page.evaluate(() => {
     if (config.keyPresent) throw Error("Use the isolated fixture workbench.");
     const w = current();
@@ -135,7 +135,7 @@ try {
   await confirm();
   await page.locator("video.video-player").waitFor({ timeout:90000 });
   const composed = submitted.at(-1);
-  assert.deepEqual(composed.items.map(shot => shot.content.kind), ["scene", "svg", "card"]);
+  assert.deepEqual(composed.items.map(shot => shot.content.kind), ["scene", "scene", "card"]);
   assert.deepEqual(composed.items.map(shot => shot.content.art || ""), ["/media/b2b2b2b2.png", "", "/media/a1a1a1a1.png"]);
   const result = await page.evaluate(() => current().video);
   const file = join(sandbox, ".studio", result.url.slice(1));

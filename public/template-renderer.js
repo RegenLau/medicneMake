@@ -38,49 +38,6 @@
     summary: "explain",
   };
 
-  const DEFAULT_FOCUS_REGIONS = {
-    cover: {
-      question: { x: 4, y: 6, w: 92, h: 36 },
-      answer: { x: 4, y: 42, w: 92, h: 52 },
-    },
-    explain: {
-      "0": { x: 4, y: 24, w: 92, h: 28 },
-      "1": { x: 4, y: 54, w: 92, h: 28 },
-      "2": { x: 4, y: 66, w: 92, h: 24 },
-      "3": { x: 51, y: 54, w: 45, h: 28 },
-      action: { x: 4, y: 84, w: 92, h: 12 },
-    },
-    compare: {
-      "0": { x: 3.5, y: 25, w: 45, h: 58 },
-      "1": { x: 51.5, y: 25, w: 45, h: 58 },
-      "2": { x: 67, y: 25, w: 30, h: 58 },
-      action: { x: 3.5, y: 84.5, w: 93, h: 12 },
-    },
-    steps: {
-      "0": { x: 3, y: 24.5, w: 30.5, h: 59 },
-      "1": { x: 34.8, y: 24.5, w: 30.5, h: 59 },
-      "2": { x: 66.5, y: 24.5, w: 30.5, h: 59 },
-      "3": { x: 74.5, y: 24.5, w: 22.5, h: 59 },
-      action: { x: 3.5, y: 85, w: 93, h: 11.5 },
-    },
-    warning: {
-      "0": { x: 3.5, y: 24.5, w: 45.5, h: 27.5 },
-      "1": { x: 51, y: 24.5, w: 45.5, h: 27.5 },
-      "2": { x: 3.5, y: 54, w: 45.5, h: 27.5 },
-      "3": { x: 51, y: 54, w: 45.5, h: 27.5 },
-      top: { x: 3.5, y: 24.5, w: 93, h: 27.5 },
-      bottom: { x: 3.5, y: 54, w: 93, h: 27.5 },
-      action: { x: 3.5, y: 84, w: 93, h: 12 },
-    },
-    summary: {
-      "0": { x: 4, y: 24, w: 92, h: 21 },
-      "1": { x: 4, y: 47, w: 92, h: 21 },
-      "2": { x: 4, y: 70, w: 92, h: 21 },
-      "3": { x: 4, y: 74, w: 92, h: 18 },
-      action: { x: 4, y: 85, w: 92, h: 11.5 },
-    },
-  };
-
   const FOCUS_OPTIONS_BY_TYPE = {
     cover: [
       { id: "question", label: "开场提问" },
@@ -1876,16 +1833,6 @@
     }));
   }
 
-  function resolveFocusBox(slide, focusKey) {
-    const key = String(focusKey || "all");
-    if (!key || key === "all" || key === "outro") return null;
-    if (slide?.focusRegions && slide.focusRegions[key]) {
-      return slide.focusRegions[key];
-    }
-    const presets = DEFAULT_FOCUS_REGIONS[slide?.type] || {};
-    return presets[key] || null;
-  }
-
   function highlightText(text, words, className) {
     const raw = String(text || "");
     const list = (Array.isArray(words) ? words : [words])
@@ -2192,45 +2139,6 @@
       drug && `涉及药品语境：${drug}（如有药盒元素仅用极简通用轮廓，不出现品牌名与价格）。`,
       "禁用元素：不要画医生或主讲人头像，不要画顶部章节导航栏，不要画底部视频字幕，不要写「科普内容仅供参考」等免责声明，不要出现二维码、点赞关注收藏字样、英文乱码、水印或红十字标志。",
     ].filter(Boolean).join("\n").slice(0, 2100);
-  }
-
-  function roundedRectPath(x, y, w, h, r) {
-    const rr = Math.max(0, Math.min(r, w / 2, h / 2));
-    return (
-      `M ${x + rr} ${y} H ${x + w - rr} ` +
-      `A ${rr} ${rr} 0 0 1 ${x + w} ${y + rr} ` +
-      `V ${y + h - rr} ` +
-      `A ${rr} ${rr} 0 0 1 ${x + w - rr} ${y + h} ` +
-      `H ${x + rr} ` +
-      `A ${rr} ${rr} 0 0 1 ${x} ${y + h - rr} ` +
-      `V ${y + rr} ` +
-      `A ${rr} ${rr} 0 0 1 ${x + rr} ${y} Z`
-    );
-  }
-
-  function renderSpotlightSvg(slide, focusKey, theme) {
-    const box = resolveFocusBox(slide, focusKey);
-    if (!box) return "";
-    const W = 1000;
-    const H = 562.5;
-    const x = +(box.x * W / 100).toFixed(1);
-    const y = +(box.y * H / 100).toFixed(1);
-    const w = +(box.w * W / 100).toFixed(1);
-    const h = +(box.h * H / 100).toFixed(1);
-    const r = Math.min(20, w * 0.08, h * 0.14);
-    const veil = theme === "warm" ? "rgba(38, 28, 18, 0.44)" : "rgba(14, 34, 60, 0.45)";
-    const isWarnAccent = slide.type === "warning" || focusKey === "action";
-    const accent = isWarnAccent
-      ? (theme === "warm" ? "#cf5228" : "#e6592d")
-      : (theme === "warm" ? "#cf5228" : "#1a73e8");
-    const outerPath = `M 0 0 H ${W} V ${H} H 0 Z ` + roundedRectPath(x, y, w, h, r);
-    return (
-      `<svg class="pt-spotlight-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">` +
-      `<path d="${outerPath}" fill="${veil}" fill-rule="evenodd" />` +
-      `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${r.toFixed(1)}" fill="none" stroke="${accent}" stroke-opacity="0.26" stroke-width="11" />` +
-      `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${r.toFixed(1)}" fill="none" stroke="${accent}" stroke-width="4" />` +
-      `</svg>`
-    );
   }
 
   function focusItemClass(hasFocus, isMatch) {
@@ -2664,7 +2572,6 @@
     PRESENTERS,
     SLIDE_TYPES,
     LAYOUT_MODES,
-    DEFAULT_FOCUS_REGIONS,
     FOCUS_OPTIONS_BY_TYPE,
     DEFAULT_PHARMACIST,
     DEFAULT_DISCLAIMER,
@@ -2674,8 +2581,6 @@
     stripTrailingSubtitlePunctuation,
     splitSubtitleChunks,
     getSlideCues,
-    resolveFocusBox,
-    renderSpotlightSvg,
     resolveAvatarSrc,
     measureCueAvatarRect,
     computeDeckProgress,

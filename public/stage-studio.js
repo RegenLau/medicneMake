@@ -3,26 +3,38 @@
 /* Shared work data and editor for the infographic video modes. */
 const StageStudio = (() => {
   const CLASSIC = "builtin:layout/info-classic";
-  const kinds = {image: "AI 完整图", card: "信息图动效", scene: "代码动效场景", svg: "SVG 演示动画", asset: "素材库素材", mg: "MG 动画"};
+  const kinds = {image: "AI 完整图", card: "信息图动效", scene: "代码动效场景", clip: "AI 视频", svg: "旧版 SVG", asset: "旧版素材", mg: "旧版 MG"};
+  const kindLabel = c => c?.kind === "clip" ? (c.clipStyle === "mg" ? "AI MG 动画" : "AI 演示视频") : (kinds[c?.kind] || "");
   const layoutLoads = new Map();
   const themeLoads = new Map();
+  const stickerTagsCache = new Map();
   const selected = new WeakMap();
   const inspector = new WeakMap();
   const mgPanels = new WeakMap();
   const pointVisual = () => config.stageCatalog.pointVisuals;
   const copy = value => structuredClone(value);
-  const fixedKinds = Object.keys(kinds).filter(kind => kind !== "asset");
+  const fixedKinds = ["image", "card", "scene"];
   const draftModes = [["mix","Mix 模式（推荐）"], ...fixedKinds.map(kind => [kind,kinds[kind]])];
   let soundContext;
   const decodedSounds = new Map();
-  const soundSettings = w => w.stagePlan.audio?.sfx || {pack:"off", gainDb:-14};
+  const soundSettings = w => {
+    const raw = w.stagePlan.audio?.sfx || {};
+    return {pack: raw.pack || "off", gainDb: raw.gainDb ?? -14, stickerSfx: raw.stickerSfx !== false};
+  };
   const soundPack = id => (config.sfxPacks || []).find(pack => pack.id === id);
-  const imageBudget = w => w.stagePlan.imageBudget ?? 2;
-  const countImages = w => w.stagePlan.shots.filter(shot => shot.content.kind === "image").length;
-  const imageEstimate = (w,count) => {
-    if (count === 0) return "本地渲染，无模型画面费用";
-    const rate = config.imageRates?.[w.settings.imageModel]?.[w.settings.imageSize];
-    return rate ? `最多 ¥${(count * Number(rate)).toFixed(2)}` : `最多 ${count} 张，按方舟实际用量结算`;
+  const clipEstimate = (model, resolution, seconds, dims, includeFrame, w) => {
+    const rate = config.videoRates?.[model]?.[resolution];
+    const [dw, dh] = dims || [1280, 720];
+    const videoYuan = rate ? (Number(seconds) * dw * dh * 24 / 1024) * Number(rate) / 1_000_000 : null;
+    const frameRate = includeFrame ? Number(config.imageRates?.[w.settings.imageModel]?.[w.settings.imageSize] || 0) : 0;
+    return { videoYuan, frameYuan: frameRate, totalYuan: videoYuan !== null ? videoYuan + frameRate : null };
+  };
+  const clipDimensions = (resolution, slot) => {
+    const short = parseInt(String(resolution || "720p"), 10) || 720;
+    const ar = slot?.w && slot?.h ? Math.max(0.5, Math.min(2.2, slot.w / slot.h)) : 16 / 9;
+    return ar >= 1
+      ? [Math.round(short * ar / 2) * 2, Math.round(short / 2) * 2]
+      : [Math.round(short / 2) * 2, Math.round(short / ar / 2) * 2];
   };
 
   function applies(w) {
@@ -41,13 +53,14 @@ const StageStudio = (() => {
     return TemplateVideo.splitSubtitleChunks(line, 22).map(cue => ({...cue, focus: "all", highlightWords: words}));
   }
 
-  function initialContent(kind, shot) {
+  function initialContent(kind, shot, clipStyle = "demo") {
     if (kind === "scene") {
       const visual = pointVisual()[shot.points.type];
       return { kind, visual, ...config.stageCatalog.sceneDefaults[visual] };
     }
     if (kind === "svg") return { kind, beats: [{action:config.stageCatalog.svgDefault, label:shot.name.slice(0, 10) || "用药要点", line:shot.line.slice(0, 55) || "请核对用药信息"}] };
     if (kind === "card") return { kind, motionStyle: "auto" };
+    if (kind === "clip") return { kind, clipStyle, clipPrompt: "", clipFirstFrame: "", clip: "", clipPoster: "", overlay: "points", clipSpeed: "normal" };
     if (kind === "asset") return { kind, move: "still" };
     if (kind === "mg") return {kind,fit:"auto",overlay:"points"};
     return { kind, image: "", imagePrompt: "" };
@@ -102,15 +115,50 @@ const StageStudio = (() => {
     return shot;
   }
 
+  function migrateLegacyAssetShots(plan) {
+    if (!plan?.shots) return;
+    for (const shot of plan.shots) {
+      if (shot?.content?.kind !== "asset") continue;
+      const old = shot.content;
+      const form = window.InfoForms ? InfoForms.mapLegacyForm({}, shot) : undefined;
+      const formData = form && window.InfoForms ? InfoForms.fromPoints(form, shot) : undefined;
+      shot.content = {
+        kind: "card",
+        motionStyle: "auto",
+        ...(form ? { form, variant: "solid", formData } : {}),
+        ...(old.transition ? { transition: old.transition } : {}),
+        ...(old.decidedBy ? { decidedBy: old.decidedBy } : {}),
+      };
+      shot.variants = { ...(shot.variants || {}), card: shot.content };
+      if (old.assetId) {
+        shot.stickers = Array.isArray(shot.stickers) ? shot.stickers.slice(0, 1) : [];
+        shot.stickers.push({
+          assetId: old.assetId,
+          cue: 0,
+          keyword: "",
+          anchor: "media-br",
+          size: "l",
+          enter: "pop",
+          hold: "stay",
+          sfx: "auto",
+        });
+      }
+    }
+  }
+
   function normalizeWork(w) {
-    if (!applies(w) || w.job || hasLegacyImageJobs(w) || w.stagePlan) return w.stagePlan;
+    if (!applies(w) || w.job || hasLegacyImageJobs(w)) return w.stagePlan;
+    if (w.stagePlan) {
+      migrateLegacyAssetShots(w.stagePlan);
+      return w.stagePlan;
+    }
     const kind = oldKind(w);
     const slides = TemplateStudio.isTemplateVideo(w) && w.blocks.length
       ? TemplateStudio.buildDeckForWork(w, data) : null;
     if (kind === "scene" && w.blocks.length) normalizeCodeMotionWork(w);
     const meta = slides || w.motionMeta || {};
     w.stagePlan = {
-      layout: {id: CLASSIC}, mode: w.blocks.length ? kind : "mix", imageBudget: 2, audio: {}, shots: (slides?.slides || w.blocks).map((shot, i) => fromLegacy(shot, kind, i)),
+      layout: {id: CLASSIC}, mode: w.blocks.length ? kind : "mix", autoStickers: true, audio: {}, shots: (slides?.slides || w.blocks).map((shot, i) => fromLegacy(shot, kind, i)),
       ...(w.blocks.length ? {compatibility: kind} : {}),
       shortTitle: meta.shortTitle || "", chapters: meta.chapters || ["先看要点", "用药提醒"],
       disclaimer: meta.disclaimer ?? TemplateVideo.DEFAULT_DISCLAIMER,
@@ -121,7 +169,7 @@ const StageStudio = (() => {
   function initWork(w) {
     const plan = normalizeWork(w);
     const pack = soundPack("builtin:sfx-pack/soft");
-    if (plan && pack) plan.audio.sfx = {pack:pack.id, gainDb:pack.gainDb};
+    if (plan && pack) plan.audio.sfx = {pack:pack.id, gainDb:pack.gainDb, stickerSfx:true};
   }
 
   function syncBlocks(w) {
@@ -136,17 +184,20 @@ const StageStudio = (() => {
     changed(w);
   }
 
-  function selectKind(w, shot, kind) {
+  function selectKind(w, shot, kind, clipStyle) {
     const transition = shot.content.transition;
     const from = shot.content;
-    shot.variants[shot.content.kind] = shot.content;
-    shot.content = shot.variants[kind] || initialContent(kind, shot);
+    const variantKey = from.kind === "clip" ? `clip:${from.clipStyle || "demo"}` : from.kind;
+    shot.variants[variantKey] = from;
+    const nextKey = kind === "clip" ? `clip:${clipStyle || "demo"}` : kind;
+    shot.content = shot.variants[nextKey] || shot.variants[kind] || initialContent(kind, shot, clipStyle || "demo");
     shot.content.kind = kind;
+    if (kind === "clip") shot.content.clipStyle = clipStyle || shot.content.clipStyle || "demo";
     if (artKinds.has(kind) && artKinds.has(from.kind) && !shot.content.art && !shot.content.artPrompt) {
       for (const key of ["art", "artName", "artPrompt", "artMediaSize"]) if (from[key]) shot.content[key] = from[key];
     }
     if (transition !== undefined) shot.content.transition = transition;
-    shot.variants[kind] = shot.content;
+    shot.variants[nextKey] = shot.content;
   }
 
   function getLayout(layoutId) {
@@ -206,12 +257,12 @@ const StageStudio = (() => {
       || "医疗白蓝风";
   };
   const allowsMode = (layout, mode) => !layout?.supports || (mode === "mix"
-    ? ["card","scene","svg"].some(kind => layout.supports.includes(kind)) : layout.supports.includes(mode));
+    ? ["card","scene"].some(kind => layout.supports.includes(kind)) : layout.supports.includes(mode));
 
   function defaultKind(w, type) {
     const preferred = config.stageCatalog.pointDefaults[type];
     const layout = activeLayouts().find(item => item.id === w.stagePlan.layout.id);
-    return allowsMode(layout,preferred) ? preferred : ["card","scene","svg"].find(kind => allowsMode(layout,kind));
+    return allowsMode(layout,preferred) ? preferred : ["card","scene"].find(kind => allowsMode(layout,kind));
   }
 
   function layoutControls(w) {
@@ -296,12 +347,11 @@ const StageStudio = (() => {
   function modeControls(w) {
     const p = w.stagePlan;
     const layout = activeLayouts().find(item => item.id === p.layout.id);
+    const displayMode = ["svg", "mg"].includes(p.mode) ? "mix" : p.mode;
     return '<div class="formrow"><span class="label">制作方式</span><div class="chips">' +
-      draftModes.map(([kind,label]) => btn(label, "stage-mode", "chip" + (p.mode === kind ? " selected" : ""), kind,
-        `aria-pressed="${p.mode === kind}" ${allowsMode(layout,kind) ? "" : "disabled"}`)).join("") + '</div></div>' +
-      (p.mode === "mix" ? `<label class="field stage-budget">AI 出图上限
-        <input type="number" data-stage-field="imageBudget" min="0" max="4" step="1" value="${imageBudget(w)}">
-        <span class="small" id="stage-image-estimate" aria-live="polite">${imageEstimate(w,imageBudget(w))}</span></label>` : "");
+      draftModes.map(([kind,label]) => btn(label, "stage-mode", "chip" + (displayMode === kind ? " selected" : ""), kind,
+        `aria-pressed="${displayMode === kind}" ${allowsMode(layout,kind) ? "" : "disabled"}`)).join("") + '</div></div>' +
+      (displayMode === "mix" ? `<label class="stage-overwrite"><input type="checkbox" data-stage-field="autoStickers"${p.autoStickers !== false ? " checked" : ""}> Mix 编排后自动匹配贴纸</label>` : "");
   }
 
   function setupControls(w) {
@@ -313,19 +363,22 @@ const StageStudio = (() => {
     const job = createJob(w, "write-draft", [], {...w.settings, ratio:"16:9", duration:videoReferenceSeconds(w), textModel:resolveTextModel(w.settings)});
     job.stageDraft = stageDraft;
     if (shotIndex !== undefined) job.stageShotIndex = shotIndex;
-    job.payload.draft = {type:"video", videoMode:"stage", presentation:w.stagePlan.mode, layoutId:w.stagePlan.layout.id,
-      imageBudget:imageBudget(w), topic:w.topic.trim(), drug:w.drug, ...draft};
+    const presentation = ["svg", "mg"].includes(w.stagePlan.mode) ? "mix" : w.stagePlan.mode;
+    job.payload.draft = {type:"video", videoMode:"stage", presentation, layoutId:w.stagePlan.layout.id,
+      autoStickers:w.stagePlan.autoStickers !== false, workId:w.id,
+      topic:w.topic.trim(), drug:w.drug, ...draft};
     w.job = job;
     return sendJob(w);
   }
 
   function requestDraft(w) {
-    const mode = w.stagePlan.mode;
-    const count = ["mix","svg","mg"].includes(mode) ? 2 : 1;
-    const detail = mode === "mix" ? "先写脚本，再为每幕编排呈现方式。" :
-      mode === "svg" ? "先写脚本，再为每幕选择 SVG 道具动作。" :
-      mode === "mg" ? "先写脚本，再为每幕匹配 MG 素材或给出草稿建议。制作新素材时另行确认。" : "生成口播、要点和字幕节拍。";
-    const image = mode === "mix" ? `AI 出图上限 ${imageBudget(w)} 张，${imageEstimate(w,imageBudget(w))}。配图另行确认。` : "";
+    const mode = ["svg", "mg"].includes(w.stagePlan.mode) ? "mix" : w.stagePlan.mode;
+    const autoStickers = mode === "mix" && w.stagePlan.autoStickers !== false;
+    const count = mode === "mix" ? (autoStickers ? 3 : 2) : 1;
+    const detail = mode === "mix"
+      ? (autoStickers ? "先写脚本，再编排每幕版式，最后自动匹配贴纸。" : "先写脚本，再为每幕编排呈现方式与版式。")
+      : "生成口播、要点、字幕节拍与自动版式。";
+    const image = mode === "mix" ? "编排不自动出图，若包含 AI 完整图，配图将在分镜页另行确认后生成。" : "";
     return authorize(w, count, "draft", () => submitDraft(w), count, {detail, image});
   }
 
@@ -382,18 +435,49 @@ const StageStudio = (() => {
     if (!config.stageShotProduction || w.job || !checkShotText(w, [index])) return;
     if (!config.deepseekKeyPresent) return openApiKeys("deepseek");
     const kind = shot.content.kind;
-    if (kind === "image") return;
+    if (kind === "image" || kind === "clip") return;
     const options = config.stageCatalog.presenters[kind].options;
     const previousParams = Object.fromEntries(Object.keys(options).filter(key => shot.content[key] !== undefined)
       .map(key => [key, shot.content[key]]));
     const title = productionTitle(shot.content);
+    const revisionCount = (shot.content._revCount || 0) + 1;
     retryPayload = () => submitDraft(w, {
-      presentation:kind, produceShot:{shot:shotScript(shot), previousParams, revision:$("#stage-production-revision").value.trim()},
+      presentation:kind, produceShot:{shot:shotScript(shot), previousParams, revisionCount, revision:$("#stage-production-revision").value.trim()},
     }, "produce", index);
     openModal(title, `<p>用 DeepSeek 按第 ${index + 1} 幕的口播和要点，用「${kinds[kind]}」设计新画面。保留口播、要点和其他幕。</p>
       <label class="field">画面要求（选填）<textarea id="stage-production-revision" maxlength="200" rows="3" placeholder="想先展示哪个要点，或想演示哪个动作？"></textarea></label>
       <p class="small">提交 1 次文本请求，按 Token 计费。</p>
       <div class="actions dialog-actions">${btn("取消","close","secondary")}${btn("确认提交并计费","confirm-paid","primary")}</div>`, "confirm");
+  }
+
+  function planStickers(w, targetIndex) {
+    if (w.job || !w.stagePlan.shots.length) return;
+    const p = w.stagePlan;
+    const indices = targetIndex !== undefined ? [targetIndex] : p.shots.map((_, i) => i);
+    if (!checkShotText(w, indices)) return;
+    if (!config.deepseekKeyPresent) return openApiKeys("deepseek");
+    retryPayload = () => submitDraft(w, {
+      planStickers: true,
+      ...(targetIndex !== undefined ? { targetIndex } : {}),
+      script: {title: w.title, shortTitle: p.shortTitle, chapters: p.chapters, shots: p.shots.map(shotScript)},
+    }, "stickers", targetIndex);
+    openModal(targetIndex === undefined ? "全片自动加贴纸" : "为本幕重新配贴纸",
+      "<p>使用 DeepSeek 提交 1 次文本请求，为关键提醒、数值或转折自动匹配贴纸与时机（不替换主画面）。按 Token 计费。</p>" +
+      '<div class="actions dialog-actions">' + btn("取消","close","secondary") +
+      btn("确认提交并计费","confirm-paid","primary") + '</div>', "confirm");
+  }
+
+  function requestClipPrompt(w, shot, index) {
+    if (w.job || !checkShotText(w, [index])) return;
+    if (!config.deepseekKeyPresent) return openApiKeys("deepseek");
+    const clipStyle = shot.content.clipStyle || "demo";
+    retryPayload = () => submitDraft(w, {
+      clipPrompt: { shot: shotScript(shot), clipStyle },
+    }, "clip-prompt", index);
+    openModal("AI 写视频描述",
+      `<p>用 DeepSeek 按第 ${index + 1} 幕的口播和要点，撰写适合「${clipStyle === "mg" ? "AI MG 动画" : "AI 演示视频"}」的画面动作描述（不含文字、品牌和医生形象）。提交 1 次文本请求，按 Token 计费。</p>` +
+      '<div class="actions dialog-actions">' + btn("取消","close","secondary") +
+      btn("确认提交并计费","confirm-paid","primary") + '</div>', "confirm");
   }
 
   function usePlan(shot, content) {
@@ -410,11 +494,38 @@ const StageStudio = (() => {
   }
 
   function installDraft(w, mode, output, job) {
+    if (mode === "stickers") {
+      const map = output.stickersByShot || {};
+      let added = 0;
+      for (const [k, list] of Object.entries(map)) {
+        const idx = Number(k);
+        const shot = w.stagePlan.shots[idx];
+        if (!shot || !Array.isArray(list)) continue;
+        shot.stickers = list;
+        added += list.length;
+      }
+      touch(w, true);
+      if (current() === w) notify(added ? `已自动匹配 ${added} 个贴纸` : "本轮未新增贴纸，可手动从素材库添加", "ok");
+      return;
+    }
+    if (mode === "clip-prompt") {
+      const index = job.stageShotIndex;
+      const shot = w.stagePlan.shots[index];
+      if (shot?.content.kind === "clip" && output.clipPrompt) {
+        shot.content.clipPrompt = output.clipPrompt;
+        shot.variants[`clip:${shot.content.clipStyle || "demo"}`] = shot.content;
+        touch(w);
+        if (current() === w) notify(`第 ${index + 1} 幕视频描述已生成`, "ok");
+      }
+      selected.set(w, index);
+      return;
+    }
     if (mode === "produce") {
       const index = job.stageShotIndex;
       const shot = w.stagePlan.shots[index];
       const expected = job.payload.draft.produceShot.shot;
       if (shot?.content.kind === output.content.kind && shot.name === expected.name && shot.line === expected.line) {
+        output.content._revCount = (shot.content._revCount || 0) + 1;
         usePlan(shot, output.content);
         touch(w, true);
         if (current() === w) notify(output.content.mgRequest ? `第 ${index + 1} 幕已准备 MG 草稿建议` : `第 ${index + 1} 幕画面已制作`, "ok");
@@ -476,7 +587,7 @@ const StageStudio = (() => {
           contentImage: content.kind === "image" ? content.image : "", outroImage:content.kind === "image" ? content.outroImage : "",
           focusRegions:content.focusRegions, motionStyle:content.motionStyle,
           ...(content.kind === "svg" ? {action:content.beats[0]?.action, svgBeats:content.beats, layoutMode:"explain"} : {}),
-          ...(["card", "scene", "asset", "mg"].includes(content.kind) ? {layoutMode:"explain"} : {})};
+          ...(["card", "scene", "asset", "mg", "clip"].includes(content.kind) ? {layoutMode:"explain"} : {})};
       })};
   }
 
@@ -494,8 +605,16 @@ const StageStudio = (() => {
       });
       if (captions.length) captions.at(-1).end = end;
       const content = shot.content;
+      const stickers = Array.isArray(shot.stickers) && shot.stickers.length
+        ? shot.stickers.slice(0, 2).map(st => ({
+            ...st,
+            url: StudioAssets.url(st.assetId),
+            tags: stickerTagsCache.get(st.assetId) || st.tags || [],
+          }))
+        : undefined;
       const spec = {...content, kind:content.kind, name:shot.name, line:shot.line, items:shot.points.items,
         takeaway:shot.points.takeaway, listTitle:shot.points.listTitle, labels:shot.points.highlightWords, start, end, captions,
+        ...(stickers ? { stickers } : {}),
         ...(content.libraryArtId ? {libraryArtUrl:StudioAssets.url(content.libraryArtId)} : {}),
         ...(artKinds.has(content.kind) && content.art ? {artUrl:content.art} : {}),
         ...(content.assetId ? (content.kind === "mg"
@@ -514,7 +633,106 @@ const StageStudio = (() => {
     return `<label class="field">${name}<input data-stage-field="${field}" value="${esc(value || "")}" maxlength="${max}"></label>`;
   }
 
-  function contentFields(shot, slot) {
+  function formPickerFields(shot, slot) {
+    if (!window.InfoForms) return "";
+    const c = shot.content;
+    const groups = InfoForms.listByRelation(slot);
+    const currentForm = c.form || "";
+    const optionsHtml = `<option value="">默认（传统版式）</option>` + groups.map(g =>
+      `<optgroup label="${esc(g.label)}">${g.forms.map(f =>
+        `<option value="${esc(f.id)}"${f.id === currentForm ? " selected" : ""}>${esc(f.label)}</option>`
+      ).join("")}</optgroup>`
+    ).join("");
+    const quickKeys = [
+      ["answer", "核心结论", 24], ["question", "患者提问", 24], ["value", "核心数值", 10],
+      ["unit", "单位", 8], ["condition", "适用条件", 18], ["interval", "间隔时间", 12],
+      ["myth", "常见误区", 22], ["fact", "正确做法", 22], ["motto", "口诀金句", 22],
+      ["label", "说明标签", 16], ["note", "底部提醒", 28],
+    ];
+    const quickInputs = currentForm && c.formData
+      ? quickKeys.filter(([k]) => c.formData[k] !== undefined && typeof c.formData[k] !== "object")
+        .map(([k, lbl, max]) => text(lbl, "formData:" + k, String(c.formData[k]), max)).join("")
+      : "";
+    return `<fieldset class="svg-beat-fields stage-form-fields"><legend>信息版式</legend>` +
+      `<div class="asset-inline" style="margin-top:0"><label class="field" style="flex:1">版式<select data-stage-field="form">${optionsHtml}</select></label>` +
+      btn("换个版式", "stage-next-form", "outline") +
+      (currentForm ? btn("按要点刷新", "stage-sync-form", "textbtn") : "") + `</div>` +
+      (currentForm ? `<div class="tpl-two-col">${select("视觉变体", "variant", [["solid","柔和填充"],["outline","清晰描边"],["split","左侧色条"]], c.variant || "solid")}</div>` : "") +
+      (quickInputs ? `<div class="tpl-two-col">${quickInputs}</div>` : "") +
+      `</fieldset>`;
+  }
+
+  function clipFields(w, shot, slot) {
+    const c = shot.content;
+    const style = c.clipStyle || "demo";
+    const models = Object.entries(config.videoModels || {});
+    const modelId = c.clipModel && config.videoModels?.[c.clipModel] ? c.clipModel : (w.settings.videoModel || models[0]?.[0] || "doubao-seedance-2-5-flash-261115");
+    const modelSpec = config.videoModels?.[modelId] || ["Seedance", ["480p", "720p"], 15];
+    const resList = modelSpec[1] || ["480p", "720p"];
+    const resolution = resList.includes(c.clipResolution) ? c.clipResolution : (resList.includes("720p") ? "720p" : resList[0]);
+    const maxSec = modelSpec[2] || 15;
+    const defaultSec = Math.max(4, Math.min(maxSec, Math.ceil(shot.seconds || 5)));
+    const seconds = c.clipSeconds && c.clipSeconds >= 4 && c.clipSeconds <= maxSec ? c.clipSeconds : defaultSec;
+    const dims = clipDimensions(resolution, slot);
+    const est = clipEstimate(modelId, resolution, seconds, dims, !c.clipFirstFrame, w);
+    const estText = est.totalYuan !== null ? `预计 ¥${est.totalYuan.toFixed(2)}（按方舟实际用量结算）` : "按方舟实际用量结算";
+    const costInfo = c.clip
+      ? `<p class="small">已生成视频（${esc(config.videoModels?.[c.clipModel]?.[0] || c.clipModel || "视频片段")} · ${c.clipSeconds || Math.round(c.clipDuration || shot.seconds)} 秒${c.clipCost ? ` · 实际 ¥${Number(c.clipCost).toFixed(2)}` : ""}）。</p>`
+      : "";
+    return `<fieldset class="svg-beat-fields stage-clip-fields"><legend>${style === "mg" ? "AI MG 动画（视频生成）" : "AI 演示视频（视频生成）"}</legend>` +
+      `<label class="field">画面动作描述（不含文字、品牌与医生形象）<textarea data-stage-field="clipPrompt" maxlength="400" rows="3" placeholder="${style === "mg" ? "例如：扁平 2D 动效，柔和蓝色背景上胶囊溶解并释放微粒…" : "例如：近景柔和光线，一只手用带刻度滴管量取退烧混悬液…"}">${esc(c.clipPrompt || "")}</textarea></label>` +
+      `<div class="asset-inline">${btn("AI 写视频描述", "stage-clip-prompt", "outline")}</div>` +
+      `<div class="stage-clip-frame-row">` +
+      (c.clipFirstFrame ? `<img class="stage-clip-thumb" src="${esc(c.clipFirstFrame)}" alt="首帧预览">` : `<span class="small">尚未设置首帧（按内容区 ${slot ? `${slot.w}×${slot.h}` : "16:9"} 生成）</span>`) +
+      `<div class="asset-inline">${btn(c.clipFirstFrame ? "重新生成首帧" : "生成首帧", "stage-clip-frame", "outline")}` +
+      btn(c.clipFirstFrame ? "换素材库首帧" : "从素材库选首帧", "stage-choose", "outline", "clip-frame") + `</div></div>` +
+      `<div class="tpl-two-col">` +
+      select("视频模型", "clipModel", models.map(([id, spec]) => [id, spec[0]]), modelId) +
+      select("分辨率", "clipResolution", resList.map(r => [r, r]), resolution) +
+      `<label class="field">视频秒数（4–${maxSec} 秒）<input type="number" min="4" max="${maxSec}" step="1" data-stage-field="clipSeconds" value="${seconds}"></label>` +
+      select("文字叠加", "overlay", [["points","标题和要点"],["title","只显示标题"],["off","关闭"]], c.overlay || "points") +
+      select("短片时长适配", "clipSpeed", [["normal","不足时定格尾帧"],["slow","轻度慢放至 0.85×"]], c.clipSpeed || "normal") +
+      `</div>` +
+      `<div class="asset-inline">${btn(c.clip ? "重新生成 AI 视频" : "生成 AI 视频", "stage-clip-generate", "primary")}` +
+      btn("从素材库选视频", "stage-choose", "outline", "clip-video") +
+      (c.clip?.startsWith("/media/") ? btn("收入素材库", "stage-collect", "textbtn", "clip") : "") +
+      (c.clip ? btn("移除视频", "stage-clear", "textbtn", "clip") : "") + `</div>` +
+      `<p class="small">${estText}</p>${costInfo}</fieldset>`;
+  }
+
+  function stickerFields(w, shot) {
+    const list = Array.isArray(shot.stickers) ? shot.stickers : [];
+    const cues = shot.cues?.length ? shot.cues : authoredCues(shot.line);
+    const anchors = [["media-tl","左上"],["media-tr","右上"],["media-bl","左下"],["media-br","右下"],["headline-end","标题旁"],["item-0","要点1"],["item-1","要点2"]];
+    const sfxChoices = [["auto","自动匹配"],["none","静音"],
+      ["builtin:sfx/soft-pop","轻柔弹出"],["builtin:sfx/check","勾选提示"],["builtin:sfx/transition","柔和过渡"],
+      ["builtin:sfx/kenney-pop","轻弹提示"],["builtin:sfx/kenney-confirm","清脆确认"]];
+    const cards = list.map((st, i) => `
+      <div class="stage-sticker-card">
+        <div class="stage-sticker-head">
+          <img class="stage-sticker-thumb" src="${esc(StudioAssets.url(st.assetId))}" alt="">
+          <span class="small" style="flex:1">贴纸 ${i + 1}${st.reason ? ` · ${esc(st.reason)}` : ""}</span>
+          ${btn("删除", "stage-sticker-remove", "textbtn danger", i)}
+        </div>
+        <div class="tpl-two-col">
+          ${select("出现字幕", "sticker-cue:" + i, cues.map((c, ci) => [String(ci), `第${ci + 1}句：${c.text.slice(0, 14)}`]), String(st.cue ?? 0))}
+          ${text("精确关键词（选填）", "sticker-keyword:" + i, st.keyword || "", 20)}
+        </div>
+        <div class="asset-inline" style="margin-top:4px"><span class="small">锚点：</span>${anchors.map(([id, lbl]) =>
+          btn(lbl, "stage-sticker-anchor", "chip" + ((st.anchor || "media-tr") === id ? " selected" : ""), `${i}:${id}`)).join("")}</div>
+        <div class="tpl-two-col">
+          ${select("大小", "sticker-size:" + i, [["s","小"],["m","中"],["l","大"]], st.size || "m")}
+          ${select("入场动效", "sticker-enter:" + i, [["pop","弹出"],["bounce","弹跳"],["slide","滑入"],["stamp","盖章"],["float","漂浮"]], st.enter || "pop")}
+          ${select("停留时长", "sticker-hold:" + i, [["stay","留到本幕结束"],["cue","仅该句期间"]], st.hold || "stay")}
+          ${select("贴纸音效", "sticker-sfx:" + i, sfxChoices, st.sfx || "auto")}
+        </div>
+      </div>`).join("");
+    return `<fieldset class="svg-beat-fields stage-sticker-fields"><legend>贴纸叠加（${list.length}/2，不替换主画面）</legend>${cards}` +
+      `<div class="asset-inline">${list.length < 2 ? btn("从素材库添加贴纸", "stage-choose", "outline", "sticker") : ""}` +
+      btn("重新配贴纸", "stage-plan-stickers", "outline", "one") + `</div></fieldset>`;
+  }
+
+  function contentFields(w, shot, slot) {
     const c = shot.content;
     const pair = list => list.map(({id,name}) => [id,name]);
     if (c.kind === "image") {
@@ -525,17 +743,18 @@ const StageStudio = (() => {
         btn("移除配图", "stage-clear", "textbtn", "image") + '</div>' : "") +
         text("配图描述", "imagePrompt", c.imagePrompt, 400) + sizeHint;
     }
+    if (c.kind === "clip") return clipFields(w, shot, slot);
     if (c.kind === "asset") return (c.assetId ? '<div class="asset-inline">' + btn("移除素材", "stage-clear", "textbtn", "asset") + '</div>' : "") +
       select("素材运动", "move", [["still", "静止"], ["zoom", "缓慢推近"], ["pan", "平移"]], c.move);
     if (c.kind === "mg") return (c.assetId ? '<div class="asset-inline">' + btn("移除动画","stage-clear","textbtn","mg") + '</div>' : "") +
       select("文字叠加", "overlay", [["points","标题和要点"],["title","只显示标题"],["off","关闭"]], c.overlay || "points") +
       select("时长适配", "fit", [["auto","自动适配"],["hold","原速并定格"]], c.fit || "auto");
-    if (c.kind === "card") return select("动效方式", "motionStyle", window.CODE_MOTION_MOTION_CHOICES, c.motionStyle);
-    if (c.kind === "scene") return '<div class="tpl-two-col">' + select("分镜版式", "visual", pair(CODE_MOTION_VISUALS), c.visual) +
+    if (c.kind === "card") return formPickerFields(shot, slot) + (c.form ? "" : select("动效方式", "motionStyle", window.CODE_MOTION_MOTION_CHOICES, c.motionStyle));
+    if (c.kind === "scene") return formPickerFields(shot, slot) + (c.form ? "" : '<div class="tpl-two-col">' + select("分镜版式", "visual", pair(CODE_MOTION_VISUALS), c.visual) +
       select("动效方式", "motion", pair(CODE_MOTION_MOTIONS), c.motion) + select("主题图形", "motif", pair(CODE_MOTION_MOTIFS), c.motif) +
       select("强调色调", "tone", pair(CODE_MOTION_TONES), c.tone) + '</div>' + (c.art ? "" : '<div class="asset-inline">' +
       btn(esc(c.libraryArtName || "选配图或 SVG"), "stage-choose", "outline", "art") +
-      (c.libraryArtId ? btn("恢复内置图形", "stage-clear", "textbtn", "art") : "") + '</div>');
+      (c.libraryArtId ? btn("恢复内置图形", "stage-clear", "textbtn", "art") : "") + '</div>'));
     return c.beats.map((beat, index) => `<fieldset class="svg-beat-fields"><legend>动作 ${index + 1}</legend>` +
       select("道具动作", "beat-action:" + index, Object.entries(config.svgMotion.actions), beat.action) +
       text("画面标签", "beat-label:" + index, beat.label, 10) + text("对应口播片段", "beat-line:" + index, beat.line, 55) +
@@ -603,15 +822,18 @@ const StageStudio = (() => {
   }
 
   function hasProductionJob(w) {
-    return isActive(w) && Boolean(w.job?.stageImageSlots || w.job?.stageDraft === "produce");
+    return isActive(w) && Boolean(w.job?.stageImageSlots || w.job?.stageClipShot !== undefined || ["produce", "stickers", "clip-prompt"].includes(w.job?.stageDraft));
   }
 
   function updateProductionJob(w) {
     const area = $("#stage-production-job");
     if (!area || !hasProductionJob(w)) return;
     const job = w.job;
-    const picture = job.stageArt ? "插画" : "配图";
-    const subject = job.stageShotIndex === undefined ? "缺失" + picture : `第 ${job.stageShotIndex + 1} 幕${job.stageImageSlots ? picture : "画面"}`;
+    const picture = job.stageClipFrame ? "首帧" : job.stageArt ? "插画" : "配图";
+    const subject = job.stageClipShot !== undefined ? `第 ${job.stageClipShot + 1} 幕 AI 视频`
+      : job.stageDraft === "stickers" ? "贴纸匹配"
+      : job.stageDraft === "clip-prompt" ? `第 ${job.stageShotIndex + 1} 幕视频描述`
+      : job.stageShotIndex === undefined ? "缺失" + picture : `第 ${job.stageShotIndex + 1} 幕${job.stageImageSlots ? picture : "画面"}`;
     area.hidden = false;
     area.innerHTML = job.error
       ? `<div class="banner err" role="alert">${subject}未制作完成。${esc(job.error)}<div class="banner-actions">` +
@@ -632,7 +854,7 @@ const StageStudio = (() => {
       actions = btn(esc(content.assetName || "选择 MG 动画"), "stage-choose", "primary", "mg") +
         (config.mgGeneration ? btn(content.assetId ? "重新制作 MG 草稿" : "制作 MG 草稿", "stage-create-mg", "outline") : "");
     }
-    if (kind !== "image" && config.stageShotProduction) {
+    if (!["image", "clip"].includes(kind) && config.stageShotProduction) {
       actions += btn(productionTitle(content), "stage-produce", actions ? "outline" : "primary");
     }
     return (actions ? '<div class="asset-inline">' + actions + '</div>' : "") + (artKinds.has(kind) ? artFields(content, slot) : "");
@@ -644,8 +866,9 @@ const StageStudio = (() => {
       select("画面事件音效", "sfx-pack", [["off","关闭"], ...(config.sfxPacks || []).map(pack => [pack.id,pack.name])], settings.pack) +
       `<label class="field">音效音量
         <input type="range" min="-30" max="-6" step="1" data-stage-field="sfx-gain" value="${settings.gainDb}"
-          ${settings.pack === "off" ? "disabled" : ""}>
-        <output id="stage-sfx-gain">${settings.gainDb} dB</output></label></div>`;
+          ${settings.pack === "off" && !settings.stickerSfx ? "disabled" : ""}>
+        <output id="stage-sfx-gain">${settings.gainDb} dB</output></label></div>` +
+      `<label class="stage-overwrite"><input type="checkbox" data-stage-field="sfx-sticker"${settings.stickerSfx ? " checked" : ""}> 贴纸音效（贴纸出现时播放对应提示音）</label>`;
   }
 
   function bufferFor(id) {
@@ -676,9 +899,21 @@ const StageStudio = (() => {
     const isQaLayout = layoutId === "builtin:layout/qa-chat" || layoutMeta?.regions?.header?.variant === "question" || Boolean(layoutMeta?.regions?.answer);
     const isHeadlineLayout = layoutId === "builtin:layout/headline" || Boolean(layoutMeta?.regions?.headline);
     const isTakeawayLayout = layoutId === "builtin:layout/takeaway" || Boolean(layoutMeta?.regions?.keypoints);
-    const kindButtons = Object.entries(kinds).map(([kind,name]) => btn(name, "stage-kind", "chip" + (shot.content.kind === kind ? " selected" : ""),
-      kind, `aria-pressed="${shot.content.kind === kind}" ${!support || support.includes(kind) ? "" : "disabled"}`)).join("");
-    const isMix = w.stagePlan.mode === "mix";
+    const editorModes = [
+      ["image", "AI 完整图", shot.content.kind === "image", !support || support.includes("image")],
+      ["card", "信息图动效", shot.content.kind === "card", !support || support.includes("card")],
+      ["scene", "代码动效场景", shot.content.kind === "scene", !support || support.includes("scene")],
+      ["clip:demo", "AI 演示视频", shot.content.kind === "clip" && (shot.content.clipStyle || "demo") === "demo", !support || support.includes("clip") || support.includes("image")],
+      ["clip:mg", "AI MG 动画", shot.content.kind === "clip" && shot.content.clipStyle === "mg", !support || support.includes("clip") || support.includes("image")],
+    ];
+    const legacyTag = ["svg", "mg"].includes(shot.content.kind)
+      ? `<span class="stage-legacy-badge" title="旧作品兼容保留，可预览导出或切换为新方式">旧版 ${shot.content.kind.toUpperCase()}</span>` +
+        btn("改用 AI 视频", "stage-legacy-to-clip", "outline")
+      : "";
+    const kindButtons = editorModes.map(([val, name, active, allowed]) =>
+      btn(name, "stage-kind", "chip" + (active ? " selected" : ""), val, `aria-pressed="${active}" ${allowed ? "" : "disabled"}`)
+    ).join("") + legacyTag;
+    const isMix = ["mix", "svg", "mg"].includes(w.stagePlan.mode);
     const settings = [layoutControls(w), themeControls(w), modeControls(w), text("作品标题", "work-title", w.title, 40),
       text("标题短句", "work-shortTitle", w.stagePlan.shortTitle, 20),
       text("关联药品", "work-drug", w.drug, 20),
@@ -697,14 +932,16 @@ const StageStudio = (() => {
         ? text("强调短语（须在标题中，≤8 字）", "point-accentPhrase", shot.points.accentPhrase, 8) +
           text("一句解释（≤30 字）", "point-lead", shot.points.lead, 30)
         : "");
-    const decision = isMix || shot.content.reason || shot.content.adjusted || shot.content.mgRequest ? '<div class="stage-decision">' +
+    const decision = isMix || shot.content.reason || shot.content.adjusted || shot.content.mgRequest || shot.content.clipSuggestion ? '<div class="stage-decision">' +
       (shot.content.reason ? `<p>${esc(shot.content.reason)}</p>` : "") +
       (shot.content.adjusted ? `<p class="small stage-adjusted">${esc(shot.content.adjusted)}</p>` : "") +
+      (shot.content.clipSuggestion && shot.content.kind !== "clip"
+        ? `<p class="small">建议用 AI 视频：${esc(shot.content.clipSuggestion)}</p>` +
+          `<div class="asset-inline">${btn("改用 AI 演示视频", "stage-use-clip-suggestion", "outline", "demo")}${btn("改用 AI MG 动画", "stage-use-clip-suggestion", "outline", "mg")}</div>`
+        : "") +
       (shot.content.kind === "mg" && shot.content.mgRequest ? `<p class="small">MG 草稿建议：${esc(shot.content.mgRequest)}</p>` : "") +
       '<p class="small" id="stage-stale"' + (shot.presentationStale ? "" : " hidden") + '>口播或要点已更新，可重做画面。</p>' +
-      (isMix ? btn("本幕重新判断", "stage-replan", "outline", "one") : "") +
-      (isMix && shot.content.kind !== "mg" && shot.content.mgRequest && config.mgGeneration && (!support || support.includes("mg")) ? `<p class="small">${esc(shot.content.mgRequest)}</p>` +
-        btn("可以用 AI 制作 MG 素材","stage-create-mg","outline") : "") + '</div>' : "";
+      (isMix ? btn("本幕重新判断", "stage-replan", "outline", "one") : "") + '</div>' : "";
     const scene = '<span class="label">本幕制作方式</span><div class="chips">' + kindButtons + '</div>' + productionButtons(shot.content, slotDesc) + decision +
       '<div id="stage-mg-panel" hidden></div>' +
       (index ? select("幕间转场", "transition", Object.entries(config.stageCatalog.transitions || {fade:"淡入"}), shot.content.transition || "fade") : "") +
@@ -719,18 +956,19 @@ const StageStudio = (() => {
       `<details class="shot-options"><summary>字幕节拍（${shot.cues.length}）</summary>${shot.cues.map((cue,i) =>
         '<div class="tpl-two-col">' + text("字幕", "cue-text:"+i, cue.text, 240) +
         select("聚焦", "cue-focus:"+i, [["all","全幕"],["0","第一项"],["1","第二项"],["2","第三项"],["3","第四项"],["top","上方"],["bottom","下方"],["question","问题"],["answer","答复"],["action","行动"],["outro","片尾"]], cue.focus || "all") + '</div>').join("")}</details>` +
-      contentFields(shot, slotDesc) + '<div class="asset-inline">' + btn("本幕前移", "stage-move", "outline", "-1", index === 0 ? "disabled" : "") +
+      contentFields(w, shot, slotDesc) + stickerFields(w, shot) + '<div class="asset-inline">' + btn("本幕前移", "stage-move", "outline", "-1", index === 0 ? "disabled" : "") +
       btn("本幕后移", "stage-move", "outline", 1, index === shots.length - 1 ? "disabled" : "") +
       btn("删除本幕", "stage-remove", "textbtn danger", "", shots.length === 1 ? "disabled" : "") + '</div><div class="asset-inline">' +
       btn(esc(shot.sfxName || "选出场音效"),"stage-choose","outline","sfx") +
       (shot.sfxId ? btn("移除出场音效","stage-clear","textbtn","sfx") : "") + '</div>';
     const actions = (isMix ? btn("重新编排全片","stage-replan","outline","all") : "") +
+      btn("自动加贴纸", "stage-plan-stickers", "outline", "all") +
       btn("全片模型与配音", "work-settings", "outline") +
       (shots.some(shot => shot.content.kind === "image" && !shot.content.image) ? btn("生成缺失配图", "stage-images", "outline", "missing") : "") +
       (missingArt(w).length ? btn("生成缺失插画", "stage-art", "outline", "missing") : "") +
       btn("合成视频", "stage-compose", "primary");
     const strip = shots.map((s,i) => `<button type="button" class="scene-choice" data-action="stage-select" data-val="${i}" aria-pressed="${i === index}"${isMix && s.content.reason ? ` title="${esc(s.content.reason)}"` : ""}>
-      <span class="scene-choice-title">${i + 1} ${esc(s.name)}</span><span class="scene-choice-meta"><span class="stage-kind-badge">${kinds[s.content.kind]}</span>${s.seconds} 秒${isMix && s.content.adjusted ? ' · 已调整' : ''}</span></button>`).join("");
+      <span class="scene-choice-title">${i + 1} ${esc(s.name)}</span><span class="scene-choice-meta"><span class="stage-kind-badge">${kindLabel(s.content)}</span>${s.seconds} 秒${isMix && s.content.adjusted ? ' · 已调整' : ''}</span></button>`).join("");
     shell(w, "编辑视频分镜", 1, `<div class="vstudio"><div class="sheet vstudio-bar"><div class="vstudio-summary">
       <span class="vstudio-metric">共 ${shots.length} 幕 · ${Math.round(shots.reduce((n,s)=>n+s.seconds,0))} 秒</span></div><fieldset class="vstudio-actions stage-edit-fields" data-stage-production-lock>${actions}</fieldset></div>
       <div class="vstudio-grid"><section class="sheet vstudio-stage-card"><div class="vstudio-stage-head"><strong>${esc(shot.name)}</strong>
@@ -738,7 +976,7 @@ const StageStudio = (() => {
       <div id="stage-production-job" hidden></div>
       <div class="asset-inline"><button type="button" class="outline" id="stage-play" disabled>播放本幕</button>
       ${shot.content.kind === "svg" && w.settings.voice !== "无配音" ? btn("试听本幕口播","stage-speech","outline") : ""}
-      ${soundSettings(w).pack !== "off" || shot.sfxId ? btn("试听音效","stage-audition","outline") : ""}
+      ${soundSettings(w).pack !== "off" || soundSettings(w).stickerSfx || shot.sfxId ? btn("试听音效","stage-audition","outline") : ""}
       <input type="range" aria-label="本幕播放进度" min="0" max="${shot.seconds}" step="0.01" value="${Math.min(1,shot.seconds/2)}" id="stage-seek"></div>
       <div class="stage-rail">${strip}${btn("添加一幕", "stage-add", "outline", "", shots.length >= 12 ? "disabled" : "")}</div></section>
       <aside class="sheet"><div class="vstudio-tabs" role="tablist" aria-label="分镜设置">${["scene","global"].map(id =>
@@ -772,8 +1010,15 @@ const StageStudio = (() => {
       const settings = soundSettings(w);
       const events = soundPack(settings.pack)?.events || {};
       const shot = plan.shots[index];
-      const sounds = player.collectStageEvents().filter(event => event.shot === index && events[event.type])
-        .map(event => ({assetId:events[event.type], time:event.t - shot.start, gainDb:settings.gainDb}));
+      const sounds = [];
+      for (const event of player.collectStageEvents()) {
+        if (event.shot !== index) continue;
+        if (event.type === "sticker" && event.sfxId) {
+          if (settings.stickerSfx) sounds.push({assetId: event.sfxId, time: event.t - shot.start, gainDb: settings.gainDb});
+        } else if (events[event.type]) {
+          sounds.push({assetId: events[event.type], time: event.t - shot.start, gainDb: settings.gainDb});
+        }
+      }
       const manual = w.stagePlan.shots[index]?.sfxId;
       if (manual) sounds.push({assetId:manual, time:.16, gainDb:-12});
       if (!sounds.length) return [];
@@ -880,39 +1125,25 @@ const StageStudio = (() => {
     const shot = w.stagePlan.shots[selected.get(w) || 0];
     const [key, rawIndex] = field.split(":");
     const value = el.value;
-    if (key === "sfx-pack" || key === "sfx-gain") {
+    if (key === "sfx-pack" || key === "sfx-gain" || key === "sfx-sticker") {
       const options = {...soundSettings(w)};
       if (key === "sfx-pack") {
         options.pack = value;
         if (value !== "off" && !soundPack(value)) return true;
+      } else if (key === "sfx-sticker") {
+        options.stickerSfx = Boolean(el.checked);
       } else {
         options.gainDb = Number(value);
         $("#stage-sfx-gain").value = `${value} dB`;
       }
       (w.stagePlan.audio ||= {}).sfx = options;
       touch(w);
-      if (key === "sfx-pack") render(true);
+      if (key !== "sfx-gain") render(true);
       return true;
     }
-    if (key === "imageBudget") {
-      if (value === "" || !el.validity.valid) return true;
-      const budget = Number(value);
-      const active = w.stagePlan.shots.filter(shot => shot.content.kind === "image");
-      const manual = active.filter(shot => shot.content.decidedBy === "user");
-      if (manual.length > budget) {
-        el.value = imageBudget(w);
-        notify(`请先切换部分手动保留的 AI 完整图幕（当前 ${manual.length} 幕）。`, "warn");
-        return true;
-      }
-      w.stagePlan.imageBudget = budget;
-      const adjusted = active.filter(shot => shot.content.decidedBy !== "user").slice(budget - manual.length);
-      for (const shot of adjusted) {
-        selectKind(w, shot, defaultKind(w, shot.points.type));
-        shot.content.adjusted = "因 AI 出图上限调整为默认方式";
-      }
-      touch(w, adjusted.length > 0);
-      if (adjusted.length) render(true);
-      else $("#stage-image-estimate").textContent = imageEstimate(w,budget);
+    if (key === "autoStickers") {
+      w.stagePlan.autoStickers = Boolean(el.checked);
+      touch(w);
       return true;
     }
     if (key === "work-title") w.title = value;
@@ -941,6 +1172,39 @@ const StageStudio = (() => {
         return {title,detail,tag};
       });
       for (const field of ["points","steps","warnings","columns","checks"]) delete shot.points[field];
+    } else if (key === "form") {
+      if (!value) {
+        delete shot.content.form;
+        delete shot.content.formData;
+        delete shot.content.variant;
+      } else {
+        shot.content.form = value;
+        shot.content.variant = shot.content.variant || "solid";
+        shot.content.formData = window.InfoForms ? InfoForms.fromPoints(value, shot) : {};
+      }
+      shot.variants[shot.content.kind] = shot.content;
+      touch(w, true);
+      render(true);
+      return true;
+    } else if (key === "formData" && rawIndex) {
+      shot.content.formData ||= {};
+      const oldVal = shot.content.formData[rawIndex];
+      shot.content.formData[rawIndex] = typeof oldVal === "number" ? (Number(value) || oldVal) : value;
+      shot.variants[shot.content.kind] = shot.content;
+    } else if (key === "clipSeconds") {
+      const n = Math.round(Number(value));
+      if (n >= 4 && n <= 30) shot.content.clipSeconds = n;
+    } else if (key === "clipModel" || key === "clipResolution") {
+      shot.content[key] = value;
+      touch(w);
+      render(true);
+      return true;
+    } else if (key.startsWith("sticker-") && rawIndex !== undefined) {
+      const st = shot.stickers?.[Number(rawIndex)];
+      if (st) {
+        const sub = key.slice(8);
+        st[sub] = sub === "cue" ? Number(value) : value;
+      }
     } else if (key.startsWith("point-")) shot.points[key.slice(6)] = value;
     else if (key.startsWith("cue-")) shot.cues[Number(rawIndex)][key.slice(4)] = value;
     else if (key.startsWith("beat-")) shot.content.beats[Number(rawIndex)][key.slice(5)] = value;
@@ -960,7 +1224,6 @@ const StageStudio = (() => {
     const indices = mode === "one" ? [selected.get(w) || 0] : p.shots.flatMap((shot,i) => shot.content.kind === "image" && !shot.content.image ? [i] : []);
     if (!indices.length || w.job || indices.some(i => p.shots[i].content.kind !== "image")) return;
     if (!checkShotText(w, indices)) return;
-    if (p.mode === "mix" && countImages(w) > imageBudget(w)) return notify("请先调整 AI 出图上限。", "warn");
     const layout = await resolveWorkLayout(w);
     const themeDef = currentThemeDef(w);
     const slot = LayoutEngine.describeMediaSlot(layout);
@@ -1008,11 +1271,117 @@ const StageStudio = (() => {
     });
   }
 
+  function clipFirstFramePrompt(w, shot, style, layout, themeDef) {
+    const slot = LayoutEngine.describeMediaSlot(layout || currentLayoutDef(w));
+    const desc = shot.content.clipPrompt?.trim() || `表现「${shot.name}」：${shot.line.slice(0, 100)}`;
+    const prefix = style === "mg"
+      ? "风格：扁平 2D 医学科普动态图形首帧，几何构图清晰、柔和干净纯色背景、矢量质感。"
+      : "风格：柔和自然光线的写实/半写实生活场景首帧，主体清晰居中，适合接续生成短视频演示。";
+    return [
+      `用途：用药科普短视频第 ${slot.ratioLabel}（${slot.w}×${slot.h}）内容区的 AI 视频首帧。`,
+      `画面内容：${desc}`,
+      prefix,
+      w.drug && `涉及药品：${w.drug}（通用外观，不画品牌名与商标）。`,
+      "禁止：画面不出现任何文字、数字、品牌 Logo、水印或医生正面肖像。",
+    ].filter(Boolean).join("\n").slice(0, 1800);
+  }
+
+  async function prepareClipFrame(w) {
+    const index = selected.get(w) || 0;
+    const shot = w.stagePlan.shots[index];
+    if (!shot || shot.content.kind !== "clip" || w.job) return;
+    if (!checkShotText(w, [index])) return;
+    const layout = await resolveWorkLayout(w);
+    const themeDef = currentThemeDef(w);
+    const slot = LayoutEngine.describeMediaSlot(layout);
+    const pxSize = LayoutEngine.imagePixelSize(w.settings.imageSize, slot.w, slot.h);
+    const settings = { ...w.settings, ratio: slot.arkRatio, targetSize: { w: slot.w, h: slot.h } };
+    const authSettings = { ...settings, sizeLabel: `${slot.ratioLabel} · ${pxSize}` };
+    return authorize({ ...w, settings: authSettings }, 1, "images", () => {
+      const items = [{ prompt: clipFirstFramePrompt(w, shot, shot.content.clipStyle || "demo", layout, themeDef), variant: 1 }];
+      const job = createJob(w, "stage-images", items, settings);
+      delete job.payload.storyboard;
+      Object.assign(job.payload, { template: true, styleReference: false });
+      job.stageImageSlots = [index];
+      job.stageClipFrame = true;
+      job.stageShotIndex = index;
+      w.job = job;
+      return sendJob(w);
+    });
+  }
+
+  async function prepareClipVideo(w) {
+    const index = selected.get(w) || 0;
+    const shot = w.stagePlan.shots[index];
+    if (!shot || shot.content.kind !== "clip" || w.job) return;
+    const c = shot.content;
+    if (!c.clipPrompt?.trim()) return notify("请先填写或 AI 生成视频描述。", "warn");
+    if (!c.clipFirstFrame) return notify("请先生成或从素材库选择首帧图片。", "warn");
+    if (!config.keyPresent) return openApiKeys("ark");
+    const layout = await resolveWorkLayout(w);
+    const slot = LayoutEngine.describeMediaSlot(layout);
+    const models = Object.keys(config.videoModels || {});
+    const modelId = c.clipModel && config.videoModels?.[c.clipModel] ? c.clipModel : (w.settings.videoModel || models[0] || "doubao-seedance-2-5-flash-261115");
+    const modelSpec = config.videoModels?.[modelId] || ["Seedance", ["480p", "720p"], 15];
+    const resList = modelSpec[1] || ["480p", "720p"];
+    const resolution = resList.includes(c.clipResolution) ? c.clipResolution : (resList.includes("720p") ? "720p" : resList[0]);
+    const maxSec = modelSpec[2] || 15;
+    const seconds = Math.max(4, Math.min(maxSec, Math.round(c.clipSeconds || Math.ceil(shot.seconds || 5))));
+    const dims = clipDimensions(resolution, slot);
+    const est = clipEstimate(modelId, resolution, seconds, dims, false, w);
+    const costLine = est.totalYuan !== null
+      ? `预计 <strong>¥${est.totalYuan.toFixed(2)}</strong>，按方舟实际用量结算`
+      : "按方舟实际用量结算";
+    retryPayload = () => {
+      const settings = { ...w.settings, videoModel: modelId, resolution, ratio: slot.arkRatio, targetSize: { w: slot.w, h: slot.h } };
+      const job = createJob(w, "stage-clip", [], settings);
+      delete job.payload.storyboard;
+      job.payload.clip = {
+        shotIndex: index,
+        clipStyle: c.clipStyle || "demo",
+        prompt: c.clipPrompt.trim(),
+        image: c.clipFirstFrame,
+        seconds,
+      };
+      job.stageClipShot = index;
+      job.stageShotIndex = index;
+      w.job = job;
+      return sendJob(w);
+    };
+    openModal("确认生成 AI 视频片段",
+      `<p>将调用 <strong>${esc(modelSpec[0])}</strong>（${esc(resolution)} · ${seconds} 秒 · ${dims[0]}×${dims[1]}）为第 ${index + 1} 幕生成视频。</p>` +
+      `<p>${costLine}。</p>` +
+      `<div class="actions dialog-actions">${btn("取消", "close", "secondary")}${btn("确认提交并计费", "confirm-paid", "primary")}</div>`, "confirm");
+  }
+
+  function installClip(w, index, output, job) {
+    const shot = w.stagePlan.shots[index];
+    if (!shot || shot.content.kind !== "clip" || !output?.clip) return;
+    Object.assign(shot.content, {
+      clip: output.clip,
+      clipPoster: output.clipPoster || shot.content.clipPoster || "",
+      clipModel: output.clipModel || shot.content.clipModel,
+      clipResolution: output.clipResolution || shot.content.clipResolution,
+      clipSeconds: output.clipSeconds || shot.content.clipSeconds,
+      clipDuration: output.clipDuration || output.clipSeconds || shot.seconds,
+      clipCost: output.clipCost ?? shot.content.clipCost,
+    });
+    shot.variants[`clip:${shot.content.clipStyle || "demo"}`] = shot.content;
+    touch(w, true);
+    if (current() === w) notify(`第 ${index + 1} 幕 AI 视频已生成`, "ok");
+  }
+
   function installImages(w, indices, output, job) {
     const art = Boolean(job?.stageArt);
+    const clipFrame = Boolean(job?.stageClipFrame);
     const targetSize = job?.payload?.settings?.targetSize;
     indices.forEach((index,i) => {
       const shot = w.stagePlan.shots[index];
+      if (clipFrame && shot?.content.kind === "clip" && output.images[i]) {
+        shot.content.clipFirstFrame = output.images[i];
+        shot.variants[`clip:${shot.content.clipStyle || "demo"}`] = shot.content;
+        return;
+      }
       const fits = art ? artKinds.has(shot?.content.kind) : shot?.content.kind === "image";
       if (fits && output.images[i]) {
         if (art) {
@@ -1061,12 +1430,15 @@ const StageStudio = (() => {
     const p = w.stagePlan;
     if (!checkShotText(w, p.shots.map((_, index) => index))) return;
     const missing = p.shots.findIndex(({content}) => content.kind === "image" ? !content.image
+      : content.kind === "clip" ? !content.clip
       : ["asset","mg"].includes(content.kind) && !content.assetId);
     if (missing !== -1) {
       const {name, content:{kind}} = p.shots[missing];
       const label = `第 ${missing + 1} 幕「${name.trim()}」`;
-      return showShotIssue(w, missing, `${label}缺少${kind === "image" ? "配图" : "素材"}，请补齐或切换制作方式。`,
-        kind === "image" ? '[data-action="stage-images"][data-val="one"]' : `[data-action="stage-choose"][data-val="${kind}"]`);
+      return showShotIssue(w, missing, `${label}缺少${kind === "image" ? "配图" : kind === "clip" ? "AI 视频片段" : "素材"}，请补齐或切换制作方式。`,
+        kind === "image" ? '[data-action="stage-images"][data-val="one"]'
+        : kind === "clip" ? '[data-action="stage-clip-generate"]'
+        : `[data-action="stage-choose"][data-val="${kind}"]`);
     }
     const appearance = deck(w);
     const avatarMode = w.videoMode === "svg" ? "static"
@@ -1176,18 +1548,65 @@ const StageStudio = (() => {
         }});
       return true;
     }
-    else if (action === "stage-kind" && shot && Object.hasOwn(kinds,value) && shot.content.kind !== value) {
-      if (p.mode === "mix" && value === "image" && countImages(w) >= imageBudget(w)) {
-        notify("已达 AI 出图上限，可在全片设置中调整。","warn");
-        return true;
-      }
-      selectKind(w, shot, value);
+    else if (action === "stage-kind" && shot) {
+      const [rawKind, clipStyle] = String(value).split(":");
+      if (!Object.hasOwn(kinds, rawKind)) return true;
+      const same = shot.content.kind === rawKind && (rawKind !== "clip" || (shot.content.clipStyle || "demo") === (clipStyle || "demo"));
+      if (same) return true;
+      selectKind(w, shot, rawKind, clipStyle);
       if (shot.content.decidedBy !== "user") delete shot.content.reason;
       delete shot.content.adjusted;
       shot.content.decidedBy = "user";
       delete shot.presentationStale;
       touch(w,true);
     }
+    else if (action === "stage-legacy-to-clip" && shot) {
+      const seed = shot.content.mgRequest || shot.line.trim().slice(0, 160);
+      const targetStyle = shot.content.kind === "mg" ? "mg" : "demo";
+      selectKind(w, shot, "clip", targetStyle);
+      if (!shot.content.clipPrompt && seed) shot.content.clipPrompt = seed;
+      shot.content.decidedBy = "user";
+      touch(w, true);
+    }
+    else if (action === "stage-use-clip-suggestion" && shot) {
+      const sug = shot.content.clipSuggestion || shot.line.trim().slice(0, 160);
+      selectKind(w, shot, "clip", value === "mg" ? "mg" : "demo");
+      shot.content.clipPrompt = sug;
+      shot.content.decidedBy = "user";
+      touch(w, true);
+    }
+    else if (action === "stage-next-form" && shot && artKinds.has(shot.content.kind) && window.InfoForms) {
+      const slot = LayoutEngine.describeMediaSlot(currentLayoutDef(w));
+      const curForm = shot.content.form || InfoForms.mapLegacyForm(shot.content, shot, slot);
+      const nextForm = InfoForms.nextInRelation(curForm, slot);
+      shot.content.form = nextForm;
+      shot.content.variant = shot.content.variant || "solid";
+      shot.content.formData = InfoForms.fromPoints(nextForm, shot);
+      shot.variants[shot.content.kind] = shot.content;
+      touch(w, true);
+    }
+    else if (action === "stage-sync-form" && shot && shot.content.form && window.InfoForms) {
+      shot.content.formData = InfoForms.fromPoints(shot.content.form, shot);
+      shot.variants[shot.content.kind] = shot.content;
+      touch(w, true);
+    }
+    else if (action === "stage-plan-stickers") {
+      planStickers(w, value === "one" ? index : undefined);
+      return true;
+    }
+    else if (action === "stage-sticker-remove" && shot) {
+      shot.stickers?.splice(Number(value), 1);
+      if (!shot.stickers?.length) delete shot.stickers;
+      touch(w, true);
+    }
+    else if (action === "stage-sticker-anchor" && shot) {
+      const [si, anchor] = String(value).split(":");
+      const st = shot.stickers?.[Number(si)];
+      if (st && anchor) { st.anchor = anchor; touch(w, true); }
+    }
+    else if (action === "stage-clip-prompt" && shot) { requestClipPrompt(w, shot, index); return true; }
+    else if (action === "stage-clip-frame" && shot) { prepareClipFrame(w); return true; }
+    else if (action === "stage-clip-generate" && shot) { prepareClipVideo(w); return true; }
     else if (action === "stage-add" && p.shots.length < 12) {
       const next = fromLegacy({name:`第 ${p.shots.length + 1} 幕`, line:"", seconds:5}, p.mode === "mix" ? defaultKind(w,"explain") : p.mode, p.shots.length);
       p.shots.push(next); selected.set(w,p.shots.length-1); touch(w,true);
@@ -1205,10 +1624,22 @@ const StageStudio = (() => {
         topic: w.topic,
         style: w.templateTheme || "medical",
         ratio: value === "art-image" ? slot.art.ratioLabel : slot.ratioLabel,
+        ...(value === "sticker" ? { query: "贴纸" } : {}),
       };
-      StudioAssets.pick(value === "sfx" ? ["sfx"] : value === "image" || value === "art-image" ? ["image"] : value === "mg" ? ["lottie","mg"] : ["image", "svg"], item => {
+      const pickKinds = value === "sfx" ? ["sfx"]
+        : value === "clip-video" ? ["video"]
+        : ["image", "art-image", "sticker", "clip-frame"].includes(value) ? ["image"]
+        : value === "mg" ? ["lottie","mg"] : ["image", "svg"];
+      StudioAssets.pick(pickKinds, item => {
         if (value === "image") { content.image = item.url; delete content.imageMediaSize; }
         else if (value === "art-image") { content.art = item.url; content.artName = item.name; delete content.artMediaSize; }
+        else if (value === "clip-frame") { content.clipFirstFrame = item.url; }
+        else if (value === "clip-video") { content.clip = item.url; content.clipPoster = item.thumbnailUrl || ""; delete content.clipCost; }
+        else if (value === "sticker") {
+          stickerTagsCache.set(item.id, item.tags || []);
+          shot.stickers = Array.isArray(shot.stickers) ? shot.stickers.slice(0, 1) : [];
+          shot.stickers.push({ assetId: item.id, tags: item.tags || [], cue: 0, keyword: "", anchor: "media-tr", size: "m", enter: "pop", hold: "stay", sfx: "auto" });
+        }
         else if (value === "asset" || value === "mg") {
           content.assetId=item.id;
           content.assetName=item.name;
@@ -1216,14 +1647,19 @@ const StageStudio = (() => {
         }
         else if (value === "sfx") { shot.sfxId=item.id; shot.sfxName=item.name; }
         else { content.libraryArtId=item.id; content.libraryArtName=item.name; }
-        shot.variants[content.kind] = content;
+        const vKey = content.kind === "clip" ? `clip:${content.clipStyle || "demo"}` : content.kind;
+        shot.variants[vKey] = content;
         touch(w,true); render(true);
       }, hints);
       return true;
     } else if (action === "stage-clear" && shot) {
       if (value === "sfx") { delete shot.sfxId; delete shot.sfxName; }
-      for (const key of ({image:["image","imageMediaSize"],asset:["assetId","assetName"],mg:["assetId","assetName"],art:["libraryArtId","libraryArtName"],"art-image":["art","artName","artMediaSize"]}[value] || [])) delete shot.content[key];
+      for (const key of ({image:["image","imageMediaSize"],asset:["assetId","assetName"],mg:["assetId","assetName"],art:["libraryArtId","libraryArtName"],"art-image":["art","artName","artMediaSize"],clip:["clip","clipPoster","clipDuration","clipCost"]}[value] || [])) delete shot.content[key];
       touch(w,true);
+    } else if (action === "stage-collect" && value === "clip" && shot?.content.clip) {
+      const slot = LayoutEngine.describeMediaSlot(currentLayoutDef(w));
+      StudioAssets.collectVideo(shot.content.clip, { name: shot.name, topic: w.topic, ratio: slot.ratioLabel, style: shot.content.clipStyle || "demo", model: shot.content.clipModel || "", prompt: shot.content.clipPrompt || "" });
+      return true;
     } else if (action === "stage-collect" && value === "art" && shot?.content.art) {
       const slot = LayoutEngine.describeMediaSlot(currentLayoutDef(w));
       StudioAssets.collect(shot.content.art,{name:shot.name,topic:w.topic,ratio:slot.art.ratioLabel,style:w.templateTheme || "medical",prompt:shot.content.artPrompt || ""});
@@ -1245,5 +1681,5 @@ const StageStudio = (() => {
     return true;
   }
 
-  return {applies,isActive,normalizeWork,initWork,setupControls,themeName,samplePlan,requestDraft,installDraft,installImages,installSpeech,editor,hasProductionJob,updateProductionJob,handleInput,handleAction};
+  return {applies,isActive,normalizeWork,initWork,setupControls,themeName,samplePlan,requestDraft,installDraft,installImages,installClip,installSpeech,editor,hasProductionJob,updateProductionJob,handleInput,handleAction};
 })();

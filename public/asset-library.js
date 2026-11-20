@@ -1,7 +1,7 @@
 "use strict";
 
 const StudioAssets = (() => {
-  const categories = { image: "图片", svg: "SVG 图形", motion: "SVG 动效", music: "背景音乐", sfx: "音效", font: "字体", layout: "布局", theme: "主题", lottie: "Lottie 动画", mg: "MG 动画", pending: "待确认" };
+  const categories = { image: "图片", svg: "SVG 图形", video: "视频片段", motion: "SVG 动效", music: "背景音乐", sfx: "音效", font: "字体", layout: "布局", theme: "主题", lottie: "Lottie 动画", mg: "MG 动画", pending: "待确认" };
   const kinds = Object.keys(categories);
   const rights = '<label class="field">授权<select name="license" required><option value="">请选择授权</option>' +
     '<option>自制或已获授权</option><option>CC0</option><option>CC BY</option><option>AI 生成 · 已核对服务条款</option></select></label>' +
@@ -54,6 +54,7 @@ const StudioAssets = (() => {
 
   function media(item) {
     if (["lottie","mg","pending"].includes(item.kind)) return `<div class="asset-thumb"><img src="${esc(item.thumbnailUrl)}" alt="${esc(item.name)}" loading="lazy"></div>`;
+    if (item.kind === "video") return `<div class="asset-thumb video"><video controls preload="metadata" muted playsinline${item.thumbnailUrl ? ` poster="${esc(item.thumbnailUrl)}"` : ""} src="${esc(item.url)}"></video></div>`;
     if (item.kind === "image" || item.kind === "svg") {
       return `<div class="asset-thumb ${item.kind}"><img src="${esc(item.url)}" alt="${esc(item.name)}" loading="lazy"></div>`;
     }
@@ -99,7 +100,7 @@ const StudioAssets = (() => {
     const allowed = options.kinds || kinds.filter(kind => config.mgGeneration || !["mg","pending"].includes(kind));
     const picking = Boolean(options.onPick);
     let selected = picking || !allowed.includes(pageKind) ? allowed[0] : pageKind;
-    let query = picking || options.manage ? "" : pageQuery;
+    let query = options.query !== undefined ? options.query : (picking || options.manage ? "" : pageQuery);
     let items = [];
     root.innerHTML = `<div class="asset-toolbar">
       <div class="asset-tabs" role="group" aria-label="素材类型">${allowed.map((kind) =>
@@ -242,7 +243,7 @@ const StudioAssets = (() => {
 
   function pick(allowed, onPick, hints) {
     openModal("从素材库选择", '<div class="asset-picker" data-library-root></div>', "asset-picker");
-    mount(dialogBody.querySelector("[data-library-root]"), { kinds: allowed, onPick, hints });
+    mount(dialogBody.querySelector("[data-library-root]"), { kinds: allowed, onPick, hints, query: hints?.query });
   }
 
   function manageLayouts() {
@@ -280,7 +281,7 @@ const StudioAssets = (() => {
     return hit || (value === "warm" ? "warm" : "medical");
   }
 
-  const layoutKinds = {image:"AI 完整图", card:"信息图动效", scene:"代码动效场景", svg:"SVG 演示动画", asset:"素材库素材", mg:"MG 动画"};
+  const layoutKinds = {image:"AI 完整图", card:"信息图动效", scene:"代码动效场景", clip:"AI 演示视频", svg:"旧版 SVG", asset:"旧版素材", mg:"旧版 MG"};
   function layoutModal(item, copy, managing) {
     openModal(copy ? "复制为我的布局" : item.name, `<div class="asset-form layout-panel"><p role="status">正在读取布局…</p></div>`, "asset-form");
     const panel = dialogBody.querySelector(".layout-panel");
@@ -761,11 +762,16 @@ const StudioAssets = (() => {
       (await post("collect-image", { ...meta, ...fields, url: image })).item, name, meta.topic || "");
   }
 
+  function collectVideo(videoUrl, { name, ...meta }) {
+    submitForm("收录视频片段", `<video class="asset-collect-preview" controls muted playsinline src="${esc(videoUrl)}"></video>`, async (fields) =>
+      (await post("collect-video", { ...meta, ...fields, url: videoUrl })).item, name, meta.topic || "");
+  }
+
   function url(id) {
     return `/library/${encodeURIComponent(id)}`;
   }
 
   const motionUrl = id => "/api/library/motion/" + encodeURIComponent(id);
 
-  return { page, pick, collect, url, manageLayouts, manageThemes, layoutDiagram, themeSwatch, motionUrl, generateMG };
+  return { page, pick, collect, collectVideo, url, manageLayouts, manageThemes, layoutDiagram, themeSwatch, motionUrl, generateMG };
 })();
