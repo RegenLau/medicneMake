@@ -1554,3 +1554,9 @@
 .pt-subtitle .pt-sub-hl {
   color: var(--v-sub-hl);
 }
+
+.pt-region-chapters,
+.pt-region-disclaimer,
+.pt-region-progress { z-index: 5; }
+.pt-region-progress { overflow: hidden; border-radius: 8px; background: var(--v-ring-track); }
+.pt-region-progress span { display: block; height: 100%; background: var(--v-ring-outer); }

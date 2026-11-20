@@ -3185,6 +3185,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "encoder": bool(FFMPEG),
                     "codeMotionReady": code_motion_ready(),
                     "templateMotionSwitch": True,
+                    "stageRender": False,
                     "svgMotion": {"actions": svg_motion.ACTIONS, "exportReady": svg_motion.ready(FFMPEG)},
                     **speech_connection(),
                     "keyStorage": KEY_STORAGE,

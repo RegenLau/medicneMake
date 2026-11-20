@@ -8,10 +8,13 @@ import { StringDecoder } from "node:string_decoder";
 
 const [chrome, ffmpeg, planPath, output] = process.argv.slice(2);
 const { fps, shots, layout, avatarUrl } = JSON.parse(await readFile(planPath, "utf8"));
-const [renderer, template, css] = await Promise.all([
+const [renderer, template, css, layoutEngine, contents, svgContent] = await Promise.all([
   readFile(new URL("./public/svg-motion.js", import.meta.url), "utf8"),
   readFile(new URL("./public/template-renderer.js", import.meta.url), "utf8"),
   readFile(new URL("./public/template-renderer.css", import.meta.url), "utf8"),
+  readFile(new URL("./public/stage/layout-engine.js", import.meta.url), "utf8"),
+  readFile(new URL("./public/stage/contents.js", import.meta.url), "utf8"),
+  readFile(new URL("./public/stage/svg-content.js", import.meta.url), "utf8"),
 ]);
 const profile = await mkdtemp(join(tmpdir(), "studio-svg-"));
 let browser;
@@ -96,7 +99,7 @@ try {
     }
     return result.result.value;
   }
-  await evaluate(template + renderer + `
+  await evaluate(layoutEngine + template + svgContent + contents + renderer + `
     const deck = SvgMotion.templateDeck(${JSON.stringify(layout)}, ${JSON.stringify(shots)});
     const avatar = ${JSON.stringify(avatarUrl)};
     const imgMap = avatar ? new Map([[TemplateVideo.resolveAvatarSrc(deck), avatar]]) : null;

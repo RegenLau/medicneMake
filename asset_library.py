@@ -20,6 +20,72 @@ SVG_ATTRIBUTES = frozenset("id viewBox width height x y x1 x2 y1 y2 cx cy r rx r
 LOCAL_PAINT = re.compile(r"url\(#[A-Za-z_][\w.:-]*\)")
 USER_ID = re.compile(r"user:[0-9a-f]{32}")
 LIMITS = {"image": 8 * 1024 * 1024, "svg": 300 * 1024}
+LAYOUT_VARIANTS = {
+    "header": ("pill-title+chapter-rail",),
+    "chapters": ("rail",),
+    "presenter": ("column-card",),
+    "media": ("hook", "outro"),
+    "subtitle": ("band",),
+    "disclaimer": ("note",),
+    "progress": ("bar",),
+}
+LAYOUT_CONTENTS = frozenset(("image", "card", "scene", "svg", "asset"))
+REGION_FIELDS = frozenset(("x", "y", "w", "h", "component"))
+
+
+def _layout_number(value, lower, upper):
+    return type(value) in (int, float) and lower <= value <= upper
+
+
+def _layout_regions(regions):
+    if (not isinstance(regions, dict) or not {"media", "subtitle"} <= regions.keys()
+            or not regions.keys() <= LAYOUT_VARIANTS.keys()):
+        raise ValueError("布局必须包含内容区和字幕区，并使用已知组件。")
+    for name, region in regions.items():
+        if (not isinstance(region, dict) or not REGION_FIELDS <= region.keys()
+                or not region.keys() <= REGION_FIELDS | {"variant"}
+                or region["component"] != name):
+            raise ValueError("布局区域字段或组件无效。")
+        if "variant" in region and region["variant"] not in LAYOUT_VARIANTS[name]:
+            raise ValueError("布局组件样式无效。")
+        if not all(_layout_number(region[key], 0, 100) for key in ("x", "y", "w", "h")):
+            raise ValueError("布局坐标必须是 0 到 100 的数字。")
+        if (not region["w"] or not region["h"] or region["x"] + region["w"] > 100 + 1e-9
+                or region["y"] + region["h"] > 100 + 1e-9):
+            raise ValueError("布局区域超出画布或大小为零。")
+    media, subtitle = regions["media"], regions["subtitle"]
+    if media["w"] * media["h"] < 3500:
+        raise ValueError("内容区至少占画布的 35%。")
+    if (min(media["x"] + media["w"], subtitle["x"] + subtitle["w"]) > max(media["x"], subtitle["x"]) + 1e-9
+            and min(media["y"] + media["h"], subtitle["y"] + subtitle["h"]) > max(media["y"], subtitle["y"]) + 1e-9):
+        raise ValueError("内容区不能和字幕区重叠。")
+
+
+def validate_layout(definition):
+    required = {"schemaVersion", "aspect", "canvas", "regions", "supports"}
+    if (not isinstance(definition, dict) or not required <= definition.keys()
+            or not definition.keys() <= required | {"stages", "slots"}):
+        raise ValueError("布局定义包含缺失或未知字段。")
+    if (type(definition["schemaVersion"]) is not int or definition["schemaVersion"] != 1
+            or definition["aspect"] != "16:9" or definition["canvas"] != {"w": 1280, "h": 720}):
+        raise ValueError("只支持 1280×720 的第 1 版布局。")
+    supports = definition["supports"]
+    if (not isinstance(supports, list) or not supports or not all(isinstance(item, str) and item in LAYOUT_CONTENTS for item in supports)
+            or len(supports) != len(set(supports))):
+        raise ValueError("布局的制作方式无效。")
+    _layout_regions(definition["regions"])
+    stages = definition.get("stages", {})
+    if not isinstance(stages, dict) or not stages.keys() <= {"hook", "outro"}:
+        raise ValueError("布局的开场或结尾配置无效。")
+    for stage in stages.values():
+        if not isinstance(stage, dict) or stage.keys() != {"regions"}:
+            raise ValueError("开场或结尾只能定义已知布局区域。")
+        _layout_regions(stage["regions"])
+    slots = definition.get("slots", {})
+    if (not isinstance(slots, dict) or not slots.keys() <= {"avatarSize"}
+            or ("avatarSize" in slots and not _layout_number(slots["avatarSize"], 20, 540))):
+        raise ValueError("布局头像大小无效。")
+    return definition
 
 
 def clean_svg(data):
@@ -133,6 +199,10 @@ class LocalLibrary:
         if root not in path.parents or not path.is_file():
             raise ValueError("素材文件不存在。")
         return path, self.public(item)
+
+    def layout(self, asset_id):
+        path, item = self.resolve(asset_id, ("layout",))
+        return validate_layout(json.loads(path.read_text(encoding="utf-8"))), item, path
 
     def upload(self, payload, ffmpeg):
         kind = payload.get("kind")

@@ -3,5 +3,6 @@
   {"id":"builtin:sfx/soft-pop","kind":"sfx","name":"轻柔弹出","tags":["出场","要点"],"source":"内置合成","license":"项目自制","file":"sfx/soft-pop.wav"},
   {"id":"builtin:sfx/check","kind":"sfx","name":"勾选提示","tags":["确认","清单"],"source":"内置合成","license":"项目自制","file":"sfx/check.wav"},
   {"id":"builtin:sfx/transition","kind":"sfx","name":"柔和过渡","tags":["出场","转场"],"source":"内置合成","license":"项目自制","file":"sfx/transition.wav"},
-  {"id":"builtin:font/noto-sans-sc","kind":"font","name":"Noto Sans SC","tags":["简体中文","无衬线"],"source":"Google Fonts / Noto Project","license":"SIL OFL 1.1","termsUrl":"/assets/library/fonts/OFL.txt","file":"fonts/NotoSansSC.ttf"}
+  {"id":"builtin:font/noto-sans-sc","kind":"font","name":"Noto Sans SC","tags":["简体中文","无衬线"],"source":"Google Fonts / Noto Project","license":"SIL OFL 1.1","termsUrl":"/assets/library/fonts/OFL.txt","file":"fonts/NotoSansSC.ttf"},
+  {"id":"builtin:layout/info-classic","kind":"layout","name":"信息图模板","tags":["左栏主讲","16:9"],"aspect":"16:9","source":"内置","license":"项目自制","file":"layouts/info-classic.json"}
 ]
