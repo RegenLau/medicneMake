@@ -2319,7 +2319,7 @@
     return Math.max(0, Math.min(1, (before + secs[idx] * frac) / total));
   }
 
-  function renderAvatarRing(avatarSrc, progress, strokeRatio = 3.5) {
+  function renderAvatarProgress(progress, strokeRatio = 3.5) {
     const p = Math.max(0, Math.min(1, Number(progress) || 0));
     const sw = Math.max(2, Number(strokeRatio) || 3.5);
     const r = 50 - sw / 2;
@@ -2331,9 +2331,13 @@
       const dash = Math.max(0.01, circ * p);
       progressCircle = `<circle cx="50" cy="50" r="${r.toFixed(2)}" fill="none" stroke="var(--v-ring-outer)" stroke-width="${sw.toFixed(2)}" stroke-linecap="round" stroke-dasharray="${dash.toFixed(2)} ${(circ + 10).toFixed(2)}" transform="rotate(-90 50 50)" />`;
     }
-    const svgHtml = progressCircle
+    return progressCircle
       ? `<svg class="pt-avatar-progress" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" aria-hidden="true">${progressCircle}</svg>`
       : "";
+  }
+
+  function renderAvatarRing(avatarSrc, progress, strokeRatio) {
+    const svgHtml = renderAvatarProgress(progress, strokeRatio);
     return `<div class="pt-avatar-ring">${svgHtml}<div class="pt-avatar-inner"><img src="${xmlEsc(avatarSrc)}" alt="" /></div></div>`;
   }
 
@@ -2526,7 +2530,9 @@
       bodyHtml = renderHookStage(deck, slide, mapSrc, focusKey, ringProgress);
     } else {
       const activeImage = hasOutroImage ? slide.outroImage : slide.contentImage;
-      const mediaHtml = activeImage
+      const mediaHtml = opts.renderMedia
+        ? opts.renderMedia(slide)
+        : activeImage
         ? `<img class="pt-media-img" src="${xmlEsc(mapSrc(activeImage))}" alt="" />`
         : renderFallbackCard(slide, "all");
       bodyHtml = `
@@ -2650,6 +2656,16 @@
     }
   }
 
+  function frameToSvg(frameHtml, cssText) {
+    const frameXhtml = frameHtml.replace(/<svg\b(?![^>]*\bxmlns=)/g, '<svg xmlns="http://www.w3.org/2000/svg"');
+    const safeCss = cssText.replace(/]]>/g, "]]&gt;");
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">` +
+      `<defs><style type="text/css"><![CDATA[${safeCss}]]></style></defs>` +
+      `<foreignObject x="0" y="0" width="1280" height="720">` +
+      `<div xmlns="http://www.w3.org/1999/xhtml" style="width:1280px;height:720px;overflow:hidden;">${frameXhtml}</div>` +
+      `</foreignObject></svg>`;
+  }
+
   async function exportSlideCuePng(rawDeck, slideIndex, subtitleOrCue, exportOpts) {
     const deck = normalizeDeck(rawDeck);
     const slide = deck.slides[slideIndex];
@@ -2670,7 +2686,7 @@
     for (const url of neededUrls) {
       if (url) imgMap.set(url, await imageToDataUrl(url));
     }
-    const frameXhtml = renderFrameHtml(deck, slideIndex, {
+    const frameHtml = renderFrameHtml(deck, slideIndex, {
       subtitleText: cueObj.text,
       focus: cueObj.focus !== undefined ? cueObj.focus : "all",
       beatIndex: cueObj.beatIndex,
@@ -2678,14 +2694,8 @@
       cueIndex: cueObj.cueIndex,
       progress: exportOpts && exportOpts.progress !== undefined ? exportOpts.progress : cueObj.progress,
       imgMap,
-    }).replace(/<svg\b(?![^>]*\bxmlns=)/g, '<svg xmlns="http://www.w3.org/2000/svg"');
-    const safeCss = cssText.replace(/]]>/g, "]]&gt;");
-    const svg =
-      `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">` +
-      `<defs><style type="text/css"><![CDATA[${safeCss}]]></style></defs>` +
-      `<foreignObject x="0" y="0" width="1280" height="720">` +
-      `<div xmlns="http://www.w3.org/1999/xhtml" style="width:1280px;height:720px;overflow:hidden;">${frameXhtml}</div>` +
-      `</foreignObject></svg>`;
+    });
+    const svg = frameToSvg(frameHtml, cssText);
 
     const img = new Image();
     img.decoding = "sync";
@@ -2739,9 +2749,12 @@
     computeDeckProgress,
     slideHasOutroBeat,
     highlightText,
+    renderFallbackCard,
     buildCardImagePrompt,
     buildOutroImagePrompt,
     renderFrameHtml,
+    renderAvatarProgress,
+    frameToSvg,
     exportSlideCuePng,
   };
 })(window);

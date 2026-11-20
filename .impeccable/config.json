@@ -11,6 +11,24 @@
         ],
         "createdAt": "2026-11-18T12:21:19.208Z",
         "reason": "Agent review: the existing .banner alert uses an amber or red leading edge to signal a warning or error."
+      },
+      {
+        "rule": "dark-glow",
+        "value": "*",
+        "files": [
+          "public/index.html"
+        ],
+        "createdAt": "2026-11-20T03:35:48.502Z",
+        "reason": "Agent review: Chromium confirms the existing .tpl-preview-box shadow is offset by 6px with 8% opacity on a light #edf5fd surface. The detector attributes a dark background from another component to the HTML entry point."
+      },
+      {
+        "rule": "dark-glow",
+        "value": "*",
+        "files": [
+          "public/code-motion.html"
+        ],
+        "createdAt": "2026-11-20T03:53:04.163Z",
+        "reason": "Agent review: current browser previews show the existing light TemplateVideo layout. Matching shadows come from the imported template-renderer.css rules for fallback and beat cards not mounted in the code-motion slot."
       }
     ]
   }

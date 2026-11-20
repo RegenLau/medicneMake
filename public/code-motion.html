@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>信息图模板 · 代码动效</title>
+  <link rel="stylesheet" href="./template-renderer.css">
+  <style>
+    html, body { margin: 0; overflow: hidden; }
+    #motion-frame { width: 1280px; height: 720px; transform-origin: top left; }
+    .motion-stage { position: absolute; inset: 0; }
+    .motion-stage .scene {
+      position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+      padding: 32px 38px 25px; color: var(--v-ink); opacity: 0;
+    }
+    .motion-stage h2 { font-size: 38px; line-height: 1.18; text-align: center; text-wrap: balance; }
+    .motion-stage .diagram { width: 100%; flex: 1 1 0; min-height: 0; margin: 8px 0; }
+    .motion-stage .caption-chip {
+      flex: none; width: 100%; margin-top: 8px; padding: 12px 18px;
+      border: 1px solid var(--v-card-border); border-radius: 12px; color: var(--v-primary-deep);
+      background: var(--v-primary-soft); text-align: center; font-size: 24px; font-weight: 650;
+    }
+    .motion-stage .caption-chip.caution { background: var(--v-coral-soft); color: var(--v-ink); }
+    .motion-stage .compare, .motion-stage .check-wrap {
+      width: min(100%, 700px); flex: 1 1 0; min-height: 0;
+      display: flex; flex-direction: column; justify-content: center; gap: 20px;
+    }
+    .motion-stage .rail-row {
+      display: grid; grid-template-columns: 310px 1fr; align-items: center; gap: 24px;
+      padding: 22px; border: 1px solid var(--v-card-border); border-radius: 14px;
+      background: var(--v-primary-soft); font-size: 25px; font-weight: 650;
+    }
+    .motion-stage .rail-row + .rail-row { background: var(--v-coral-soft); }
+    .motion-stage .rail {
+      height: 13px; border-radius: 8px; background: var(--v-card-bg); overflow: hidden;
+    }
+    .motion-stage .rail b {
+      display: block; width: 100%; height: 100%; border-radius: inherit;
+      transform: scaleX(0); transform-origin: left; background: var(--v-primary);
+    }
+    .motion-stage #second-rail { background: var(--v-coral); }
+    .motion-stage .cluster-labels {
+      display: flex; gap: 24px; margin-bottom: 10px; color: var(--v-primary-deep); font-size: 23px; font-weight: 650;
+    }
+    .motion-stage .cluster-labels span + span { color: var(--v-coral); }
+    .motion-stage .check-card { border: 1px solid var(--v-card-border); border-radius: 14px; overflow: hidden; }
+    .motion-stage .check-head {
+      padding: 13px 23px; background: var(--v-primary-soft); color: var(--v-primary-deep);
+      font-size: 22px; font-weight: 700;
+    }
+    .motion-stage .check-row {
+      display: flex; align-items: center; gap: 17px; padding: 14px 23px;
+      border-top: 1px solid var(--v-card-border); font-size: 25px; font-weight: 650;
+    }
+    .motion-stage .check-row svg { width: 28px; height: 28px; color: var(--v-green); }
+  </style>
+</head>
+<body>
+  <main id="motion-frame"></main>
+  <template id="motion-content">
+      <div class="motion-stage">
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <defs>
+        <linearGradient id="pill-cool" x2=".88" y2="1"><stop stop-color="var(--v-primary-soft)"/><stop offset="1" stop-color="var(--v-primary)"/></linearGradient>
+        <linearGradient id="pill-warm" x2=".76" y2="1"><stop stop-color="var(--v-coral-soft)"/><stop offset="1" stop-color="var(--v-coral)"/></linearGradient>
+        <linearGradient id="shield-fill" x2="0" y2="1"><stop stop-color="var(--v-primary-soft)"/><stop offset="1" stop-color="var(--v-card-bg)"/></linearGradient>
+        <symbol id="tick" viewBox="0 0 28 28">
+          <rect x="2" y="2" width="24" height="24" rx="7" fill="var(--v-green-soft)" stroke="currentColor"/>
+          <path d="m8 14 4 4 8-9" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </symbol>
+      </defs>
+    </svg>
+
+        <section class="scene">
+          <h2></h2>
+          <svg class="diagram" viewBox="0 0 630 316" aria-hidden="true">
+            <g fill="none">
+              <circle cx="315" cy="157" r="134" stroke="var(--v-card-border)"/>
+              <circle cx="315" cy="157" r="104" stroke="var(--v-primary)" stroke-dasharray="2 5"/>
+              <circle cx="315" cy="157" r="78" stroke="var(--v-card-border)"/>
+            </g>
+            <g id="orbit-dots">
+              <circle cx="419" cy="157" r="4" fill="var(--v-primary)"/>
+              <circle cx="315" cy="53" r="3" fill="var(--v-coral)"/>
+              <circle cx="289" cy="257.7" r="3.5" fill="var(--v-primary)"/>
+            </g>
+            <g id="pill">
+              <path d="M252 157a31 31 0 0 1 31-31h32v62h-32a31 31 0 0 1-31-31Z" fill="url(#pill-cool)"/>
+              <path d="M315 126h32a31 31 0 1 1 0 62h-32Z" fill="url(#pill-warm)"/>
+              <path d="M274 144q6-8 19-8h48" fill="none" stroke="#fff" stroke-width="4" stroke-opacity=".48" stroke-linecap="round"/>
+            </g>
+          </svg>
+          <div class="caption-chip"></div>
+        </section>
+
+        <section class="scene">
+          <h2></h2>
+          <svg class="diagram" viewBox="0 0 630 316" aria-hidden="true">
+            <ellipse cx="315" cy="157" rx="251" ry="129" fill="var(--v-primary-soft)" stroke="var(--v-card-border)" stroke-dasharray="5 6"/>
+            <g id="cells"></g>
+          </svg>
+          <div class="cluster-labels"><span></span><span></span></div>
+          <div class="caption-chip caution"></div>
+        </section>
+
+        <section class="scene">
+          <h2></h2>
+          <div class="compare">
+            <div class="rail-row">
+              <span class="compare-label"></span><div class="rail"><b id="first-rail"></b></div>
+            </div>
+            <div class="rail-row">
+              <span class="compare-label"></span><div class="rail"><b id="second-rail"></b></div>
+            </div>
+          </div>
+          <div class="caption-chip"></div>
+        </section>
+
+        <section class="scene">
+          <h2></h2>
+          <div class="check-wrap">
+            <div class="check-card">
+              <div class="check-head">这样做</div>
+              <div class="check-row"><svg><use href="#tick"/></svg><span></span></div>
+              <div class="check-row"><svg><use href="#tick"/></svg><span></span></div>
+              <div class="check-row"><svg><use href="#tick"/></svg><span></span></div>
+            </div>
+          </div>
+          <div class="caption-chip"></div>
+        </section>
+
+        <section class="scene">
+          <h2></h2>
+          <svg class="diagram" viewBox="0 0 630 316" aria-hidden="true">
+            <g id="shield-rings" fill="none">
+              <circle cx="315" cy="151" r="133" stroke="var(--v-card-border)"/>
+              <circle cx="315" cy="151" r="105" stroke="var(--v-primary)" stroke-dasharray="2 5"/>
+            </g>
+            <g id="shield">
+              <path d="M315 66 390 95v58c0 51-35 82-75 100-40-18-75-49-75-100V95Z" fill="url(#shield-fill)" stroke="var(--v-primary)" stroke-width="3"/>
+              <path d="M315 80 378 104v48c0 42-27 70-63 89-36-19-63-47-63-89v-48Z" fill="none" stroke="var(--v-card-border)"/>
+              <path d="M306 112h18a5 5 0 0 1 5 5v20h20a5 5 0 0 1 5 5v18a5 5 0 0 1-5 5h-20v20a5 5 0 0 1-5 5h-18a5 5 0 0 1-5-5v-20h-20a5 5 0 0 1-5-5v-18a5 5 0 0 1 5-5h20v-20a5 5 0 0 1 5-5Z" fill="var(--v-primary)"/>
+            </g>
+          </svg>
+          <div class="caption-chip"></div>
+        </section>
+      </div>
+  </template>
+  <script src="./template-renderer.js"></script>
+  <script src="./code-motion.js"></script>
+</body>
+</html>

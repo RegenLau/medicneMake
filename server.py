@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unicodedata
@@ -24,6 +25,7 @@ from urllib.parse import unquote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 import draft_content
+import svg_motion
 import music_gen
 import work_costs
 
@@ -128,6 +130,7 @@ FFMPEG = shutil.which("ffmpeg") or next(
 CACHE_LOCK = threading.RLock()
 ACTIVE = set()
 SLOTS = threading.Semaphore(2)
+SVG_SPEECH_LOCKS = tuple(threading.Lock() for _ in range(16))
 JOB_CREDENTIALS = threading.local()
 
 
@@ -816,8 +819,80 @@ def validate_video_music_settings(s):
     music_path(s.get("music", "off"))
 
 
+CODE_MOTION_FPS = 25
+
+
+def code_motion_ready():
+    return bool(FFMPEG and shutil.which("node") and (ROOT / "node_modules/playwright/package.json").is_file())
+
+
+def validate_template_avatar(avatar, voiced, *, check_key=True):
+    model = avatar.get("model") or "videoretalk"
+    if model == "liveportrait":
+        raise ValueError("阿里云百炼已于 2026-10-10 下线 liveportrait，请返回分镜编辑重新点击合成（将自动改用在线数字人模型）。")
+    if model not in AVATAR_MODELS:
+        raise ValueError("未知数字人模型")
+    if avatar.get("resolution") and avatar["resolution"] not in AVATAR_RESOLUTIONS:
+        raise ValueError("数字人清晰度无效")
+    if avatar.get("motion") and avatar["motion"] not in AVATAR_MOTIONS:
+        raise ValueError("未知数字人动作风格")
+    if (avatar.get("presenter") or "digital") not in ("digital", "cartoon"):
+        raise ValueError("未知数字人形象类型")
+    if media_path(avatar.get("image", "")).suffix not in (".jpg", ".png", ".webp"):
+        raise ValueError("数字人形象必须是图片素材。")
+    if voiced and check_key and not current_dashscope_key():
+        raise ValueError("请先在「模型配置 → 数字人服务」填写阿里云百炼 API Key，再合成动态对口型视频。")
+
+
+def code_motion_appearance(p):
+    appearance = p.get("appearance", {})
+    if not isinstance(appearance, dict):
+        raise ValueError("信息图模板外观格式无效。")
+    theme = appearance.get("theme", "medical")
+    presenter = appearance.get("presenter", "digital")
+    profile = appearance.get("pharmacist", {})
+    if theme not in ("medical", "warm") or presenter not in ("digital", "cartoon", "none") or not isinstance(profile, dict):
+        raise ValueError("信息图模板风格或主讲人无效。")
+    profile = {
+        key: draft_content.string_field(profile, key, limit, optional=True)
+        for key, limit in (("name", 16), ("role", 16), ("hospital", 24), ("avatarImage", 140))
+        if key in profile
+    }
+    if presenter == "digital" and profile.get("avatarImage") and media_path(profile["avatarImage"]).suffix not in (".jpg", ".png", ".webp"):
+        raise ValueError("主讲人肖像必须是图片素材。")
+    return {"theme": theme, "presenter": presenter, "pharmacist": profile}
+
+
+def validate_motion_template(p):
+    info = p["templateInfo"]
+    items = p.get("items")
+    if not isinstance(info, dict) or not isinstance(items, list) or not 1 <= len(items) <= 12:
+        raise ValueError("信息图模板需要 1–12 页分镜。")
+    draft_content.string_field(p, "title", 40)
+    draft_content.string_field(info, "shortTitle", 20)
+    draft_content.string_field(info, "disclaimer", 60, optional=True)
+    chapters = info.get("chapters")
+    if (not isinstance(chapters, list) or not 2 <= len(chapters) <= 5
+            or any(not isinstance(text, str) or len(text) > 8 for text in chapters)):
+        raise ValueError("信息图模板章节格式无效。")
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("visual"), dict):
+            raise ValueError("信息图分镜格式无效。")
+        draft_content.string_field(item, "line", 450)
+        seconds = item.get("seconds")
+        if type(seconds) not in (int, float) or not 2 <= seconds <= 60:
+            raise ValueError("单页时长应在 2–60 秒之间。")
+        cues = item.get("cues")
+        if not isinstance(cues, list) or not 1 <= len(cues) <= 24:
+            raise ValueError("每页字幕节拍数应在 1–24 之间。")
+        for cue in cues:
+            if not isinstance(cue, dict) or type(cue.get("weight")) not in (int, float) or not 0 < cue["weight"] <= 500:
+                raise ValueError("字幕节拍格式无效。")
+            draft_content.string_field(cue, "text", 180)
+
+
 def setting_valid(p):
-    if p.get("mode") != "ark" or p.get("kind") not in ("images", "video", "draft"):
+    if p.get("mode") != "ark" or p.get("kind") not in ("images", "video", "draft", "svg-speech"):
         raise ValueError("未知的生成方式")
     if p["kind"] == "draft":
         if not current_deepseek_key():
@@ -826,6 +901,56 @@ def setting_valid(p):
         if selected_text_model not in text_models():
             raise ValueError("请选择有效的 DeepSeek 文本模型。")
         draft_content.validate_request(p["draft"], p["settings"], VIDEO_MODELS)
+        return
+    if p["kind"] == "video" and p.get("codeMotion") is True:
+        settings = p.get("settings")
+        if not isinstance(settings, dict) or settings.get("voice") not in (*SPEAKERS, "无配音"):
+            raise ValueError("未知配音")
+        if settings.get("ratio") != "16:9":
+            raise ValueError("代码动效模板固定输出 16:9。")
+        if "templateInfo" in p:
+            validate_motion_template(p)
+        else:
+            draft_content.code_motion_script({"title": p.get("title"), "scenes": p.get("items")})
+        appearance = code_motion_appearance(p)
+        if not code_motion_ready():
+            raise ValueError("代码动效需要 Node.js、Playwright 和 FFmpeg。请按使用说明安装。")
+        if settings["voice"] in SPEAKERS and not current_speech_key() and not has_template_speech(p):
+            raise ValueError("请先配置火山语音，再合成带配音的代码动效。")
+        if p.get("avatar") is not None:
+            avatar = p["avatar"]
+            if (not isinstance(avatar, dict) or avatar.get("enabled") is not True
+                    or settings["voice"] not in SPEAKERS or appearance["presenter"] == "none"
+                    or avatar.get("presenter") != appearance["presenter"]):
+                raise ValueError("数字人参数与信息图模板主讲人不匹配。")
+            validate_template_avatar(avatar, True, check_key=not p.get("previousVideo"))
+        validate_video_music_settings(settings)
+        return
+    if p["kind"] == "svg-speech" or (p["kind"] == "video" and p.get("svg") is True):
+        settings = p.get("settings")
+        if not isinstance(settings, dict) or settings.get("voice") not in (*SPEAKERS, "无配音"):
+            raise ValueError("未知配音")
+        try:
+            uuid.UUID(p.get("workId", ""))
+        except (AttributeError, TypeError, ValueError):
+            raise ValueError("SVG 作品 ID 无效") from None
+        items = p.get("items")
+        if not isinstance(items, list) or not 1 <= len(items) <= 12:
+            raise ValueError("SVG 视频需要 1–12 幕分镜")
+        for item in items:
+            svg_motion.validate_shot(item)
+        if settings["voice"] in SPEAKERS and not current_speech_key():
+            raise ValueError("请先配置火山语音，再使用 SVG 口播。")
+        if p["kind"] == "svg-speech":
+            index = items[0].get("index")
+            if len(items) != 1 or type(index) is not int or not 0 <= index < 12 or settings["voice"] not in SPEAKERS:
+                raise ValueError("逐幕试听需要一幕分镜和配音音色。")
+            return
+        draft_content.string_field(p, "title", 300)
+        svg_template_layout(p)
+        if not svg_motion.ready(FFMPEG):
+            raise ValueError("SVG 导出需要 Chrome、Node.js 和 FFmpeg。详见使用说明。")
+        validate_video_music_settings(settings)
         return
     if p["kind"] == "video" and p.get("template") is True:
         s = p["settings"]
@@ -862,27 +987,14 @@ def setting_valid(p):
                 ):
                     raise ValueError("静止停留时长应在 0–5 秒之间")
         voiced = s.get("voice") in SPEAKERS and any(item.get("line", "").strip() for item in items)
-        if voiced and not current_speech_key():
+        if voiced and not current_speech_key() and not has_template_speech(p):
             raise ValueError("请先配置火山语音，再继续合成带配音的模板视频。")
         avatar = p.get("avatar")
         if avatar is not None:
             if not isinstance(avatar, dict):
                 raise ValueError("数字人参数无效")
             if avatar.get("enabled") is True:
-                avatar_model = avatar.get("model") or "videoretalk"
-                if avatar_model == "liveportrait":
-                    raise ValueError("阿里云百炼已于 2026-10-10 下线 liveportrait，请返回分镜编辑重新点击合成（将自动改用在线数字人模型）。")
-                if avatar_model not in AVATAR_MODELS:
-                    raise ValueError("未知数字人模型")
-                if avatar.get("resolution") and avatar["resolution"] not in AVATAR_RESOLUTIONS:
-                    raise ValueError("数字人清晰度无效")
-                if avatar.get("motion") and avatar["motion"] not in AVATAR_MOTIONS:
-                    raise ValueError("未知数字人动作风格")
-                if (avatar.get("presenter") or "digital") not in ("digital", "cartoon"):
-                    raise ValueError("未知数字人形象类型")
-                avatar_file = media_path(avatar.get("image", ""))
-                if avatar_file.suffix not in (".jpg", ".png", ".webp"):
-                    raise ValueError("数字人形象必须是图片素材。")
+                validate_template_avatar(avatar, voiced, check_key=not p.get("previousVideo"))
                 rect = avatar.get("rect")
                 if rect is not None:
                     if not isinstance(rect, dict):
@@ -908,8 +1020,6 @@ def setting_valid(p):
                         has_cue_rect = True
                 if rect is None and not has_cue_rect:
                     raise ValueError("缺少数字人圆框坐标")
-                if voiced and not current_dashscope_key():
-                    raise ValueError("请先在「模型配置 → 数字人服务」填写阿里云百炼 API Key，再合成动态对口型视频。")
         return
     if not current_ark_key():
         raise ValueError("请先连接火山方舟")
@@ -1145,15 +1255,85 @@ def narrate(line, speaker, target, key):
     return characters
 
 
-def shot_audio(settings, line, folder, speech_key, index=0, record=None):
-    speaker = SPEAKERS.get(settings["voice"])
+def speech_cache_name(settings, line):
+    speaker = SPEAKERS.get(settings.get("voice"))
     if not speaker or not line:
-        return None, 0
+        return None
     fingerprint = json.dumps([SPEECH_RESOURCE, SPEECH_SAMPLE_RATE, speaker, line])
     digest = hashlib.sha256(fingerprint.encode()).hexdigest()
-    audio = folder / ("speech-" + digest + ".wav")
+    return "speech-" + digest + ".wav"
+
+
+def cached_template_speech(p):
+    needed = {speech_cache_name(p["settings"], item.get("line", "").strip()) for item in p["items"]} - {None}
+    if not needed:
+        return {}
+    previous = p.get("previousVideo")
+    source = re.fullmatch(r"/media/([0-9a-f-]{36})\.mp4", previous) if isinstance(previous, str) else None
+    candidates = []
+    if p.get("id"):
+        candidates.append(JOBS / p["id"])
+    if source:
+        prior_id = source[1]
+        try:
+            prior = read_json(JOBS / (prior_id + ".json"))
+        except (OSError, ValueError):
+            prior = {}
+        prior_work = prior.get("request", {}).get("workId")
+        if (prior.get("output") or {}).get("url") == previous and (not prior_work or prior_work == p.get("workId")):
+            candidates.append(JOBS / prior_id)
+    cached = {}
+
+    def collect(folder, match_index=False):
+        for path in folder.glob("*/speech-*.wav"):
+            index_key = (path.parent.name, path.name)
+            if path.name in needed and (path.name not in cached or (match_index and index_key not in cached)):
+                try:
+                    with wave.open(str(path), "rb") as wav:
+                        if wav.getnframes() > 0:
+                            entry = (path, wav.getnframes() / wav.getframerate())
+                            cached.setdefault(path.name, entry)
+                            if match_index:
+                                cached[index_key] = entry
+                except (OSError, EOFError, wave.Error):
+                    continue
+
+    for folder in candidates:
+        collect(folder, match_index=True)
+    if p.get("workId") and not needed.issubset(cached):
+        for path in JOBS.glob("*.json"):
+            try:
+                old = read_json(path)
+            except (OSError, ValueError):
+                continue
+            if old.get("request", {}).get("workId") == p["workId"]:
+                collect(path.with_suffix(""))
+                if needed.issubset(cached):
+                    break
+    return cached
+
+
+def has_template_speech(p):
+    cached = cached_template_speech(p)
+    return all(not name or name in cached for name in (
+        speech_cache_name(p["settings"], item.get("line", "").strip()) for item in p["items"]
+    ))
+
+
+def template_shot_audio(settings, line, folder, speech_key, index, record, cached):
+    name = speech_cache_name(settings, line)
+    if name in cached:
+        return cached.get((str(index), name), cached[name])
+    return shot_audio(settings, line, folder, speech_key, index, record)
+
+
+def shot_audio(settings, line, folder, speech_key, index=0, record=None):
+    name = speech_cache_name(settings, line)
+    if not name:
+        return None, 0
+    audio = folder / name
     if not audio.is_file():
-        characters = narrate(line, speaker, audio, speech_key)
+        characters = narrate(line, SPEAKERS[settings["voice"]], audio, speech_key)
         if record:
             record(f"speech:{index}", work_costs.speech_cost(characters, line, settings["voice"], index))
     with wave.open(str(audio)) as wav:
@@ -1218,7 +1398,7 @@ def caption_chunks(line, limit):
         yield text
 
 
-def shot_captions(line, start, seconds, ratio):
+def shot_caption_intervals(line, start, seconds, ratio):
     limit = {"9:16": 12, "3:4": 15, "1:1": 17, "16:9": 23}[ratio]
     chunks = list(caption_chunks(line, limit))
     # Use audible length for the whole line, and estimate the cue boundaries within it.
@@ -1230,7 +1410,18 @@ def shot_captions(line, start, seconds, ratio):
         begin = start + seconds * elapsed / total
         elapsed += weight
         end = start + seconds * elapsed / total
-        yield f"{stamp(begin)} --> {stamp(end)} position:50% size:84% align:center\n{escape(chunk, quote=False)}\n"
+        yield {"start": begin, "end": end, "text": chunk}
+
+
+def caption_vtt(cue):
+    return (
+        f"{stamp(cue['start'])} --> {stamp(cue['end'])} position:50% size:84% align:center\n"
+        f"{escape(cue['text'], quote=False)}\n"
+    )
+
+
+def shot_captions(line, start, seconds, ratio):
+    return (caption_vtt(cue) for cue in shot_caption_intervals(line, start, seconds, ratio))
 
 
 def storyboard_timing(item, spoken_seconds, max_seconds, tail_image):
@@ -1369,7 +1560,7 @@ def generate_music_request(p):
     return {**generated, "library": music_gen.list_music_library(GENERATED_MUSIC_DIR)}
 
 
-def music_mix(duration, voiced, music_index=2, is_generated=False):
+def music_mix(duration, voiced, music_index=2, is_generated=False, voice_index=0):
     if is_generated:
         # AI-generated studio tracks are mastered louder (~-13 LUFS) than built-in quiet beds (-21 dB).
         gain = -18 if voiced else -9
@@ -1384,7 +1575,7 @@ def music_mix(duration, voiced, music_index=2, is_generated=False):
     # Keep a continuous stereo bed. Lower it only where the narration is audible.
     return (
         bed + "[bed];"
-        "[0:a]aformat=sample_rates=44100:channel_layouts=stereo,asplit=2[voice][detector];"
+        f"[{voice_index}:a]aformat=sample_rates=44100:channel_layouts=stereo,asplit=2[voice][detector];"
         "[bed][detector]sidechaincompress=threshold=0.055:ratio=4:attack=25:release=550[ducked];"
         "[voice][ducked]amix=inputs=2:duration=first:normalize=0,"
         "alimiter=limit=0.95:level=false:latency=1[mix]"
@@ -1511,6 +1702,8 @@ def generate_template_avatar_video(avatar_cfg, slide_entries, job_dir, job, save
 
     source_asset = image_path
     if any_uncached:
+        if not dashscope_key:
+            raise ValueError("未找到可复用的数字人素材。请配置阿里云百炼后继续，或在主讲人设置选择静态肖像。")
         if model == "videoretalk":
             job["progress"] = "准备数字人底片视频（640×640）"
             save()
@@ -1769,6 +1962,32 @@ def _build_template_slide_xfade(cue_specs, prev_img=None):
     return input_args, ";".join(filters), f"[{acc}]", in_idx
 
 
+def template_slide_seconds(item, spoken):
+    raw_pause = item.get("tailPause", 0.55)
+    tail_pause = max(0.2, min(3.0, float(raw_pause))) if type(raw_pause) in (int, float) else 0.55
+    return max(3.5, round(spoken + tail_pause, 2)) if spoken else float(item["seconds"])
+
+
+def template_cue_seconds(cues, seconds, spoken):
+    def hold_time(cue):
+        value = cue.get("holdSeconds")
+        return max(0.2, min(5.0, round(float(value), 3))) if type(value) in (int, float) and value > 0 else 0
+
+    holds = [hold_time(cue) for cue in cues]
+    hold_total = sum(max(0.2, min(5.0, cue["holdSeconds"])) for cue, hold in zip(cues, holds) if hold)
+    weights = [float(cue.get("weight", 1)) for cue in cues]
+    spoken_weights = [weight for weight, hold in zip(weights, holds) if not hold]
+    total_weight = sum(spoken_weights or weights)
+    spoken_budget = (max(0.4 * max(1, len(spoken_weights)), seconds - hold_total)
+                     if hold_total > 0 else max(1.0, spoken) if spoken else seconds)
+    elapsed = 0.0
+    for index, (hold, weight) in enumerate(zip(holds, weights)):
+        duration = (max(0.4, round(seconds - elapsed, 3)) if index == len(cues) - 1
+                    else hold or max(0.4, round(spoken_budget * weight / total_weight, 3)))
+        yield duration
+        elapsed += duration
+
+
 def render_template_video(p, job, save, speech_key, record=None, dashscope_key=""):
     settings = p["settings"]
     music, track, music_url, music_meta = resolve_video_music(p)
@@ -1785,6 +2004,7 @@ def render_template_video(p, job, save, speech_key, record=None, dashscope_key="
     base = job["id"]
     job_dir = JOBS / base
     job_dir.mkdir(parents=True, exist_ok=True)
+    cached = cached_template_speech(p)
 
     # First prepare narration WAVs and exact per-slide timing.
     slide_data = []
@@ -1794,32 +2014,12 @@ def render_template_video(p, job, save, speech_key, record=None, dashscope_key="
         line = item.get("line", "").strip()
         job["progress"] = f"准备第 {i + 1} / {len(items)} 页配音"
         save()
-        audio, spoken = shot_audio(settings, line, folder, speech_key, i, record)
-        raw_pause = item.get("tailPause", 0.55)
-        tail_pause = max(0.2, min(3.0, float(raw_pause))) if type(raw_pause) in (int, float) else 0.55
-        seconds = max(3.5, round(spoken + tail_pause, 2)) if spoken else float(item["seconds"])
+        audio, spoken = template_shot_audio(settings, line, folder, speech_key, i, record, cached)
+        seconds = template_slide_seconds(item, spoken)
         cues = item["cues"]
-        hold_total = sum(
-            max(0.2, min(5.0, float(c["holdSeconds"])))
-            for c in cues
-            if type(c.get("holdSeconds")) in (int, float) and float(c["holdSeconds"]) > 0
-        )
-        spoken_cues = [c for c in cues if not (type(c.get("holdSeconds")) in (int, float) and float(c["holdSeconds"]) > 0)]
-        total_weight = sum(float(c.get("weight", 1)) for c in (spoken_cues or cues))
-        spoken_budget = max(0.4 * max(1, len(spoken_cues)), seconds - hold_total) if hold_total > 0 else (max(1.0, spoken) if spoken else seconds)
         cue_entries = []
-        elapsed = 0.0
-        for ci, cue in enumerate(cues):
+        for cue, dur in zip(cues, template_cue_seconds(cues, seconds, spoken)):
             img_file = media_path(cue["image"]).resolve()
-            has_hold = type(cue.get("holdSeconds")) in (int, float) and float(cue["holdSeconds"]) > 0
-            if ci == len(cues) - 1:
-                dur = max(0.4, round(seconds - elapsed, 3))
-            elif has_hold:
-                dur = max(0.2, min(5.0, round(float(cue["holdSeconds"]), 3)))
-                elapsed += dur
-            else:
-                dur = max(0.4, round(spoken_budget * float(cue.get("weight", 1)) / total_weight, 3))
-                elapsed += dur
             crect = _norm_avatar_rect(cue["avatarRect"]) if "avatarRect" in cue else default_rect
             cring = _norm_progress_ring(cue.get("progressRing"))
             trans = cue.get("transition", "cut")
@@ -2227,7 +2427,238 @@ def render_template_video(p, job, save, speech_key, record=None, dashscope_key="
     return {"url": f"/media/{base}.mp4", "captions": f"/media/{base}.vtt", "music": track, "shotSeconds": shot_seconds, **music_extra}
 
 
+def svg_shot_audio(p, item, index, speech_key, record):
+    line = item["line"].strip()
+    voice = p["settings"]["voice"]
+    speaker = SPEAKERS.get(voice)
+    if not speaker:
+        return None, 0
+    fingerprint = json.dumps([p["workId"], SPEECH_RESOURCE, SPEECH_SAMPLE_RATE, speaker, line])
+    digest = hashlib.sha256(fingerprint.encode()).hexdigest()
+    audio = MEDIA / (digest + ".wav")
+    with SVG_SPEECH_LOCKS[int(digest[:1], 16)]:
+        if not audio.is_file():
+            characters = narrate(line, speaker, audio, speech_key)
+            if record:
+                record(f"speech:{index}", work_costs.speech_cost(characters, line, voice, index))
+        with wave.open(str(audio)) as wav:
+            return audio, wav.getnframes() / wav.getframerate()
+
+
+def svg_template_layout(p):
+    requested = p.get("svgLayout", {})
+    if not isinstance(requested, dict):
+        raise ValueError("SVG 信息图模板设置无效。")
+    theme = requested.get("theme", "medical")
+    presenter = requested.get("presenter", "digital")
+    profile = requested.get("pharmacist", {})
+    if theme not in ("medical", "warm") or presenter not in ("digital", "cartoon", "none") or not isinstance(profile, dict):
+        raise ValueError("SVG 信息图模板的风格或主讲人无效。")
+    pharmacist = {key: draft_content.string_field(profile, key, limit, optional=True)
+                  for key, limit in (("name", 16), ("role", 16), ("hospital", 24)) if key in profile}
+    avatar_url = profile.get("avatarImage") if presenter == "digital" else None
+    avatar = None
+    if presenter != "none":
+        default = f"/assets/template-doctor-{presenter}.jpg"
+        avatar = media_path(avatar_url or default)
+        if avatar.suffix.lower() not in (".jpg", ".png", ".webp"):
+            raise ValueError("SVG 信息图模板的主讲人肖像必须是图片。")
+    return {"title": p["title"], "theme": theme, "presenter": presenter, "pharmacist": pharmacist}, avatar
+
+
+def svg_caption_intervals(line, seconds, beats=None):
+    if not beats:
+        yield from shot_caption_intervals(line, 0, seconds, "16:9")
+        return
+    weights = [max(1, sum(not c.isspace() for c in beat["line"])) for beat in beats]
+    total = sum(weights)
+    elapsed = 0
+    for beat, weight in zip(beats, weights):
+        yield from shot_caption_intervals(beat["line"], elapsed * seconds / total, weight * seconds / total, "16:9")
+        elapsed += weight
+
+
+def svg_caption_progress(line, seconds, beats=None):
+    return [{"text": cue["text"], "end": cue["end"] / seconds}
+            for cue in svg_caption_intervals(line, seconds, beats)]
+
+
+def render_svg_video(p, job, save, speech_key, record):
+    folder = JOBS / job["id"]
+    folder.mkdir(parents=True, exist_ok=True)
+    plan, entries, stages = [], [], []
+    cues = ["WEBVTT\n"]
+    total_frames = 0
+    for index, item in enumerate(p["items"]):
+        job["progress"] = f"对齐第 {index + 1} / {len(p['items'])} 幕口播"
+        save()
+        audio, spoken = svg_shot_audio(p, item, index, speech_key, record)
+        frames, motion_frames = svg_motion.timing(spoken, item["seconds"])
+        start = total_frames / svg_motion.FPS
+        seconds = frames / svg_motion.FPS
+        intervals = list(svg_caption_intervals(item["line"].strip(), spoken or seconds, item.get("beats")))
+        cues.extend(caption_vtt({**cue, "start": start + cue["start"], "end": start + cue["end"]}) for cue in intervals)
+        plan.append({"name": item["name"], "action": item["action"], "beats": item.get("beats"),
+                     "line": item["line"].strip(), "seconds": seconds,
+                     "subtitles": [{"text": cue["text"], "end": cue["end"] / (spoken or seconds)} for cue in intervals],
+                     "frames": frames, "motionFrames": motion_frames})
+        entries.append((audio, seconds))
+        stages.append({"start": round(start, 6), "seconds": round(seconds, 6),
+                       "speechSeconds": round(spoken, 6), "action": item["action"],
+                       "actions": [beat["action"] for beat in item["beats"]] if item.get("beats") else [item["action"]]})
+        total_frames += frames
+    job["progress"] = "逐帧渲染 SVG 演示动画"
+    save()
+    source = folder / "svg-template-source.mp4"
+    if not source.is_file():
+        layout, avatar = svg_template_layout(p)
+        source = svg_motion.render(plan, folder, FFMPEG, layout, image_data_url(avatar) if avatar else "")
+    if record:
+        record("svg-render", work_costs.entry("SVG 演示动画", "本地渲染", f"{total_frames} 帧 · 720p", 0))
+    full_audio = build_template_speech_wav(entries, folder / "svg-speech.wav", folder)
+    base = job["id"]
+    captions = MEDIA / (base + ".vtt")
+    captions.write_text("\n".join(cues), encoding="utf-8")
+    music, track, music_url, music_meta = resolve_video_music(p)
+    total = total_frames / svg_motion.FPS
+    job["progress"] = "合成 SVG 动画、字幕与配音"
+    save()
+    audio_input = ["-stream_loop", "-1", "-i", music] if music else []
+    audio_filter = (
+        ["-filter_complex", music_mix(total, any(path for path, _ in entries),
+                                       is_generated=track == "auto" or str(track).startswith("library:"), music_index=2, voice_index=1),
+         "-map", "[mix]"] if music else ["-map", "1:a:0"]
+    )
+    output = MEDIA / (base + ".mp4")
+    temp = folder / "svg-output.tmp.mp4"
+    run_ffmpeg(
+        "-i", source, "-i", full_audio, *audio_input,
+        "-map", "0:v:0", *audio_filter, "-t", f"{total:.6f}",
+        "-c:v", "copy", "-c:a", "aac",
+        "-movflags", "+faststart", temp,
+    )
+    temp.replace(output)
+    return {"url": f"/media/{base}.mp4", "captions": f"/media/{base}.vtt", "music": track,
+            "burnedCaptions": True,
+            **({"musicUrl": music_url, "musicMeta": music_meta} if music_url else {}), "svgTimeline": stages,
+            "shotSeconds": [row["seconds"] for row in stages]}
+
+
+def preview_svg_speech(p, save, job, speech_key, record):
+    item = p["items"][0]
+    job["progress"] = "生成本幕口播试听"
+    save()
+    audio, spoken = svg_shot_audio(p, item, item["index"], speech_key, record)
+    job["output"] = {"url": f"/media/{audio.name}", "seconds": spoken,
+                     "subtitles": svg_caption_progress(item["line"].strip(), spoken, item.get("beats"))}
+
+
+def render_code_motion(p, job, save, speech_key, record, dashscope_key=""):
+    template_info = p.get("templateInfo")
+    script = ({"title": p["title"], "scenes": p["items"]} if template_info else
+              draft_content.code_motion_script({"title": p["title"], "scenes": p["items"]}))
+    fps = 24 if template_info else CODE_MOTION_FPS
+    appearance = code_motion_appearance(p)
+    base = job["id"]
+    folder = JOBS / base
+    folder.mkdir(parents=True, exist_ok=True)
+    shots, entries, durations = [], [], []
+    cached = cached_template_speech(p)
+    elapsed = 0.0
+    for index, scene in enumerate(script["scenes"]):
+        job["progress"] = f"准备第 {index + 1} / {len(script['scenes'])} 页口播"
+        save()
+        audio_folder = folder / str(index)
+        audio_folder.mkdir(exist_ok=True)
+        line = scene["line"].strip()
+        audio, spoken = template_shot_audio(p["settings"], line, audio_folder, speech_key, index, record, cached)
+        start = elapsed
+        if template_info:
+            seconds = template_slide_seconds(scene, spoken)
+            cues = []
+            cursor = start
+            for cue, length in zip(scene["cues"], template_cue_seconds(scene["cues"], seconds, spoken)):
+                cues.append({**cue, "start": cursor, "end": min(cursor + length, start + seconds)})
+                cursor += length
+                if cursor >= start + seconds:
+                    break
+        else:
+            seconds = max(6 * fps, math.ceil((spoken + 0.45) * fps)) / fps
+            cues = list(shot_caption_intervals(line, start, spoken or seconds, "16:9"))
+        elapsed = end = start + seconds
+        cues[-1]["end"] = end
+        shots.append({**scene, "start": start, "end": end, "captions": cues})
+        entries.append((audio, seconds))
+        durations.append(seconds)
+
+    voiced = any(audio for audio, _ in entries)
+    music, track, music_url, music_meta = resolve_video_music(p)
+    frames = round(elapsed * fps)
+    duration = frames / fps
+    avatar = p.get("avatar")
+    portrait = appearance["pharmacist"].get("avatarImage") if appearance["presenter"] == "digital" else None
+    avatar_mp4 = (
+        generate_template_avatar_video(avatar, entries, folder, job, save, dashscope_key, record)
+        if avatar and voiced else None
+    )
+    with tempfile.TemporaryDirectory(dir=folder, prefix="motion-") as temp:
+        scratch = Path(temp)
+        voice = build_template_speech_wav(entries, scratch / "speech.wav", scratch)
+        if avatar_mp4:
+            job["progress"] = "准备同版式药师头像动效"
+            save()
+            run_ffmpeg(
+                "-i", avatar_mp4, "-an", "-vf",
+                f"fps={fps},scale=180:180:force_original_aspect_ratio=increase,"
+                f"crop=180:180:(iw-ow)/2:(ih-oh)*0.2,tpad=stop_mode=clone:stop_duration={duration:.3f}",
+                "-frames:v", frames, "-start_number", 0, "-q:v", 3, scratch / "avatar-%05d.jpg",
+            )
+        manifest = scratch / "motion.json"
+        write_json(manifest, {"title": script["title"], "shots": shots, "appearance": appearance,
+                              "fps": fps, "frames": frames, "hasAvatarFrames": bool(avatar_mp4),
+                              "templateInfo": template_info,
+                              "localAvatar": media_path(portrait).as_uri() if portrait else None})
+        job["progress"] = f"逐帧渲染代码动效（{len(shots)} 页 · {frames} 帧）"
+        save()
+        result = subprocess.run(
+            [shutil.which("node"), str(ROOT / "scripts/render-code-motion.mjs"), str(manifest), str(scratch)],
+            cwd=ROOT, capture_output=True, timeout=max(300, frames / 15 + 60),
+        )
+        if result.returncode:
+            detail = result.stderr.decode("utf-8", "replace")
+            error = next((line.removeprefix("Error: ") for line in detail.splitlines()
+                          if line.startswith(("Error: ", "page."))), "请核对 Chrome 和 Playwright 安装。")
+            raise ValueError(f"代码动效渲染失败：{error[:260]}")
+        job["progress"] = "合成代码动效、配音与 MP4"
+        save()
+        music_input = ["-stream_loop", "-1", "-i", music] if music else []
+        mix = (["-filter_complex", music_mix(duration, voiced, is_generated=track.startswith("library:")),
+                "-map", "[mix]"] if music else ["-map", "0:a:0"])
+        output = scratch / "output.mp4"
+        run_ffmpeg(
+            "-i", voice, "-framerate", fps, "-start_number", 0, "-i", scratch / "frame-%05d.jpg",
+            *music_input, "-map", "1:v:0", *mix, "-t", f"{duration:.3f}",
+            "-c:v", "libx264", "-preset", "fast", "-crf", 18, "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", output,
+        )
+        captions = scratch / "captions.vtt"
+        captions.write_text("WEBVTT\n\n" + "\n".join(caption_vtt(cue) for shot in shots for cue in shot["captions"]),
+                            encoding="utf-8")
+        captions.replace(MEDIA / (base + ".vtt"))
+        (scratch / f"frame-{fps:05d}.jpg").replace(MEDIA / (base + ".jpg"))
+        output.replace(MEDIA / (base + ".mp4"))
+    return {
+        "url": f"/media/{base}.mp4", "poster": f"/media/{base}.jpg", "captions": f"/media/{base}.vtt",
+        "burnedCaptions": True, "music": track, "shotSeconds": durations,
+        **({"musicUrl": music_url, "musicMeta": music_meta} if music_url else {}),
+    }
+
+
 def render_video(p, job, save, speech_key, record=None, dashscope_key=""):
+    if p.get("codeMotion") is True:
+        return render_code_motion(p, job, save, speech_key, record, dashscope_key)
+    if p.get("svg") is True:
+        return render_svg_video(p, job, save, speech_key, record)
     if p.get("template") is True:
         return render_template_video(p, job, save, speech_key, record, dashscope_key)
     settings = p["settings"]
@@ -2359,6 +2790,18 @@ def write_draft(p, job, save, record=None):
     item = p["draft"]
     if item["type"] == "video":
         settings = p["settings"]
+        if item.get("videoMode") == "code-motion":
+            job["progress"] = "按主题撰写五幕动效脚本"
+            save()
+            job["output"] = draft_content.code_motion_draft(tracked_deepseek("代码动效脚本"), model, item)
+            return
+        if item.get("videoMode") == "svg":
+            job["progress"] = "用 DeepSeek 规划 SVG 道具、动作与口播"
+            save()
+            job["output"] = draft_content.svg_video_draft(
+                tracked_deepseek("SVG 分镜与口播"), model, item, settings.get("duration"),
+            )
+            return
         if item.get("videoMode") == "template":
             ref_duration = settings.get("duration")
             job["progress"] = (
@@ -2419,6 +2862,8 @@ def work(job, key=None, speech_key="", deepseek_key=None, dashscope_key=""):
                 job["output"] = {"images": job["results"]}
             elif p["kind"] == "draft":
                 write_draft(p, job, save, record)
+            elif p["kind"] == "svg-speech":
+                preview_svg_speech(p, save, job, speech_key, record)
             else:
                 job["output"] = render_video(p, job, save, speech_key, record, dashscope_key)
             job["status"] = "done"
@@ -2450,11 +2895,11 @@ def job_costs(job):
                 rows.append(work_costs.image_cost(settings["imageModel"], size, len(image_references(p, item)), index))
     elif p["kind"] == "video":
         output = job.get("output") or {}
-        seconds = output.get("shotSeconds") or [item["seconds"] for item in p["items"]]
+        seconds = output.get("shotSeconds") or [item.get("seconds") for item in p["items"]]
         for index, item in enumerate(p["items"]):
             folder = JOBS / job["id"] / str(index)
             state = job.get("remote", {}).get(str(index), {})
-            if p["mode"] == "ark" and not p.get("template") and (state.get("remote") or state.get("submitting")) and not any(
+            if p["mode"] == "ark" and not (p.get("template") or p.get("codeMotion")) and (state.get("remote") or state.get("submitting")) and not any(
                 k.startswith(f"video:{index}:") for k in recorded
             ):
                 # A completed clip proves the remote request succeeded. A submitted ID alone does not.
@@ -2544,6 +2989,9 @@ class Handler(SimpleHTTPRequestHandler):
                     **dashscope_connection(),
                     **mureka_connection(),
                     "encoder": bool(FFMPEG),
+                    "codeMotionReady": code_motion_ready(),
+                    "templateMotionSwitch": True,
+                    "svgMotion": {"actions": svg_motion.ACTIONS, "exportReady": svg_motion.ready(FFMPEG)},
                     **speech_connection(),
                     "keyStorage": KEY_STORAGE,
                 },
@@ -2675,7 +3123,8 @@ class Handler(SimpleHTTPRequestHandler):
                 ACTIVE.add(job_id)
                 key = current_ark_key()
                 ds_key = current_deepseek_key() if p["kind"] == "draft" else None
-                dash_key = current_dashscope_key() if p["kind"] == "video" and p.get("template") is True else ""
+                motion_avatar = p.get("codeMotion") is True and p.get("avatar") is not None
+                dash_key = current_dashscope_key() if p["kind"] == "video" and (p.get("template") is True or motion_avatar) else ""
                 threading.Thread(
                     target=work, args=(job, key, current_speech_key(), ds_key, dash_key), daemon=True
                 ).start()

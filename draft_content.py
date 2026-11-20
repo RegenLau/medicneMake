@@ -4,6 +4,8 @@ import json
 import math
 import re
 
+import svg_motion
+
 
 ARTICLE_STYLES = {
     "通俗图解版": (
@@ -84,7 +86,7 @@ def validate_request(item, settings, video_models):
             raise ValueError("请选择一种有效的文章排版。")
     elif item.get("type") == "video":
         video_mode = item.get("videoMode", "storyboard")
-        if video_mode not in ("storyboard", "template"):
+        if video_mode not in ("storyboard", "template", "code-motion", "svg"):
             raise ValueError("请选择有效的视频制作方式。")
         duration = settings.get("duration")
         if duration is not None and (type(duration) is not int or duration not in DURATIONS):
@@ -122,6 +124,123 @@ def ask_json(client, model, instruction, data, tokens):
     if result.get("error"):
         raise ValueError("模型无法为当前主题生成合适的科普稿。请调整主题后重新生成。")
     return result
+
+
+def code_motion_script(result):
+    if not isinstance(result, dict):
+        raise ValueError("代码动效脚本格式无效。")
+    title = string_field(result, "title", 16)
+    scenes = result.get("scenes")
+    if not isinstance(scenes, list) or len(scenes) != 5:
+        raise ValueError("代码动效模板需要恰好五幕。")
+    blocks = []
+    for index, (scene, counts) in enumerate(zip(scenes, ((0,), (2,), (2,), (2, 3), (0,)))):
+        if not isinstance(scene, dict):
+            raise ValueError(f"第 {index + 1} 幕的数据格式无效。")
+        labels = scene.get("labels")
+        if not isinstance(labels, list) or len(labels) not in counts or any(
+            not isinstance(label, str) or not 1 <= len(label.strip()) <= 12 for label in labels
+        ):
+            raise ValueError(f"请补全第 {index + 1} 幕的图形文字（每项最多 12 字）。")
+        try:
+            block = {
+                "name": string_field(scene, "name", 18),
+                "line": string_field(scene, "line", 42),
+                "takeaway": string_field(scene, "takeaway", 24),
+                "labels": [label.strip() for label in labels],
+            }
+        except ValueError:
+            raise ValueError(f"请补全第 {index + 1} 幕的标题、口播和屏显要点，并检查字数。") from None
+        blocks.append(block)
+    return {"title": title, "scenes": blocks}
+
+
+def code_motion_draft(client, model, item):
+    instruction = EDITORIAL_RULES + drug_rule(item.get("drug", "")) + """
+【任务】围绕用户主题写一条约 30 秒的用药科普动效视频。恰好五幕，连贯讲清一个问题。
+1. 提问引入（轨道图形），labels 为 []。
+2. 解释关键点（两组点阵），labels 放两个与口播相符的关键词。
+3. 辨析或提示（两条依次点亮的横线），labels 放两个相关概念。没有自然对比时写两项需要核对的事项，不强造对立，不用数字、百分比或疗效比较。
+4. 实用做法（清单逐项点亮），labels 放两到三条具体而短的行动。
+5. 收尾（盾牌），labels 为 []。重申最重要的行动，不引入新的医学结论。
+
+每幕建议用两句短口语，合计约 18–24 字，避免朗读超过六秒。title 最多 16 字，name 最多 18 字，
+line 最多 42 字，takeaway 为各幕画面中最重要的一句话，最多 24 字。每项 labels 最多 12 字。
+不用外链、Markdown、HTML、脚本或画面生成提示词。仅返回 JSON：
+{"title":"全片标题","scenes":[{"name":"本幕标题","line":"本幕完整口播","takeaway":"屏显要点","labels":[]}]}
+"""
+    return code_motion_script(ask_json(client, model, instruction, {
+        "主题与要求": item["topic"], "关联药品": item.get("drug", ""),
+    }, 2048))
+
+
+def svg_video_draft(client, model, item, reference_seconds):
+    duration = reference_seconds or 30
+    count = min(10, max(3, round(duration / 8)))
+    chars = max(85, round((duration - count * 0.8) * SPEECH_RATE))
+    instruction = (
+        EDITORIAL_RULES + drug_rule(item.get("drug", "")) +
+        "【任务】为信息图模板右侧编排 SVG 道具演示。每一幕讲一个重点，按口播次序写成 1 到 3 个动作片段。"
+        "关键讲解幕至少有一幕包含 2 到 3 个动作，用相关道具接力演示，前面的道具保持可见。"
+        "例如口播先说用药记录，再说何时服药，可在同一幕先让记录本落笔，再让时钟指针转动。"
+        "讲核对说明书时，可先翻开说明书，再转动药盒核对标签。这些是结构示例，按实际主题选择。"
+        "硬性要求：同一幕的 action 不得重复。翻说明书和用放大镜看说明书是同一个 leaflet 动作，放在同一段。每段句意完整并以中文标点收尾。"
+        "action 必须从允许的英文 ID 中原样选一个。label 是从该段口播提炼的画面短标签，2–8 字。"
+        "实际谈到体重才用 scale，谈到服药时间才用 clock。compare 只画药片掰开并打叉，仅用于口播明确讲不要掰开、切半或压碎药片。保留原包装或不要拆包装一律用 carton。"
+        "谈到收纳随身药品用 travel，直接咨询药师才用 consult。各幕能有自然承接，避免用空泛开场或重复总结凑镜头。"
+        "画面不展示具体剂量、包装文字、品牌和真实时间读数。"
+        f"共约 {count} 幕，每幕合计 15–55 字，总口播约 {chars} 字（含标点）。title 最多 24 字，每幕 name 最多 12 字。"
+        "不要为动作另写与主题无关的用药建议。"
+        '只返回 JSON：{"title":"作品标题","shots":[{"name":"短标题","beats":[{"action":"leaflet","label":"查说明书","line":"查一下药品说明书。"},{"action":"carton","label":"核对药盒","line":"再核对药盒上的药名。"}]}]}。'
+        "禁止返回 SVG、HTML、URL 或代码。可用动作：" +
+        "；".join(f"{key}={label}" for key, label in svg_motion.ACTIONS.items())
+    )
+    topic = {"主题与要求": item["topic"], "关联药品": item.get("drug", "")}
+    result = ask_json(client, model, instruction, topic, 3200)
+    try:
+        return parse_svg_motion_draft(result, count)
+    except ValueError as error:
+        feedback = str(error)
+    revised = ask_json(
+        client, model, instruction + "\n按校验反馈修正以下分镜，返回完整 JSON。需要避免重复道具时，可合并对应台词或改用确实匹配的另一道具。",
+        {**topic, "检查结果": feedback, "待修正草稿": result}, 3200,
+    )
+    return parse_svg_motion_draft(revised, count)
+
+
+def parse_svg_motion_draft(result, count):
+    raw = result.get("shots")
+    if not isinstance(raw, list) or not max(3, count - 1) <= len(raw) <= min(12, count + 2):
+        raise ValueError("DeepSeek 返回的 SVG 分镜数量不符合要求，可确认后重试。")
+    title = string_field(result, "title", 60)
+    shots = []
+    for index, beat in enumerate(raw, 1):
+        try:
+            if not isinstance(beat, dict):
+                raise ValueError("分镜格式无效。")
+            beats = svg_motion.validate_beats(beat.get("beats"))
+            if len({part["action"] for part in beats}) != len(beats):
+                raise ValueError("一幕重复了同一个道具。请合并对应台词，再选择不同道具或改为单动作。")
+            for part in beats:
+                if part["action"] == "compare" and not (
+                    re.search(r"掰|切成?半|压碎", part["line"]) and re.search(r"别|不|勿|误区|风险", part["line"])
+                ):
+                    raise ValueError("掰开药片的警示画面与口播不符。保留原药盒请用 carton。")
+            line = "".join(part["line"] for part in beats)
+            shot = {
+                "name": string_field(beat, "name", 24),
+                "line": line,
+                "action": beats[0]["action"],
+                "beats": beats,
+                "seconds": max(4, math.ceil(spoken_length(line) / SPEECH_RATE + SHOT_PAUSE)),
+            }
+            svg_motion.validate_shot(shot)
+            shots.append(shot)
+        except ValueError as error:
+            raise ValueError(f"DeepSeek 第 {index} 幕 SVG 分镜无效：{error} 可确认后重试。") from None
+    if not any(len(shot["beats"]) > 1 for shot in shots):
+        raise ValueError("DeepSeek 未编排同幕连续动作，可确认后重试 SVG 分镜。")
+    return {"title": title, "shots": shots}
 
 
 def article_draft(ark, model, item):

@@ -16,6 +16,26 @@
     return Boolean(w && w.type === "video" && w.videoMode === "template");
   }
 
+  function usesCodeMotion(w) {
+    return w.videoMode === "code-motion" || (isTemplateVideo(w) && w.templateContent === "code-motion");
+  }
+
+  function setRightContent(w, value) {
+    if (w.job || exportingWorkId === w.id || !["template", "code-motion"].includes(value) ||
+        !(isTemplateVideo(w) || w.videoMode === "code-motion") || usesCodeMotion(w) === (value === "code-motion")) return false;
+    if (w.blocks.length) {
+      if (!config.templateMotionSwitch) return false;
+      if (w.videoMode === "code-motion") adoptCodeMotionDeck(w);
+      w.templateContent = value;
+      if (w.video) w.videoDirty = true;
+    } else {
+      w.videoMode = value;
+      w.templateContent = undefined;
+    }
+    w.settings.ratio = "16:9";
+    return true;
+  }
+
   function ensurePharmacist(dataStore) {
     if (!dataStore.pharmacist || typeof dataStore.pharmacist !== "object") {
       dataStore.pharmacist = { ...TemplateVideo.DEFAULT_PHARMACIST };
@@ -218,30 +238,50 @@
     }).join("");
   }
 
-  function modeSwitcherHtml(w) {
-    const isTpl = isTemplateVideo(w);
-    return (
-      '<div class="formrow" style="margin-bottom:4px"><span class="label">视频形式</span></div>' +
+  function modeSwitcherHtml(w, btnFn) {
+    const motion = usesCodeMotion(w);
+    const modes = [
+      ["template", "信息图模板讲解", "左侧药师栏 · 右侧科普信息图 · 底部字幕"],
+      ["storyboard", "AI 分镜动画", "6 种全屏画风 + Seedance 图生视频，适合纯视觉分镜表达"],
+      ["svg", "SVG 演示动画", "信息图模板布局，右侧播放 SVG 动画"],
+    ];
+    return '<div class="formrow" style="margin-bottom:4px"><span class="label">视频效果</span></div>' +
       '<div class="mode-cards">' +
-      '<button type="button" class="mode-card" data-action="tpl-video-mode" data-val="template" aria-pressed="' +
-      isTpl +
-      '"><strong>信息图模板讲解 <span class="mode-badge">推荐</span></strong><span>左药师栏（数字人/卡通/名片卡）+ 右严格 16:9 科普信息图 + 明黄高亮字幕，每张卡片图都可重新生成</span></button>' +
-      '<button type="button" class="mode-card" data-action="tpl-video-mode" data-val="storyboard" aria-pressed="' +
-      !isTpl +
-      '"><strong>AI 分镜动画</strong><span>6 种全屏画风 + Seedance 图生视频，适合纯视觉分镜表达</span></button>' +
-      "</div>"
-    );
+      modes.filter(([id]) => {
+        if (id === "svg") return global.SvgMotion && config.svgMotion;
+        return true;
+      }).map(([id, label, description]) => {
+        const active = w.videoMode === id || (id === "template" && motion)
+          || !w.videoMode && id === "storyboard";
+        const locked = w.blocks.length > 0 && !active &&
+          [id, w.videoMode].some(mode => mode === "svg" || mode === "code-motion");
+        const card = '<button type="button" class="mode-card" data-action="tpl-video-mode" data-val="' + id +
+          '" aria-pressed="' + active + '"' + (locked ? ' disabled title="新建视频可选此效果"' : "") +
+          '><strong>' + label + (id === "template" ? ' <span class="mode-badge">推荐</span>' : '') +
+          '</strong><span>' + description + '</span></button>';
+        if (id !== "template" || !active || typeof config.codeMotionReady !== "boolean") return card;
+        const choices = [["template", "AI 完整图"], ["code-motion", "代码动效"]].map(([value, text]) => {
+          const selected = motion === (value === "code-motion");
+          return btnFn(text, "tpl-content-mode", "chip" + (selected ? " selected" : ""), value,
+            'aria-pressed="' + selected + '"' +
+            (exportingWorkId === w.id || (w.blocks.length && !selected && !config.templateMotionSwitch) ? " disabled" : ""));
+        }).join("");
+        return '<div class="mode-template-card">' + card +
+          '<div class="mode-template-options" role="group" aria-labelledby="template-right-content-label">' +
+          '<span class="label" id="template-right-content-label">右侧内容</span>' +
+          '<div class="chips">' + choices + '</div></div></div>';
+      }).join("") + "</div>";
   }
 
   function templateSetupHtml(w, dataStore, escFn, btnFn) {
     const theme = w.templateTheme || "medical";
     const presenter = w.templatePresenter || "digital";
     const rawAvatarMode = w.settings?.avatarMode ?? dataStore.settings?.avatarMode ?? defaults.avatarMode;
-    const avatarMode = typeof resolveAvatarMode === "function" ? resolveAvatarMode(rawAvatarMode) : (rawAvatarMode === "static" ? "static" : "videoretalk");
+    const motion = w.videoMode === "code-motion";
+    const avatarMode = motion ? codeMotionAvatarMode(w) : resolveAvatarMode(rawAvatarMode);
     const cfg = typeof config !== "undefined" ? config : global.config;
     const p = ensurePharmacist(dataStore);
     const avatarPreview = p.avatarImage || "/assets/template-doctor-digital.jpg";
-
     return (
       '<div class="formrow"><span class="label">模板视觉风格</span><div class="tpl-theme-grid">' +
       TemplateVideo.THEMES.map(
@@ -273,7 +313,9 @@
           "</button>",
       ).join("") +
       "</div>" +
-      (presenter !== "none"
+      (presenter !== "none" && w.videoMode === "svg"
+        ? '<p class="footmeta">主讲人显示静态头像</p>'
+        : presenter !== "none"
         ? '<div class="chips" style="margin-top:8px">' +
           '<button type="button" class="chip' + (avatarMode === "videoretalk" ? " selected" : "") + '" data-action="tpl-avatar-mode" data-val="videoretalk" aria-pressed="' + (avatarMode === "videoretalk") + '">声动人像（整片省钱）</button>' +
           '<button type="button" class="chip' + (avatarMode === "wan2.2-s2v" ? " selected" : "") + '" data-action="tpl-avatar-mode" data-val="wan2.2-s2v" aria-pressed="' + (avatarMode === "wan2.2-s2v") + '">万相数字人（表情生动）</button>' +
@@ -492,6 +534,7 @@
 
   function templateEditorHtml(w, dataStore, escFn, btnFn, icoFn, savedLabelFn) {
     const deck = buildDeckForWork(w, dataStore);
+    const motion = usesCodeMotion(w);
     const idx = getSlideIndex(w);
     const slide = deck.slides[idx];
     const total = deck.slides.length;
@@ -523,7 +566,7 @@
       outroSlides.filter((sl) => Boolean(sl.outroImage)).length;
     const targetTotal = deck.slides.length + outroSlides.length;
     const missingCount = collectBatchImageTargets(deck, "missing").length;
-    const pendingImages = anyBusy;
+    const pendingImages = !motion && anyBusy;
     const failedImages = deck.slides.filter((sl) => sl.job?.error).length +
       outroSlides.filter((sl) => sl.outroJob?.error).length;
     const composeBusy = exportingWorkId === w.id || pendingImages;
@@ -551,7 +594,8 @@
       '<div class="vstudio-metrics">' +
       '<span class="status-pill">信息图模板</span>' +
       '<span class="vstudio-metric" data-tpl-total-meta>共 ' + total + " 页 · 约 " + videoTotalSeconds(w) + " 秒</span>" +
-      '<span class="vstudio-stat ' + statTone + '" id="tpl-image-progress" role="status">' + escFn(imageSummary) + "</span>" +
+      (motion ? '<span class="vstudio-stat">代码动效</span>' :
+        '<span class="vstudio-stat ' + statTone + '" id="tpl-image-progress" role="status">' + escFn(imageSummary) + "</span>") +
       "</div>" +
       '<div class="vstudio-meta-line">' +
       '<span>' + escFn(metaItems.join(" · ")) + "</span>" +
@@ -560,10 +604,10 @@
       "</div></div>" +
       '<div class="vstudio-actions">' +
       btnFn(icoFn("settings") + " 模型与配音", "work-settings", "outline") +
-      (missingCount > 0
+      (!motion && missingCount > 0
         ? btnFn(`补齐缺图 (${missingCount})`, "tpl-fill-images", "secondary", "", pendingImages ? "disabled" : "")
         : "") +
-      btnFn("重做全套图", "tpl-restyle-images", "outline", "", pendingImages ? "disabled" : "") +
+      (motion ? "" : btnFn("重做全套图", "tpl-restyle-images", "outline", "", pendingImages ? "disabled" : "")) +
       (w.video && !w.videoDirty ? btnFn("查看成片", "view-draft", "secondary") : "") +
       btnFn(
         exportingWorkId === w.id ? "正在渲染高清帧..." : pendingImages ? "等待配图完成..." : "合成模板视频 MP4",
@@ -682,6 +726,7 @@
         (total <= 2 || slideAnyBusy ? "disabled " : "") + 'aria-label="删除本页" title="删除本页"',
       ) +
       "</div></div>" +
+      (motion ? codeMotionPreviewHtml() :
       '<div class="tpl-preview-box" id="tpl-live-box" data-tpl-dropzone="' + idx + '"' + (activeCue.focus === "outro" ? ' data-tpl-drop-slot="outro"' : "") + '><div class="tpl-stage-scaler" id="tpl-live-scaler">' +
       TemplateVideo.renderFrameHtml(deck, idx, {
         subtitleText: activeCue.text,
@@ -696,7 +741,7 @@
         : "") +
       "</div>" +
       slideErrorHtml +
-      cueStripHtml +
+      cueStripHtml) +
       filmstripHtml +
       "</div></div>";
 
@@ -744,7 +789,9 @@
       '" placeholder="例如：对乙酰氨基酚、布洛芬、交替"></label>' +
       renderBeatsEditorHtml(slide, idx, escFn) +
       "</section>" +
-      '<section class="vstudio-section">' +
+      (motion
+        ? '<section class="vstudio-section">' + renderFallbackFieldsHtml(slide, idx, escFn) + "</section>"
+        : '<section class="vstudio-section">' +
       '<div class="tpl-image-panel" data-tpl-dropzone="' + idx + '">' +
       '<div class="tpl-image-panel-head">' +
       '<div class="tpl-image-meta"><span class="vstudio-section-title">' + (slide.type === "cover" ? "开场封面卡片" : "主视觉卡片") + '</span>' +
@@ -775,7 +822,7 @@
           renderFallbackFieldsHtml(slide, idx, escFn) +
           "</div>") +
       "</div></section>" +
-      outroCardSectionHtml +
+      outroCardSectionHtml) +
       '<section class="vstudio-section">' +
       '<div class="tpl-profile-grid">' +
       '<label class="field">本页卡片类型<select data-tpl-slide="' + idx + '" data-tpl-slide-type="1">' +
@@ -898,6 +945,10 @@
   }
 
   function refreshLivePreview(w, dataStore) {
+    if (isTemplateVideo(w) && usesCodeMotion(w)) {
+      refreshCodeMotionPreview(w, getSlideIndex(w));
+      return;
+    }
     const scaler = document.getElementById("tpl-live-scaler");
     if (!scaler || !isTemplateVideo(w)) return;
     const deck = buildDeckForWork(w, dataStore);
@@ -1555,6 +1606,7 @@
           };
         }
         if (hooks.workCostsEnabled) payload.workId = w.id;
+        if (w.video?.url) payload.previousVideo = w.video.url;
         w.job = { target: "compose", payload };
         exportingWorkId = null;
         await hooks.sendJob(w, w);
@@ -1566,16 +1618,17 @@
     };
 
     if (usesSpeech) {
-      if (!hooks.speechKeyPresent) {
+      if (!hooks.speechKeyPresent && !w.video) {
         hooks.openApiKeys("speech");
         return;
       }
-      if (usesAvatar && !hooks.dashscopeKeyPresent) {
+      if (usesAvatar && !hooks.dashscopeKeyPresent && !w.video) {
         hooks.openApiKeys("dashscope");
         return;
       }
       hooks.authorizeSpeechOnly(w, deck.slides.length, runSynthesis, {
         usesAvatar,
+        reuseSpeech: Boolean(w.video),
         avatarModel: avatarMode,
         avatarResolution,
         presenterLabel: deck.presenter === "cartoon" ? "卡通形象" : "数字人",
@@ -1589,6 +1642,8 @@
 
   global.TemplateStudio = {
     isTemplateVideo,
+    usesCodeMotion,
+    setRightContent,
     isDefaultHookCover,
     slideHasOutro,
     ensurePharmacist,

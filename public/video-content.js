@@ -36,9 +36,11 @@ const allVideoTopics = [
 ];
 
 function videoBlocks(shots) {
-  return shots.map(({ name, line, scene, seconds, motion }) => ({
+  return shots.map(({ name, line, scene, seconds, motion, action, beats }) => ({
     name: name.slice(0, 60), line, image: "", variant: 0, seconds,
-    prompt: scene,
+    prompt: scene || "",
+    ...(action ? { action } : {}),
+    ...(beats?.length ? { beats } : {}),
     motion: motion || defaultMotion,
   }));
 }

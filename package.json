@@ -1,0 +1,7 @@
+{
+  "name": "medicne-make",
+  "private": true,
+  "dependencies": {
+    "playwright": "1.65.1"
+  }
+}

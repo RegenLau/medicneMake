@@ -640,8 +640,9 @@ window.StudioMusic = {
 };
 
 function fmtClock(sec) {
-  const m = Math.floor(sec / 60),
-    s = Math.max(0, Math.round(sec % 60));
+  const duration = Math.max(0, Math.round(sec));
+  const m = Math.floor(duration / 60),
+    s = duration % 60;
   return String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
 }
 
@@ -807,8 +808,20 @@ const settingsTabLabels = { text: "文本", image: "图片", video: "视频", vo
 function settingsTabsFor(which) {
   if (which === "article") return ["text", "image"];
   if (which === "video") return ["text", "image", "video", "voice", "music"];
+  if (which === "svg-video") return ["text", "voice", "music"];
+  if (which === "code-motion") return ["text", "voice", "music", "avatar"];
   if (which === "template-video") return ["text", "image", "video", "voice", "music", "avatar"];
   return ["text", "image", "video", "voice", "music", "avatar"];
+}
+
+function isCodeMotion(w) {
+  return w?.type === "video" && w.videoMode === "code-motion";
+}
+
+function workSettingsKind(w) {
+  if (isCodeMotion(w)) return "code-motion";
+  if (isSvgVideo(w)) return "svg-video";
+  return TemplateStudio.isTemplateVideo(w) ? "template-video" : w?.type || "all";
 }
 
 function openApiKeys(focus = "deepseek") {
@@ -823,7 +836,7 @@ function openApiKeys(focus = "deepseek") {
             ? "avatar"
             : "image";
   const w = route()[0] === "work" ? current() : null;
-  const available = settingsTabsFor(w ? (TemplateStudio.isTemplateVideo(w) ? "template-video" : w.type) : "all");
+  const available = settingsTabsFor(workSettingsKind(w));
   if (!available.includes(settingsTab)) prefs(null);
   else prefs(w);
   const inputId = focus === "music" ? "mureka" : focus;
@@ -1034,12 +1047,12 @@ function showSettingsTab(name) {
 function prefs(w) {
   modalScope = w?.id || "global";
   const s = w ? w.settings : data.settings;
-  const tpl = w && TemplateStudio.isTemplateVideo(w);
-  const styleField = w && !tpl ? field(w.type === "video" ? "画面风格" : "插图风格", "imageStyle",
+  const which = workSettingsKind(w);
+  const styleField = w && !["template-video", "svg-video", "code-motion"].includes(which) ? field(w.type === "video" ? "画面风格" : "插图风格", "imageStyle",
     styles.map((label, i) => [String(i), label]), String(w.style), true) : "";
   openModal(
     w ? "模型配置 · 本作品" : "模型配置 · 新作品默认",
-    settingsFields(s, w ? (tpl ? "template-video" : w.type) : "all", { inDialog: true, styleField, work: w }) +
+    settingsFields(s, which, { inDialog: true, styleField, work: w }) +
       '<div style="margin-top:20px">' +
       btn("完成", "close", "primary widebtn") +
       "</div>",
@@ -1057,9 +1070,10 @@ function newWork(type, example, videoMode, tplSampleIdx) {
   if (type === "article" && example == null && s.ratio === "9:16") {
     s.ratio = "16:9";
   }
-  if (effectiveVideoMode === "template") {
+  if (effectiveVideoMode === "template" || effectiveVideoMode === "svg") {
     s.ratio = "16:9";
   }
+  if (effectiveVideoMode === "svg") s.resolution = "720p";
   const tplSample = tplSampleIdx != null ? TemplateVideo.EXAMPLES[tplSampleIdx] : null;
   const w = {
     id,
@@ -1104,6 +1118,14 @@ function stageName(w) {
 function home() {
   updateTopbar();
   const draftCount = data.works.filter((w) => w.stage !== "review").length;
+  const svgEx = Boolean(config?.svgMotion);
+  const svgExample = svgEx && (exampleFilter === "all" || exampleFilter === "svg")
+    ? '<button type="button" class="sample template-sample" data-action="svg-sample"><div class="cover">' +
+      '<div class="tpl-mini-scaler">' + SvgMotion.frame(SvgMotion.templateDeck({title: "用药说明书"}, [
+        { name: "查看对应栏目", action: "leaflet", line: "先看说明书的对应栏目。" },
+      ]), 0, 0.85) + '</div><span class="tag tpl-tag">' + svgVideoLabel +
+      '</span></div><h3>看说明书时，哪里能找到答案？</h3></button>'
+    : "";
   app.innerHTML =
     '<div class="topline"><div><h1>科普制作</h1><p class="subtitle">选择内容形式，生成可编辑、可核对的用药科普草稿。</p></div>' +
     btn(
@@ -1153,9 +1175,10 @@ function home() {
     (tab === "examples"
       ? '<div class="flexwrap workFilters">' +
         [
-          ["all", `全部示例 · ${TemplateVideo.EXAMPLES.length + styles.length}`],
+          ["all", `全部示例 · ${TemplateVideo.EXAMPLES.length + styles.length + Number(svgEx)}`],
           ["template", `信息图模板讲解 · ${TemplateVideo.EXAMPLES.length}`],
           ["storyboard", `AI 分镜动画 · ${styles.length}`],
+          ...(svgEx ? [["svg", svgVideoLabel + " · 1"]] : []),
         ]
           .map(([k, label]) =>
             btn(
@@ -1167,10 +1190,10 @@ function home() {
           )
           .join("") +
         '</div><div class="gallery">' +
-        (exampleFilter !== "storyboard"
+        (["all", "template"].includes(exampleFilter)
           ? TemplateStudio.templateSampleCardsHtml(esc, ico)
           : "") +
-        (exampleFilter !== "template"
+        (["all", "storyboard"].includes(exampleFilter)
           ? styles
               .map(
                 (s, i) =>
@@ -1189,7 +1212,7 @@ function home() {
                   '</h3><div class="meta">用这个风格创作视频</div></button>',
               )
               .join("")
-          : "") +
+          : "") + svgExample +
         "</div>"
       : worksList());
   if (tab === "examples") requestAnimationFrame(() => TemplateStudio.fitTemplatePreviews());
@@ -1438,6 +1461,9 @@ function layoutChoice(value) {
 function setup(w) {
   const video = w.type === "video";
   const isTpl = TemplateStudio.isTemplateVideo(w);
+  const isSvg = isSvgVideo(w);
+  const motion = isCodeMotion(w);
+  const scriptButton = motion ? "生成五幕脚本" : isTpl ? "生成模板分镜脚本" : "生成分镜脚本";
   const hasBlocks = w.blocks.length > 0;
   let left =
     '<div class="sheet"><div class="card-head"><h2>科普主题</h2>' +
@@ -1469,14 +1495,14 @@ function setup(w) {
     const reference = videoReferenceSeconds(w);
     left +=
       '<div class="sheet"><div class="card-head"><h2>视频设置</h2></div>' +
-      TemplateStudio.modeSwitcherHtml(w) +
-      choice(
+      TemplateStudio.modeSwitcherHtml(w, btn) +
+      (motion ? "" : choice(
         "参考时长",
         videoReferenceDurations.map((seconds) => seconds === null ? "自动" : `${seconds} 秒`),
         reference === null ? "自动" : `${reference} 秒`,
         "duration",
-      ) +
-      (isTpl
+      )) +
+      (motion || isTpl || isSvg
         ? TemplateStudio.templateSetupHtml(w, data, esc, btn)
         : styleChoice(w.style, "画面风格") +
           choice(
@@ -1503,13 +1529,13 @@ function setup(w) {
         "primary widebtn",
       ) +
       btn(
-        video ? (isTpl ? "重新生成模板分镜脚本" : "重新生成分镜脚本") : "重新生成图文草稿",
+        video ? "重新" + scriptButton : "重新生成图文草稿",
         "regenerate-all",
         "secondary widebtn",
       ) +
       "</div>"
     : btn(
-        video ? (isTpl ? "生成模板分镜脚本" : "生成分镜脚本") : "生成图文草稿",
+        video ? scriptButton : "生成图文草稿",
         "generate",
         "primary widebtn",
       );
@@ -1518,16 +1544,27 @@ function setup(w) {
   const presName = TemplateVideo.PRESENTERS.find((p) => p.id === (w.templatePresenter || "digital"))?.name || "数字人";
   const refSeconds = video ? videoReferenceSeconds(w) : null;
   const summaryRows = video
-    ? isTpl
+    ? motion
+      ? [["视频形式", "信息图模板讲解"], ["右侧内容", "代码动效"], ["脚本结构", "五幕 · 约 30 秒"],
+          ["视觉风格", themeName], ["主讲形象", presName], ["输出画面", "16:9 · 1280×720"]]
+      : isTpl
       ? [
           ["视频形式", "信息图模板讲解"],
+          ["右侧内容", TemplateStudio.usesCodeMotion(w) ? "代码动效" : "AI 完整图"],
           ["参考时长", refSeconds === null ? "自动" : `${refSeconds} 秒`],
           ["视觉风格", themeName],
           ["主讲形象", presName],
           ["输出画面", "16:9 · 1280×720"],
           ["脚本结构", "按时长与主题灵活排页 + 口播字幕"],
         ]
-      : [
+      : isSvg ? [
+          ["视频效果", svgVideoLabel],
+          ["模板风格", themeName],
+          ["主讲人", presName],
+          ["分镜模型", textModelLabel(resolveTextModel(w.settings))],
+          ["输出画面", "16:9 · 1280×720"],
+          ["配音", voiceLabel(w.settings.voice)],
+        ] : [
           ["视频形式", "AI 分镜动画"],
           ["画面风格", styles[w.style]],
           ["参考时长", refSeconds === null ? "自动" : `${refSeconds} 秒`],
@@ -1557,7 +1594,7 @@ function setup(w) {
     ctaArea +
     "</div>" +
     '<p class="footmeta setup-footnote">' +
-    (video
+    (motion ? "生成后可逐幕修改画面文字和口播。" : video
       ? "生成后可在编辑页逐页修改文字、口播与配图。"
       : "生成后可逐段修改正文，并为段落重做配图。") +
     " 可随时调整" +
@@ -1646,13 +1683,13 @@ function sceneImageState(block) {
 function storyboardSwitcher(w, selected) {
   return '<nav class="scene-switcher vstudio-filmstrip" aria-label="切换分镜">' +
     w.blocks.map((block, i) => {
-      const st = sceneImageState(block);
+      const st = isSvgVideo(w) ? "SVG" : sceneImageState(block);
       const thumb = block.image
         ? '<img class="scene-thumb" src="' + esc(block.image) + '" alt="" loading="lazy">'
         : "";
       return btn(
         '<span class="scene-top"><span class="scene-name"><b>' + (i + 1) + '</b><span data-scene-name>' +
-        esc(block.name.trim() || "未命名分镜") + '</span></span><span class="scene-sec">' + block.seconds + 's</span></span>' +
+        esc(block.name.trim() || "未命名分镜") + '</span></span><span class="scene-sec">' + Number(block.seconds.toFixed(1)) + 's</span></span>' +
         '<span class="scene-foot">' + thumb + '<span class="scene-state" data-scene-state data-state="' + esc(st) + '">' +
         st + '</span></span>',
         "select-scene", "scene-choice", i, 'aria-pressed="' + (i === selected) + '"',
@@ -1664,7 +1701,7 @@ function selectScene(w, index) {
   if (!w.blocks[index]) return;
   selectedScenes.set(w, w.blocks[index]);
   render(true);
-  app.querySelector('.scene-choice[aria-pressed="true"]')?.focus({ preventScroll: true });
+  app.querySelector('.scene-choice[aria-pressed="true"], .code-motion-tabs [aria-pressed="true"]')?.focus({ preventScroll: true });
 }
 
 function revealSelectedScene() {
@@ -1744,7 +1781,7 @@ function inlineJobError(job, index = "") {
 function syncImageActions(w) {
   const pending = w.blocks.some((b) => b.job) ||
     Boolean(w.templateDeck?.slides?.some((s) => s.job || s.outroJob));
-  const missing = w.type === "video" && !TemplateStudio.isTemplateVideo(w) && w.blocks.some((b) => !b.image);
+  const missing = w.type === "video" && !TemplateStudio.isTemplateVideo(w) && !isSvgVideo(w) && w.blocks.some((b) => !b.image);
   for (const el of app.querySelectorAll(
     '[data-action="compose"], [data-action="submit"]',
   )) {
@@ -1787,7 +1824,7 @@ function syncImageActions(w) {
     restyle.disabled = pending;
     restyle.textContent = `统一重做配图（${count} 张）`;
   }
-  const imageProgress = app.querySelector("#storyboard-image-progress");
+  const imageProgress = isSvgVideo(w) ? null : app.querySelector("#storyboard-image-progress");
   if (imageProgress) {
     const ready = w.blocks.filter((b) => b.image).length;
     const failed = w.blocks.filter((b) => b.job?.error).length;
@@ -2083,6 +2120,10 @@ function templateHooks() {
 
 function editor(w) {
   const vid = w.type === "video";
+  if (isCodeMotion(w)) {
+    codeMotionEditor(w);
+    return;
+  }
   if (TemplateStudio.isTemplateVideo(w)) {
     shell(
       w,
@@ -2091,24 +2132,24 @@ function editor(w) {
       TemplateStudio.templateEditorHtml(w, data, esc, btn, ico, savedLabel),
       btn(ico("trash") + " 删除作品", "ask-delete", "textbtn danger", w.id),
     );
-    requestAnimationFrame(() => TemplateStudio.fitTemplatePreviews());
+    if (TemplateStudio.usesCodeMotion(w)) bindCodeMotionPreview(w, TemplateStudio.getSlideIndex(w));
+    else requestAnimationFrame(() => TemplateStudio.fitTemplatePreviews());
     return;
   }
   const s = w.settings;
   const music = s.music ?? defaults.music;
   if (vid) {
     const ranges = shotRanges(w.blocks);
-    const totalSec = videoTotalSeconds(w);
+    const totalSec = Number(videoTotalSeconds(w).toFixed(1));
     const selected = Math.max(0, w.blocks.indexOf(selectedScenes.get(w)));
     const block = w.blocks[selected];
     const total = w.blocks.length;
     const activeTab = storyboardTabs.get(w) || "shot";
+    const isSvg = isSvgVideo(w);
     const stats = block ? speechStats(block.line, block.seconds) : { label: "", over: false };
     const metaItems = [
-      config.videoModels[s.videoModel][0],
-      s.ratio,
-      styles[w.style],
-      s.resolution,
+      ...(isSvg ? [textModelLabel(resolveTextModel(s)), "16:9", "720p"] :
+        [config.videoModels[s.videoModel][0], s.ratio, styles[w.style], s.resolution]),
       voiceLabel(s.voice),
       ...(config.videoBackgroundMusic ? [musicSummaryLabel(w)] : []),
       ...(w.drug ? ["药品：" + w.drug] : []),
@@ -2118,9 +2159,9 @@ function editor(w) {
       '<div class="sheet vstudio-bar">' +
       '<div class="vstudio-summary">' +
       '<div class="vstudio-metrics">' +
-      '<span class="status-pill">AI 分镜动画</span>' +
+      '<span class="status-pill">' + (isSvg ? svgVideoLabel : "AI 分镜动画") + "</span>" +
       '<span class="vstudio-metric">共 ' + total + " 幕 · " + totalSec + " 秒</span>" +
-      '<span class="vstudio-stat" id="storyboard-image-progress" role="status"></span>' +
+      (isSvg ? '' : '<span class="vstudio-stat" id="storyboard-image-progress" role="status"></span>') +
       "</div>" +
       '<div class="vstudio-meta-line">' +
       "<span>" + esc(metaItems.join(" · ")) + "</span>" +
@@ -2129,12 +2170,12 @@ function editor(w) {
       "</div></div>" +
       '<div class="vstudio-actions">' +
       btn(ico("settings") + " 模型与参数", "work-settings", "outline") +
-      btn("生成缺失配图", "fill-video-images", "secondary") +
-      btn("统一重做配图", "restyle-images", "outline", "", "hidden") +
+      (isSvg ? "" : btn("生成缺失配图", "fill-video-images", "secondary") +
+        btn("统一重做配图", "restyle-images", "outline", "", "hidden")) +
       (w.video && !w.videoDirty ? btn("查看成片", "view-draft", "secondary") : "") +
-      btn("用方舟生成视频", "compose", "primary") +
+      btn(isSvg ? "导出 MP4" : "用方舟生成视频", "compose", "primary") +
       "</div></div>" +
-      arkKeyWarning();
+      (isSvg ? "" : arkKeyWarning());
 
     const stage =
       '<div class="vstudio-stage"><div class="sheet vstudio-stage-card">' +
@@ -2159,7 +2200,7 @@ function editor(w) {
       esc((block?.name || "").trim() || "未命名分镜") +
       "</span>" +
       (block
-        ? '<span class="time-range" id="timerange-' + selected + '">' + ranges[selected] + " · " + block.seconds + "秒</span>"
+        ? '<span class="time-range" id="timerange-' + selected + '">' + ranges[selected] + " · " + Number(block.seconds.toFixed(1)) + "秒</span>"
         : "") +
       "</div>" +
       '<div class="shot-tools">' +
@@ -2185,28 +2226,35 @@ function editor(w) {
         (total <= 2 ? "disabled " : "") + 'aria-label="移除本幕" title="移除本幕"',
       ) +
       "</div></div>" +
-      (block ? '<div class="vstudio-storyboard-canvas">' + pictureControls(w, block, selected) + "</div>" : "") +
+      (block ? '<div class="vstudio-storyboard-canvas">' +
+        (isSvg ? svgStageHtml(w, block, selected) : pictureControls(w, block, selected)) + "</div>" : "") +
       '<div class="vstudio-rail">' +
       '<div class="vstudio-rail-head">' +
       '<span class="vstudio-rail-label">分镜顺序（' + total + ' 幕 · 支持 ← → 切换）</span>' +
       '<div class="row" style="gap:10px">' +
-      btn("按口播校准时长", "time-shots", "textbtn") +
+      (isSvg ? "" : btn("按口播校准时长", "time-shots", "textbtn")) +
       btn(ico("plus") + " 添加一幕", "append", "textbtn", "", total >= maxVideoShots ? "disabled" : "") +
       "</div></div>" +
       storyboardSwitcher(w, selected) +
       "</div></div></div>";
 
+    const hasSvgBeats = isSvg && Boolean(block?.beats?.length);
+    const svgActionPanel = isSvg && block && !hasSvgBeats
+      ? '<label class="field">道具动作<select data-svg-action="' + selected + '">' +
+        opts(Object.entries(config.svgMotion.actions), block.action) + '</select></label>'
+      : "";
     const shotPanel = block
       ? '<div class="vstudio-panel">' +
         '<section class="vstudio-section">' +
         '<label class="field">本幕标题<input maxlength="60" data-block="' + selected + '" data-key="name" value="' + esc(block.name) + '" placeholder="例如：核对药盒有效期"></label>' +
-        '<div style="margin-top:12px"><div class="field-head"><label class="label" for="line-' + selected + '">口播台词</label>' +
-        '<span class="pace' + (stats.over ? " warn" : "") + '" id="pace-' + selected + '">' + esc(stats.label) + "</span></div>" +
-        '<textarea id="line-' + selected + '" rows="4" maxlength="450" class="autogrow" data-block="' + selected + '" data-key="line" placeholder="填写这一幕药师讲解的口播句子">' +
+        (hasSvgBeats ? svgBeatFields(block, selected) : '<div style="margin-top:12px"><div class="field-head"><label class="label" for="line-' + selected + '">口播台词</label>' +
+        '<span class="pace' + (!isSvg && stats.over ? " warn" : "") + '" id="pace-' + selected + '">' + esc(isSvg ? "按实际口播对齐" : stats.label) + "</span></div>" +
+        '<textarea id="line-' + selected + '" rows="4" maxlength="' + (isSvg ? 100 : 450) +
+        '" class="autogrow" data-block="' + selected + '" data-key="line" placeholder="填写这一幕药师讲解的口播句子">' +
         esc(block.line) +
-        "</textarea></div></section>" +
-        '<section class="vstudio-section">' +
-        '<div class="tpl-two-col">' +
+        "</textarea></div>") + "</section>" +
+        (hasSvgBeats ? "" : '<section class="vstudio-section">' +
+        (isSvg ? svgActionPanel : '<div class="tpl-two-col">' +
         '<label class="field">单镜时长<select data-seconds="' + selected + '">' +
         opts(
           Array.from(
@@ -2221,17 +2269,17 @@ function editor(w) {
         "</div></div>" +
         '<label class="field" style="margin-top:12px">画面动作与镜头衔接<textarea rows="3" maxlength="400" data-block="' + selected + '" data-key="motion">' +
         esc(block.motion || defaultMotion) +
-        "</textarea></label>" +
-        "</section></div>"
+        "</textarea></label>") +
+        "</section>") + "</div>"
       : "";
 
     const globalPanel =
       '<div class="vstudio-panel">' +
       '<section class="vstudio-section">' +
       '<label class="field">作品标题<input maxlength="300" data-bind="title" value="' + esc(w.title) + '" placeholder="输入清晰易懂的科普标题"></label>' +
-      '<label class="field" style="margin-top:12px">全片场景与道具<textarea rows="3" maxlength="240" class="autogrow" data-bind="setting" placeholder="例如：家中客厅的浅色木桌，桌上有白色药箱、一盒浅蓝色药盒和米色记录本">' +
+      (isSvg ? TemplateStudio.templateSetupHtml(w, data, esc, btn) : '<label class="field" style="margin-top:12px">全片场景与道具<textarea rows="3" maxlength="240" class="autogrow" data-bind="setting" placeholder="例如：家中客厅的浅色木桌，桌上有白色药箱、一盒浅蓝色药盒和米色记录本">' +
       esc(w.setting || "") +
-      '</textarea></label><p class="footmeta">生成分镜图时沿用这里的场景与道具描述，让各幕视觉保持连贯。</p>' +
+      '</textarea></label><p class="footmeta">生成分镜图时沿用这里的场景与道具描述，让各幕视觉保持连贯。</p>') +
       "</section>" +
       '<section class="vstudio-section">' +
       '<span class="label">背景音乐</span>' +
@@ -2249,7 +2297,7 @@ function editor(w) {
       '<aside class="vstudio-inspector"><div class="sheet vstudio-inspector-card">' +
       '<div class="vstudio-tabs" role="tablist" aria-label="分镜编辑面板切换">' +
       '<button type="button" class="vstudio-tab" role="tab" data-action="sb-inspector-tab" data-val="shot" aria-selected="' + (activeTab === "shot") + '">本幕脚本 <span class="vstudio-tab-sub">分镜 ' + (selected + 1) + "</span></button>" +
-      '<button type="button" class="vstudio-tab" role="tab" data-action="sb-inspector-tab" data-val="global" aria-selected="' + (activeTab === "global") + '">全片设定 <span class="vstudio-tab-sub">' + esc(styles[w.style]) + "</span></button>" +
+      '<button type="button" class="vstudio-tab" role="tab" data-action="sb-inspector-tab" data-val="global" aria-selected="' + (activeTab === "global") + '">全片设定 <span class="vstudio-tab-sub">' + esc(isSvg ? svgVideoLabel : styles[w.style]) + "</span></button>" +
       "</div>" +
       (activeTab === "global" ? globalPanel : shotPanel) +
       "</div></aside>";
@@ -2261,6 +2309,7 @@ function editor(w) {
       '<div class="vstudio">' + topBar + '<div class="vstudio-grid">' + stage + inspector + "</div></div>",
       btn(ico("trash") + " 删除作品", "ask-delete", "textbtn danger", w.id),
     );
+    if (isSvg) TemplateStudio.fitTemplatePreviews();
     return;
   }
 
@@ -2325,7 +2374,8 @@ function contentSig(w) {
     w.title,
     w.lead,
     w.drug,
-    w.blocks.map((b) => [b.name, b.line, b.image]),
+    w.blocks.map((b) => isCodeMotion(w) ? [b.name, b.line, b.takeaway, b.labels] :
+      isSvgVideo(w) ? [b.name, b.line, b.action, b.beats] : [b.name, b.line, b.image]),
     w.video?.url,
   ]);
   let h = 0;
@@ -2368,11 +2418,13 @@ function checklist(w) {
 function detail(w) {
   const vid = w.type === "video",
     isTpl = TemplateStudio.isTemplateVideo(w),
+    isSvg = isSvgVideo(w),
     reviewing = w.stage === "review";
   const ranges = vid ? shotRanges(w.blocks) : [];
+  const motion = isCodeMotion(w);
 
   const metaPills = [
-    vid ? (isTpl ? "信息图模板视频" : "视频科普") : "图文科普 · " + w.layout,
+    vid ? (motion ? "代码动效" : isTpl ? "信息图模板视频" : isSvg ? svgVideoLabel : "视频科普") : "图文科普 · " + w.layout,
     ...(w.drug ? ["关联药品：" + w.drug] : []),
     ...(vid
       ? []
@@ -2385,10 +2437,10 @@ function detail(w) {
     ...(vid
       ? [
           w.settings.ratio,
-          videoTotalSeconds(w) + " 秒",
+          Number(videoTotalSeconds(w).toFixed(1)) + " 秒",
           voiceLabel(w.settings.voice),
           ...(videoMusicBadge(w.video) ? [videoMusicBadge(w.video)] : []),
-          isTpl ? "1280×720 模板成片" : "方舟动态成片",
+          motion || isTpl ? "1280×720 模板成片" : isSvg ? "1280×720 SVG 成片" : "方舟动态成片",
         ]
       : []),
   ];
@@ -2399,9 +2451,9 @@ function detail(w) {
       '"><video controls playsinline class="video-player" src="' +
       esc(w.video.url) +
       '" poster="' +
-      esc(w.blocks[0]?.image || "") +
+      esc(w.video.poster || w.blocks[0]?.image || "") +
       '">' +
-      (isTpl
+      (isTpl || w.video.burnedCaptions
         ? ""
         : '<track default kind="subtitles" srclang="zh" label="中文" src="' +
           esc(w.video.captions) +
@@ -2424,7 +2476,7 @@ function detail(w) {
             "</span></div><p>" +
             esc(b.line) +
             "</p>" +
-            (isTpl ? "" : pictureControls(w, b, i, true)) +
+            (isTpl || motion ? "" : pictureControls(w, b, i, true)) +
             "</section>",
         )
         .join("") +
@@ -2550,7 +2602,9 @@ function jobView(w) {
     : btn(w.job.partial ? "重试配图规划" : "继续此任务", "retry", "primary");
   shell(
     w,
-    failed ? "生成任务需要处理" : writing ? (w.type === "article" ? "正在生成文章" : "正在生成分镜脚本") : "正在合成视频",
+    failed ? "生成任务需要处理" :
+      w.job.target === "svg-speech" ? "正在生成口播试听" :
+      writing ? (w.type === "article" ? "正在生成文章" : "正在生成分镜脚本") : "正在合成视频",
     1,
     '<div class="view-wrap sheet"><div class="row">' +
       (failed ? "" : '<span class="spinner" aria-hidden="true"></span>') +
@@ -2644,6 +2698,12 @@ async function poll(w, owner = w) {
             w.viewingSetup = false;
           } else if (job.target === "write-draft") {
             applyWrittenDraft(w, result.output);
+          } else if (job.target === "svg-speech") {
+            const item = job.payload.items[0];
+            const block = w.blocks[item.index];
+            if (block?.line.trim() === item.line) {
+              block.svgSpeech = { ...result.output, line: item.line, voice: job.payload.settings.voice };
+            }
           } else {
             const single = owner !== w;
             result.output.images.forEach((img, i) => {
@@ -2734,14 +2794,21 @@ function createJob(w, target, items, settings = w.settings, id = crypto.randomUU
   const payload = {
     id,
     mode: "ark",
-    kind: target === "compose" ? "video" : target === "write-draft" ? "draft" : "images",
+    kind: target === "compose" ? "video" : target === "write-draft" ? "draft" : target === "svg-speech" ? "svg-speech" : "images",
     settings: { ...settings, mode: "ark" },
     style: w.style,
     items,
   };
-  if (config.workCosts) payload.workId = w.id;
+  if (config.workCosts || isSvgVideo(w)) payload.workId = w.id;
   if (payload.kind === "images" && config.imageStyleReference) payload.styleReference = true;
-  if (w.type === "video" && payload.kind !== "draft") payload.storyboard = true;
+  if (payload.kind === "video" && isCodeMotion(w)) {
+    payload.codeMotion = true;
+    payload.title = w.title.trim();
+  } else if (payload.kind === "video" && isSvgVideo(w)) {
+    payload.svg = true;
+    payload.title = w.title.trim();
+    payload.svgLayout = svgTemplateLayout(w);
+  } else if (w.type === "video" && payload.kind !== "draft") payload.storyboard = true;
   return { target, payload };
 }
 
@@ -2754,8 +2821,13 @@ async function startJob(w, target, items, extra = {}, settings = w.settings) {
 
 function authorize(w, count, kind, fn, voicedCount = count) {
   const writing = kind === "draft";
-  const isArk = !writing;
-  const usesSpeech = kind === "video" && w.settings.voice !== "无配音" && voicedCount > 0;
+  const motion = kind === "code-motion";
+  const isArk = !writing && !motion;
+  const usesSpeech = (kind === "video" || motion) && w.settings.voice !== "无配音" && voicedCount > 0;
+  if (motion && !config.codeMotionReady) {
+    notify("代码动效需要 Node.js、Playwright 和 FFmpeg。请按使用说明安装。", "warn");
+    return;
+  }
   if (writing && !config.textModel) {
     notify("请重启本地工作台，再刷新页面以启用 DeepSeek 文字生成。", "warn");
     return;
@@ -2772,6 +2844,7 @@ function authorize(w, count, kind, fn, voicedCount = count) {
     openApiKeys("speech");
     return;
   }
+  if (motion && !usesSpeech) return fn();
   retryPayload = fn;
   const reference = videoReferenceSeconds(w);
   const articlePictures = writing && w.type === "article"
@@ -2784,7 +2857,8 @@ function authorize(w, count, kind, fn, voicedCount = count) {
     : "";
   const chosenTextModel = resolveTextModel(w.settings);
   const textSummary = writing ? "<p>将使用 DeepSeek " +
-    (w.type === "video" ? (TemplateStudio.isTemplateVideo(w)
+    (w.type === "video" ? (isCodeMotion(w) ? "按主题生成五幕画面文字和口播，目标时长约 30 秒。" :
+      isSvgVideo(w) ? "按主题规划 SVG 道具、动作与口播。" : TemplateStudio.isTemplateVideo(w)
       ? (reference === null
         ? "按主题内容灵活规划模板分镜与口播脚本。"
         : `参考 ${reference} 秒（控制在 ${reference + 4} 秒以内）按主题内容规划模板分镜与口播脚本。`)
@@ -2792,7 +2866,8 @@ function authorize(w, count, kind, fn, voicedCount = count) {
         ? "按主题生成完整口播，再根据口播安排分镜时长。"
         : `参考 ${reference} 秒（控制在 ${reference + 4} 秒以内）生成完整口播，再根据口播安排分镜时长。`)) :
       w.job?.partial ? "根据已生成的正文规划配图。" : "生成完整文章，再按正文决定哪些段落需要配图。") +
-    "预计提交 " + count + " 次文本请求，按 token 计费。</p>" + pictureSummary +
+    (isSvgVideo(w) ? "预计提交 1 次文本请求，分镜校验未通过时校正 1 次，按 token 计费。</p>" :
+      "预计提交 " + count + " 次文本请求，按 token 计费。</p>") + pictureSummary +
     '<div class="summary-kv" style="margin-top:12px"><span class="pill">' + esc(textModelLabel(chosenTextModel)) + "</span></div>" : "";
   const arkSummary = !isArk ? "" : (
     "<p>将按当前参数提交最多 <b>" +
@@ -2819,7 +2894,8 @@ function authorize(w, count, kind, fn, voicedCount = count) {
     : "";
   openModal(
     writing ? "确认使用 DeepSeek 生成" : isArk ? "确认使用火山方舟生成" : "确认使用火山语音配音",
-    textSummary + arkSummary + speechSummary + '<div class="actions dialog-actions">' +
+    textSummary + arkSummary + (motion ? "<p>五幕画面在本地渲染。</p>" : "") +
+    speechSummary + '<div class="actions dialog-actions">' +
       btn("取消", "close", "secondary") +
       btn("确认提交并计费", "confirm-paid", "primary") +
       "</div>",
@@ -2855,7 +2931,10 @@ function authorizeSpeechOnly(w, count, fn, options = {}) {
   const genModeDesc = avatarModel === "wan2.2-s2v"
     ? "按 ≤18 秒自动分片连续生成对口型视频"
     : "整片一次生成连续对口型视频";
-  const body = usesAvatar
+  const body = options.reuseSpeech
+    ? "<p>优先复用原配音" + (usesAvatar ? "与数字人素材" : "") +
+      "。只有本机找不到可用素材时，才会调用相应服务并计费。</p>"
+    : usesAvatar
     ? "<p>本次合成将调用以下两项按量服务：</p>" +
       "<ul style=\"margin:8px 0 12px 18px;line-height:1.7\">" +
       "<li><b>豆包语音（" + esc(voiceLabel(w.settings.voice)) + "）</b>：为 <b>" + count + "</b> 页口播生成配音，按口播字符数计费；</li>" +
@@ -2868,7 +2947,8 @@ function authorizeSpeechOnly(w, count, fn, options = {}) {
       esc(voiceLabel(w.settings.voice)) +
       "），仅按口播字符数计费。</p>";
   openModal(
-    usesAvatar ? "确认合成动态数字人模板视频" : "确认合成模板视频并生成配音",
+    options.reuseSpeech ? "确认重新合成 MP4" :
+      usesAvatar ? "确认合成动态数字人模板视频" : "确认合成模板视频并生成配音",
     body +
       '<div class="actions dialog-actions">' +
       btn("取消", "close", "secondary") +
@@ -2884,6 +2964,15 @@ function generate(w) {
     return;
   }
   if (w.job || w.blocks.some((b) => b.job && !b.job.error)) return;
+  if (isCodeMotion(w)) {
+    return authorize(w, 1, "draft", () => {
+      const settings = { ...w.settings, ratio: "16:9", duration: 30, textModel: resolveTextModel(w.settings) };
+      const job = createJob(w, "write-draft", [], settings);
+      job.payload.draft = { type: "video", videoMode: "code-motion", topic: w.topic.trim(), drug: w.drug };
+      w.job = job;
+      return sendJob(w);
+    });
+  }
   if (TemplateStudio.isTemplateVideo(w)) {
     return authorize(w, 1, "draft", () => {
       const settings = {
@@ -2909,7 +2998,8 @@ function generate(w) {
     if (w.type === "video") settings.duration = videoReferenceSeconds(w);
     const job = createJob(w, "write-draft", [], settings);
     job.payload.draft = { type: w.type, topic: w.topic.trim(), layout: w.layout, drug: w.drug };
-    if (w.type === "video") job.payload.draft.pharmacist = w.avatar === pharmacistAvatar;
+    if (isSvgVideo(w)) job.payload.draft.videoMode = "svg";
+    else if (w.type === "video") job.payload.draft.pharmacist = w.avatar === pharmacistAvatar;
     else {
       // Keep the confirmed image settings and reuse the same request IDs when resuming this draft.
       job.articleImages = {
@@ -2945,6 +3035,10 @@ function installDraft(w, plan) {
 function applyWrittenDraft(w, output) {
   const { title } = output;
   if (w.type === "video") {
+    if (isCodeMotion(w)) {
+      installDraft(w, { title, blocks: output.scenes.map(scene => ({ ...scene, seconds: 6 })) });
+      return;
+    }
     if (TemplateStudio.isTemplateVideo(w) && Array.isArray(output.slides)) {
       TemplateStudio.installTemplateDeck(w, output, data);
       return;
@@ -3187,6 +3281,7 @@ async function copyArticleText(w) {
 }
 
 function render(preserveScroll = false) {
+  if (stopSvgPlayback) stopSvgPlayback();
   if (!config) return;
   const prevScroll = window.scrollY;
   const w = current();
@@ -3265,12 +3360,31 @@ document.addEventListener("input", (e) => {
       w.templateDeck.pharmacist = { ...p };
       if (w.video) w.videoDirty = true;
       TemplateStudio.refreshLivePreview(w, data);
+    } else if (isCodeMotion(w) && w.video) {
+      w.videoDirty = true;
+    } else if (isSvgVideo(w)) {
+      if (w.video) w.videoDirty = true;
+      refreshSvgStage(w);
     }
     if (w) changed(w);
     else save();
     return;
   }
   if (!w) return;
+  if (isSvgVideo(w) && el.dataset.svgBeat !== undefined && el.dataset.svgField !== "action") {
+    updateSvgBeat(w, el);
+    return;
+  }
+  if (isCodeMotion(w) && (el.hasAttribute("data-motion-title") || el.dataset.motionScene !== undefined)) {
+    const selected = Number(el.dataset.motionScene ?? Math.max(0, w.blocks.indexOf(selectedScenes.get(w))));
+    if (el.hasAttribute("data-motion-title")) w.title = el.value;
+    else if (el.dataset.motionLabel !== undefined) w.blocks[selected].labels[Number(el.dataset.motionLabel)] = el.value;
+    else w.blocks[selected][el.dataset.motionField] = el.value;
+    if (w.video) w.videoDirty = true;
+    changed(w);
+    refreshCodeMotionPreview(w, selected);
+    return;
+  }
   if (TemplateStudio.isTemplateVideo(w) && w.templateDeck) {
     const deck = w.templateDeck;
     if (el.dataset.tplGlobal === "title") {
@@ -3396,6 +3510,10 @@ document.addEventListener("input", (e) => {
   }
   if (el.dataset.bind) {
     w[el.dataset.bind] = el.value;
+    if (isSvgVideo(w) && el.dataset.bind === "title") {
+      if (w.video) w.videoDirty = true;
+      refreshSvgStage(w);
+    }
     if (el.id === "topic") {
       const counter = $("#chars");
       if (counter) counter.textContent = el.value.length + " / 300";
@@ -3418,6 +3536,7 @@ document.addEventListener("input", (e) => {
     const block = w.blocks[idx];
     if (!block) return;
     block[el.dataset.key] = el.value;
+    if (isSvgVideo(w)) refreshSvgStage(w);
     if (el.dataset.key === "name" && w.type === "video") {
       const label = el.value.trim() || "未命名分镜";
       const sceneName = app.querySelector('.scene-choice[data-val="' + idx + '"] [data-scene-name]');
@@ -3429,7 +3548,9 @@ document.addEventListener("input", (e) => {
     if (el.dataset.key === "line") {
       const paceEl = $("#pace-" + idx);
       if (paceEl) {
-        if (w.type === "video") {
+        if (isSvgVideo(w)) {
+          paceEl.textContent = "按实际口播对齐";
+        } else if (w.type === "video") {
           const st = speechStats(el.value, block.seconds);
           paceEl.textContent = st.label;
           paceEl.classList.toggle("warn", st.over);
@@ -3604,6 +3725,19 @@ document.addEventListener("change", (e) => {
     $("#checklist").classList.remove("attention");
     return;
   }
+  if (isSvgVideo(w) && el.dataset.svgBeat !== undefined && el.dataset.svgField === "action") {
+    updateSvgBeat(w, el);
+    return;
+  }
+  if (el.dataset.svgAction !== undefined && isSvgVideo(w)) {
+    const block = w.blocks[Number(el.dataset.svgAction)];
+    if (!block || !Object.hasOwn(config.svgMotion.actions, el.value)) return;
+    block.action = el.value;
+    if (w.video) w.videoDirty = true;
+    changed(w);
+    render(true);
+    return;
+  }
   if (el.dataset.seconds !== undefined && w) {
     const block = w.blocks[Number(el.dataset.seconds)];
     block.seconds = Number(el.value);
@@ -3633,7 +3767,8 @@ document.addEventListener("change", (e) => {
   const val = el.type === "checkbox" ? el.checked : el.value;
   applySettingMutation(s, k, val);
   if (s === data.settings && w && w.stage === "setup" && !w.blocks.length) {
-    if (!(k === "ratio" && TemplateStudio.isTemplateVideo(w))) {
+    if (!((k === "ratio" || k === "resolution") && isSvgVideo(w)) &&
+        !(k === "ratio" && (TemplateStudio.isTemplateVideo(w) || isCodeMotion(w)))) {
       applySettingMutation(w.settings, k, val);
       changed(w);
     }
@@ -3706,12 +3841,22 @@ document.addEventListener("click", async (e) => {
       case "sample":
         newWork("video", Number(v), "storyboard");
         break;
+      case "svg-sample":
+        newWork("video", 3, "svg");
+        break;
       case "tpl-sample":
         newWork("video", null, "template", Number(v));
         break;
       case "tpl-video-mode":
         if (w && w.type === "video") {
+          if (v === "template" && isCodeMotion(w)) break;
+          if (w.blocks.length && w.videoMode !== v &&
+              (["svg", "code-motion"].includes(v) || isSvgVideo(w) || isCodeMotion(w))) break;
           w.videoMode = v;
+          if (v === "svg" || v === "code-motion") {
+            w.settings.ratio = "16:9";
+            w.settings.resolution = "720p";
+          }
           if (v === "template") {
             w.settings.ratio = "16:9";
             w.templateTheme ||= "medical";
@@ -3721,12 +3866,21 @@ document.addEventListener("click", async (e) => {
           render(true);
         }
         break;
+      case "tpl-content-mode":
+        if (w && TemplateStudio.setRightContent(w, v)) {
+          changed(w);
+          render(true);
+          app.querySelector('[data-action="tpl-content-mode"][aria-pressed="true"]')?.focus({ preventScroll: true });
+        }
+        break;
       case "tpl-theme":
         if (w) {
           w.templateTheme = v;
           if (w.templateDeck) {
             w.templateDeck.theme = v;
             if (w.video) w.videoDirty = true;
+          } else if ((isSvgVideo(w) || isCodeMotion(w)) && w.video) {
+            w.videoDirty = true;
           }
           changed(w);
           render(true);
@@ -3734,10 +3888,13 @@ document.addEventListener("click", async (e) => {
         break;
       case "tpl-presenter":
         if (w) {
+          if (isCodeMotion(w) && !w.templatePresenter) w.settings.avatarMode = "static";
           w.templatePresenter = v;
           if (w.templateDeck) {
             w.templateDeck.presenter = v;
             if (w.video) w.videoDirty = true;
+          } else if ((isSvgVideo(w) || isCodeMotion(w)) && w.video) {
+            w.videoDirty = true;
           }
           changed(w);
           render(true);
@@ -3890,6 +4047,8 @@ document.addEventListener("click", async (e) => {
         if (w?.templateDeck) {
           w.templateDeck.pharmacist.avatarImage = "";
           if (w.video) w.videoDirty = true;
+        } else if ((isSvgVideo(w) || isCodeMotion(w)) && w.video) {
+          w.videoDirty = true;
         }
         if (w) changed(w);
         else save();
@@ -3897,9 +4056,11 @@ document.addEventListener("click", async (e) => {
         break;
       }
       case "tpl-avatar-mode":
-        if (w && TemplateStudio.isTemplateVideo(w)) {
+        if (w && (TemplateStudio.isTemplateVideo(w) || isCodeMotion(w))) {
           const nextMode = resolveAvatarMode(v);
-          if (resolveAvatarMode(w.settings.avatarMode ?? defaults.avatarMode) !== nextMode) {
+          const currentMode = isCodeMotion(w) ? codeMotionAvatarMode(w) : resolveAvatarMode(w.settings.avatarMode ?? defaults.avatarMode);
+          if (currentMode !== nextMode) {
+            w.templatePresenter ||= "digital";
             w.settings.avatarMode = nextMode;
             if (w.video) w.videoDirty = true;
             changed(w);
@@ -3909,6 +4070,10 @@ document.addEventListener("click", async (e) => {
         break;
       case "tpl-compose":
         if (w && TemplateStudio.isTemplateVideo(w)) {
+          if (TemplateStudio.usesCodeMotion(w)) {
+            await composeTemplateMotion(w);
+            break;
+          }
           await TemplateStudio.composeTemplateVideo(w, data, {
             notify,
             render,
@@ -4017,6 +4182,7 @@ document.addEventListener("click", async (e) => {
       case "resume-edit":
         w.viewingSetup = false;
         if (w.type === "article") w.editing = true;
+        else if (w.type === "video") w.stage = "script";
         changed(w);
         render();
         break;
@@ -4128,10 +4294,23 @@ document.addEventListener("click", async (e) => {
       case "restyle-images":
         restyleBlockImages(w);
         break;
+      case "svg-play":
+        if (isSvgVideo(w) && w.blocks[Number(v)]) svgPreview(w, w.blocks[Number(v)], el);
+        break;
+      case "svg-speech":
+        if (isSvgVideo(w) && w.blocks[Number(v)]) prepareSvgSpeech(w, Number(v), el);
+        break;
+      case "code-motion-compose":
+        if (isCodeMotion(w)) await composeCodeMotion(w);
+        break;
       case "compose": {
         if (!w.title.trim()) {
           notify("请先填写作品标题", "warn");
           return;
+        }
+        if (isSvgVideo(w)) {
+          await composeSvgVideo(w);
+          break;
         }
         if (w.blocks.some((b) => !b.line.trim())) {
           notify("请补全每一幕的口播台词", "warn");
@@ -4221,6 +4400,7 @@ document.addEventListener("click", async (e) => {
           variant: 0,
           seconds: sec,
           motion: defaultMotion,
+          ...(isSvgVideo(w) ? { action: "consult" } : {}),
         });
         if (vid && w.video) w.videoDirty = true;
         changed(w);
@@ -4301,6 +4481,20 @@ document.addEventListener("click", async (e) => {
         }
         if (j.target === "write-draft") {
           authorize(w, w.type === "article" && !j.partial ? 2 : 1, "draft", () => sendJob(w));
+          break;
+        }
+        if (j.payload.codeMotion) {
+          authorizeCodeMotion({ ...w, settings: j.payload.settings }, j.payload.items.length,
+            () => sendJob(w, owner), j.payload.avatar, Boolean(j.payload.previousVideo));
+          break;
+        }
+        if (j.payload.template) {
+          const work = { ...w, settings: j.payload.settings };
+          if (work.settings.voice === "无配音") await sendJob(w, owner);
+          else authorizeSpeechOnly(work, j.payload.items.length, () => sendJob(w, owner), {
+            reuseSpeech: Boolean(j.payload.previousVideo), usesAvatar: Boolean(j.payload.avatar?.enabled),
+            avatarModel: j.payload.avatar?.model, avatarResolution: j.payload.avatar?.resolution,
+          });
           break;
         }
         authorize(
