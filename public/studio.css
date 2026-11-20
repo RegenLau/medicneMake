@@ -3926,3 +3926,5 @@ dialog p b {
 .stage-adjusted { color: var(--warning, #9b5320); }
 .stage-kind-badge { display: inline-block; margin-right: 8px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; }
 .stage-overwrite { display: flex; gap: 8px; align-items: center; }
+
+.motion-preview-video { display: block; width:100%; border-radius:var(--radius-md); margin: 4px 0 12px; }

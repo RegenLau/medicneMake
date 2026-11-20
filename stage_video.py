@@ -4,6 +4,7 @@ from urllib.parse import unquote
 
 import asset_library
 import draft_content
+import motion_asset
 import svg_motion
 
 
@@ -42,6 +43,7 @@ def sound_settings(p, library):
 def stage_input(p, library, media_path):
     layout_id = p.get("layoutId", CLASSIC_LAYOUT)
     layout, layout_item, layout_path = library.layout(layout_id)
+    layout = {**layout, "supports": asset_library.layout_supports(layout, layout_item)}
     compatible = p.get("compatibility")
     if compatible is not None and (not isinstance(compatible, str) or compatible not in LEGACY_KINDS):
         raise ValueError("旧作品的呈现方式无效。")
@@ -164,6 +166,15 @@ def validate_shot(item, layout, compatible, library, media_path, pictures, used)
             raise ValueError("请选择有效的 SVG 道具动作。")
         base.update(svg)
         slide.update(type="explain", layoutMode="explain", action=action, svgBeats=beats)
+    elif kind == "mg":
+        fit = content.get("fit", "auto")
+        overlay = content.get("overlay", "points")
+        if fit not in motion_asset.FIT_OPTIONS or overlay not in motion_asset.OVERLAY_OPTIONS:
+            raise ValueError("MG 动画的时长或文字叠加设置无效。")
+        motion, asset, path = library.motion(content.get("assetId"))
+        used.append((path, asset))
+        base.update(motionAsset=motion, overlay=overlay, fit=fit, items=items)
+        slide.update(type="explain", layoutMode="explain", headline=points.get("headline") or base["name"])
     else:
         move = content.get("move", "still")
         if move not in ("still", "zoom", "pan"):

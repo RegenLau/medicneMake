@@ -3,13 +3,13 @@
 /* Shared work data and editor for the infographic video modes. */
 const StageStudio = (() => {
   const CLASSIC = "builtin:layout/info-classic";
-  const kinds = {image: "AI 完整图", card: "信息图动效", scene: "代码动效场景", svg: "SVG 演示动画", asset: "素材库素材"};
+  const kinds = {image: "AI 完整图", card: "信息图动效", scene: "代码动效场景", svg: "SVG 演示动画", asset: "素材库素材", mg: "MG 动画"};
   const layoutLoads = new Map();
   const selected = new WeakMap();
   const inspector = new WeakMap();
   const pointVisual = () => config.stageCatalog.pointVisuals;
   const copy = value => structuredClone(value);
-  const fixedKinds = Object.keys(kinds).filter(kind => kind !== "asset");
+  const fixedKinds = Object.keys(kinds).filter(kind => !["asset","mg"].includes(kind));
   const draftModes = [["mix","Mix 模式（推荐）"], ...fixedKinds.map(kind => [kind,kinds[kind]])];
   let soundContext;
   const decodedSounds = new Map();
@@ -47,6 +47,7 @@ const StageStudio = (() => {
     if (kind === "svg") return { kind, beats: [{action:config.stageCatalog.svgDefault, label:shot.name.slice(0, 10) || "用药要点", line:shot.line.slice(0, 55) || "请核对用药信息"}] };
     if (kind === "card") return { kind, motionStyle: "auto" };
     if (kind === "asset") return { kind, move: "still" };
+    if (kind === "mg") return {kind,fit:"auto",overlay:"points"};
     return { kind, image: "", imagePrompt: "" };
   }
 
@@ -187,6 +188,7 @@ const StageStudio = (() => {
       Object.assign(slide,{action:"leaflet",svgBeats:shot.beats});
     }
     if (kind === "asset") Object.assign(shot,{assetUrl:StudioAssets.url("builtin:svg/reading-list"),move:"zoom"});
+    if (kind === "mg") Object.assign(shot,{motionAssetUrl:StudioAssets.motionUrl("builtin:lottie/capsule"),fit:"auto",overlay:"points"});
     return {layout, previewStage:stage, deck:{title:"看懂用药信息",shortTitle:"用药信息",theme,presenter:"digital",
       pharmacist:{...TemplateStudio.ensurePharmacist(data)},chapters:["先核对","再记录"],slides:[slide]}, shots:[shot]};
   }
@@ -296,7 +298,7 @@ const StageStudio = (() => {
           contentImage: content.kind === "image" ? content.image : "", outroImage:content.kind === "image" ? content.outroImage : "",
           focusRegions:content.focusRegions, motionStyle:content.motionStyle,
           ...(content.kind === "svg" ? {action:content.beats[0]?.action, svgBeats:content.beats, layoutMode:"explain"} : {}),
-          ...(["card", "scene", "asset"].includes(content.kind) ? {layoutMode:"explain"} : {})};
+          ...(["card", "scene", "asset", "mg"].includes(content.kind) ? {layoutMode:"explain"} : {})};
       })};
   }
 
@@ -317,7 +319,8 @@ const StageStudio = (() => {
       const spec = {...content, kind:content.kind, name:shot.name, line:shot.line, items:shot.points.items,
         takeaway:shot.points.takeaway, listTitle:shot.points.listTitle, labels:shot.points.highlightWords, start, end, captions,
         ...(content.libraryArtId ? {libraryArtUrl:StudioAssets.url(content.libraryArtId)} : {}),
-        ...(content.assetId ? {assetUrl:StudioAssets.url(content.assetId)} : {})};
+        ...(content.assetId ? (content.kind === "mg"
+          ? {motionAssetUrl:StudioAssets.motionUrl(content.assetId)} : {assetUrl:StudioAssets.url(content.assetId)}) : {})};
       start = end;
       return spec;
     });
@@ -344,6 +347,11 @@ const StageStudio = (() => {
     if (c.kind === "asset") return '<div class="asset-inline">' + btn(esc(c.assetName || "选择图片或 SVG"), "stage-choose", "outline", "asset") +
       (c.assetId ? btn("移除素材", "stage-clear", "textbtn", "asset") : "") + '</div>' +
       select("素材运动", "move", [["still", "静止"], ["zoom", "缓慢推近"], ["pan", "平移"]], c.move);
+    if (c.kind === "mg") return '<div class="asset-inline">' +
+      btn(esc(c.assetName || "选择 MG 动画"),"stage-choose","outline","mg") +
+      (c.assetId ? btn("移除动画","stage-clear","textbtn","mg") : "") + '</div>' +
+      select("文字叠加", "overlay", [["points","标题和要点"],["title","只显示标题"],["off","关闭"]], c.overlay || "points") +
+      select("时长适配", "fit", [["auto","自动适配"],["hold","原速并定格"]], c.fit || "auto");
     if (c.kind === "card") return select("动效方式", "motionStyle", window.CODE_MOTION_MOTION_CHOICES, c.motionStyle);
     if (c.kind === "scene") return '<div class="tpl-two-col">' + select("分镜版式", "visual", pair(CODE_MOTION_VISUALS), c.visual) +
       select("动效方式", "motion", pair(CODE_MOTION_MOTIONS), c.motion) + select("主题图形", "motif", pair(CODE_MOTION_MOTIFS), c.motif) +
@@ -693,7 +701,7 @@ const StageStudio = (() => {
     const p = w.stagePlan;
     if (p.shots.some(shot => !shot.name.trim() || !shot.line.trim())) return notify("请填写每幕标题和口播", "warn");
     if (p.shots.some(shot => shot.content.kind === "image" && !shot.content.image)) return notify("请补齐 AI 完整图，或切换本幕方式。", "warn");
-    if (p.shots.some(shot => shot.content.kind === "asset" && !shot.content.assetId)) return notify("请选择每一幕的素材。", "warn");
+    if (p.shots.some(shot => ["asset","mg"].includes(shot.content.kind) && !shot.content.assetId)) return notify("请选择每一幕的素材。", "warn");
     const appearance = deck(w);
     const avatarMode = w.videoMode === "svg" ? "static"
       : w.videoMode === "code-motion" ? codeMotionAvatarMode(w) : resolveAvatarMode(w.settings.avatarMode);
@@ -779,9 +787,9 @@ const StageStudio = (() => {
       }
     } else if (action === "stage-choose" && shot) {
       const content = shot.content;
-      StudioAssets.pick(value === "sfx" ? ["sfx"] : value === "image" ? ["image"] : ["image", "svg"], item => {
+      StudioAssets.pick(value === "sfx" ? ["sfx"] : value === "image" ? ["image"] : value === "mg" ? ["lottie"] : ["image", "svg"], item => {
         if (value === "image") content.image = item.url;
-        else if (value === "asset") { content.assetId=item.id; content.assetName=item.name; }
+        else if (value === "asset" || value === "mg") { content.assetId=item.id; content.assetName=item.name; }
         else if (value === "sfx") { shot.sfxId=item.id; shot.sfxName=item.name; }
         else { content.libraryArtId=item.id; content.libraryArtName=item.name; }
         shot.variants[content.kind] = content;
@@ -790,7 +798,7 @@ const StageStudio = (() => {
       return true;
     } else if (action === "stage-clear" && shot) {
       if (value === "sfx") { delete shot.sfxId; delete shot.sfxName; }
-      for (const key of ({image:["image"],asset:["assetId","assetName"],art:["libraryArtId","libraryArtName"]}[value] || [])) delete shot.content[key];
+      for (const key of ({image:["image"],asset:["assetId","assetName"],mg:["assetId","assetName"],art:["libraryArtId","libraryArtName"]}[value] || [])) delete shot.content[key];
       touch(w,true);
     } else if (action === "stage-collect" && shot?.content.image) {
       StudioAssets.collect(shot.content.image,{name:shot.name,topic:w.topic,ratio:"16:9",style:w.templateTheme || "medical",prompt:shot.content.imagePrompt || ""});

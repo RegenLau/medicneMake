@@ -1,7 +1,7 @@
 "use strict";
 
 const StudioAssets = (() => {
-  const categories = { image: "图片", svg: "SVG 图形", motion: "SVG 动效", music: "背景音乐", sfx: "音效", font: "字体", layout: "布局" };
+  const categories = { image: "图片", svg: "SVG 图形", motion: "SVG 动效", music: "背景音乐", sfx: "音效", font: "字体", layout: "布局", lottie: "Lottie 动画" };
   const kinds = Object.keys(categories);
   const rights = '<label class="field">授权<select name="license" required><option value="">请选择授权</option>' +
     '<option>自制或已获授权</option><option>CC0</option><option>CC BY</option><option>AI 生成 · 已核对服务条款</option></select></label>' +
@@ -25,6 +25,7 @@ const StudioAssets = (() => {
   }
 
   function media(item) {
+    if (item.kind === "lottie") return `<div class="asset-thumb"><img src="${esc(item.thumbnailUrl)}" alt="${esc(item.name)}" loading="lazy"></div>`;
     if (item.kind === "image" || item.kind === "svg") {
       return `<div class="asset-thumb ${item.kind}"><img src="${esc(item.url)}" alt="${esc(item.name)}" loading="lazy"></div>`;
     }
@@ -39,8 +40,11 @@ const StudioAssets = (() => {
 
   function card(item, picking) {
     const tags = item.tags?.length ? `<ul class="asset-tags">${item.tags.map((tag) => `<li>${esc(tag)}</li>`).join("")}</ul>` : "";
-    const terms = item.termsUrl ? `<a href="${esc(item.termsUrl)}" target="_blank" rel="noopener">授权</a>` : "";
+    const termsUrl = item.termsUrl || item.sourceUrl;
+    const terms = termsUrl ? `<a href="${esc(termsUrl)}" target="_blank" rel="noopener">授权</a>` : "";
     const actions = [
+      item.kind === "lottie" ? `<button type="button" class="outline" data-lib-motion="${esc(item.id)}">预览动画</button>` : "",
+      item.kind === "lottie" && !picking ? `<button type="button" class="outline" data-lib-palette="${esc(item.id)}">编辑配色</button>` : "",
       item.kind === "layout" ? `<button type="button" class="outline" data-lib-layout="${esc(item.id)}">预览布局</button>` : "",
       item.kind === "layout" && !picking ? `<button type="button" class="outline" data-lib-copy="${esc(item.id)}">复制为我的布局</button>` : "",
       item.kind === "motion" ? `<button type="button" class="outline" data-lib-play="${esc(item.id)}">播放预览</button>` : "",
@@ -49,7 +53,7 @@ const StudioAssets = (() => {
         ? `<button type="button" class="textbtn" data-lib-archive="${esc(item.id)}">下架</button>` : "",
     ].join("");
     return `<article class="asset-card">${media(item)}<div class="asset-card-info">
-      <h3>${esc(item.name)}</h3><p>${esc([item.meta?.topic, item.meta?.ratio].filter(Boolean).join(" · "))}</p>
+      <h3>${esc(item.name)}</h3><p>${esc(item.useFor || [item.meta?.topic, item.meta?.ratio].filter(Boolean).join(" · "))}</p>
       ${tags}<p class="asset-license">${esc([item.source === "project" ? "项目收藏" : item.source === "upload" ? "本地上传" : item.source === "copy" ? "我的布局" : item.source, item.license, item.credit].filter(Boolean).join(" · "))} ${terms}</p>
       ${actions ? `<div class="asset-actions">${actions}</div>` : ""}
       </div></article>`;
@@ -74,14 +78,14 @@ const StudioAssets = (() => {
     if (uploadButton) uploadButton.onclick = () => upload(selected, options.manage);
 
     function draw() {
-      if (uploadButton) uploadButton.textContent = selected === "layout" ? "上传布局" : "上传素材";
+      if (uploadButton) uploadButton.textContent = selected === "layout" ? "上传布局" : selected === "lottie" ? "上传 Lottie" : "上传素材";
       root.querySelectorAll("[data-lib-kind]").forEach((b) => {
         b.setAttribute("aria-pressed", String(b.dataset.libKind === selected));
         b.classList.toggle("selected", b.dataset.libKind === selected);
       });
       const needle = query.trim().toLowerCase();
       const matches = items.filter((item) => item.kind === selected &&
-        [item.name, ...(item.tags || []), item.meta?.topic, item.meta?.style, item.meta?.ratio]
+        [item.name, ...(item.tags || []), item.useFor, item.meta?.topic, item.meta?.style, item.meta?.ratio]
           .filter(Boolean).join(" ").toLowerCase().includes(needle));
       if (options.hints) {
         const { topic, ratio, style } = options.hints;
@@ -132,7 +136,7 @@ const StudioAssets = (() => {
     root.addEventListener("click", async (event) => {
       const button = event.target.closest("button");
       if (!button) return;
-      const { libKind, libUse, libArchive, libPlay, libLayout, libCopy } = button.dataset;
+      const { libKind, libUse, libArchive, libPlay, libLayout, libCopy, libMotion, libPalette } = button.dataset;
       if (libKind) {
         selected = libKind;
         if (!picking) pageKind = selected;
@@ -142,6 +146,9 @@ const StudioAssets = (() => {
         if (!item) return;
         dialog.close();
         options.onPick(item);
+      } else if (libMotion || libPalette) {
+        const item = items.find(({id}) => id === (libMotion || libPalette));
+        if (item) motionModal(item, Boolean(libPalette), picking ? options : null);
       } else if (libLayout || libCopy) {
         const item = items.find(({id}) => id === (libLayout || libCopy));
         if (item) layoutModal(item, Boolean(libCopy), options.manage);
@@ -205,12 +212,13 @@ const StudioAssets = (() => {
     }
   }
 
-  const layoutKinds = {image:"AI 完整图", card:"信息图动效", scene:"代码动效场景", svg:"SVG 演示动画", asset:"素材库素材"};
+  const layoutKinds = {image:"AI 完整图", card:"信息图动效", scene:"代码动效场景", svg:"SVG 演示动画", asset:"素材库素材", mg:"MG 动画"};
   function layoutModal(item, copy, managing) {
     openModal(copy ? "复制为我的布局" : item.name, `<div class="asset-form layout-panel"><p role="status">正在读取布局…</p></div>`, "asset-form");
     const panel = dialogBody.querySelector(".layout-panel");
     jsonRequest(item.url).then(definition => {
       if (!panel.isConnected) return;
+      definition.supports = [...new Set([...definition.supports,...(item.supports || [])])];
       const entry = Object.keys(layoutKinds).filter(kind => definition.supports.includes(kind));
       const stages = [["explain","正文"], ...Object.keys(definition.stages || {}).map(stage => [stage, stage === "hook" ? "开场" : "结尾"])];
       panel.innerHTML = `<form class="layout-form">
@@ -335,7 +343,101 @@ const StudioAssets = (() => {
     });
   }
 
+  function parsePalette(value) {
+    let palette;
+    try { palette = JSON.parse(value.trim() || "{}"); }
+    catch { throw Error("主题色映射需要有效的 JSON 对象。"); }
+    if (!palette || Array.isArray(palette) || typeof palette !== "object") throw Error("主题色映射需要有效的 JSON 对象。");
+    if (!Object.entries(palette).every(([key,token]) => /^#[0-9a-f]{6}$/i.test(key) && config.motionPalette.includes(token))) {
+      throw Error("配色映射需要使用 #RRGGBB 和主题色变量。");
+    }
+    return Object.fromEntries(Object.entries(palette).map(([key,token]) => [key.toLowerCase(),token]));
+  }
+
+  function paletteField(palette) {
+    const values = config.motionPalette || [];
+    return `<label class="field">主题色映射 JSON<textarea name="palette" rows="3" placeholder='#RRGGBB → 主题色变量'>${esc(JSON.stringify(palette,null,2))}</textarea></label>
+      <p class="small">可用变量 ${esc(values.join("、"))}</p>`;
+  }
+
+  function motionModal(item, editing, picker) {
+    openModal(editing ? "编辑主题配色" : item.name,`<form class="asset-form motion-asset-form">
+      <label class="field">主题<select name="theme">${opts([["medical","医疗蓝"],["warm","暖色"]],"medical")}</select></label>
+      <iframe class="layout-stage-preview" src="/stage.html" title="MG 动画实时预览"></iframe>
+      <label class="field">动画进度<input name="progress" type="range" min="0" max="3.99" step=".01" value=".6"></label>
+      ${editing ? `<label class="field">另存名称<input name="name" maxlength="80" required></label>${paletteField(item.palette || {})}
+        <div class="asset-actions"><button type="submit" class="primary">另存配色</button></div>` :
+       `<video class="motion-preview-video" src="${esc(item.previewUrl)}" poster="${esc(item.thumbnailUrl)}" controls muted playsinline preload="metadata"></video>
+        ${picker ? '<button type="button" class="outline" data-motion-back>返回选素材</button>' : ""}`}
+      <p class="banner err" role="alert" hidden></p></form>`,"asset-form");
+    const form = dialogBody.querySelector("form");
+    const iframe = form.querySelector("iframe");
+    const errorBox = form.querySelector('[role="alert"]');
+    if (editing) form.elements.name.value = (item.name + " 配色副本").slice(0,80);
+    form.querySelector("[data-motion-back]")?.addEventListener("click",()=>pick(picker.kinds,picker.onPick,picker.hints));
+    const definition = {
+      canvas:{w:1280,h:720},
+      regions:{media:{x:0,y:0,w:100,h:100,component:"media"}},
+    };
+    let asset;
+    let version = 0;
+    async function draw() {
+      if (!asset || typeof iframe.contentWindow.setPlan !== "function") return;
+      const ticket = ++version;
+      const palette = editing ? parsePalette(form.elements.palette.value) : asset.palette;
+      const plan = StageStudio.samplePlan(definition,form.elements.theme.value,"mg");
+      plan.shots[0].overlay = "off";
+      plan.shots[0].motionAsset = {...asset,palette};
+      plan.deck.presenter = "none";
+      plan.deck.slides[0].line = "";
+      plan.shots[0].captions = [];
+      await iframe.contentWindow.setPlan(plan);
+      if (version === ticket && form.isConnected) iframe.contentWindow.drawFrame(Number(form.elements.progress.value));
+    }
+    const showError = error => { errorBox.textContent = error.message; errorBox.hidden = false; };
+    iframe.addEventListener("load",()=>draw().catch(showError));
+    jsonRequest(motionUrl(item.id)).then(data=>{
+      asset = data;
+      return draw();
+    }).catch(showError);
+    form.addEventListener("input",event=>{
+      if (event.target.name === "theme" || event.target.name === "palette") {
+        errorBox.hidden = true;
+        draw().catch(showError);
+      } else if (event.target.name === "progress" && asset) {
+        iframe.contentWindow.drawFrame(Number(event.target.value));
+      }
+    });
+    form.addEventListener("submit",async event=>{
+      event.preventDefault();
+      if (!editing) return;
+      const action = form.querySelector('button[type="submit"]');
+      action.disabled = true;
+      errorBox.hidden = true;
+      try {
+        const result = await post("motion-palette",{id:item.id,name:form.elements.name.value,
+          palette:parsePalette(form.elements.palette.value)});
+        if (form.isConnected) dialog.close();
+        pageKind = "lottie";
+        render(true);
+        notify(`「${result.item.name}」已另存到素材库`,"ok");
+      } catch(error) { showError(error); action.disabled = false; }
+    });
+  }
+
+  function uploadLottie() {
+    submitForm("上传 Lottie", '<label class="field">Lottie JSON 文件<input name="file" type="file" accept=".json" required></label>' +
+      '<label class="field">适用内容<input name="useFor" maxlength="180" required></label>' +
+      '<label class="field">原始链接（外部素材填写）<input name="sourceUrl" type="url" maxlength="400"></label>' +
+      '<label class="field">页面授权原文（外部素材填写）<textarea name="licenseText" maxlength="1600" rows="2"></textarea></label>' +
+      paletteField({}), async ({file,palette,...fields}) => {
+        if (!file.size || file.size > 1024*1024) throw Error("Lottie 文件不能超过 1 MB。");
+        return (await post("upload",{...fields,palette:parsePalette(palette),kind:"lottie",data:await base64(file)})).item;
+      });
+  }
+
   function upload(selected, managing) {
+    if (selected === "lottie") return uploadLottie();
     const layout = selected === "layout";
     const label = layout ? "布局 JSON 文件" : "图片或 SVG";
     const types = layout ? ".json" : ".png,.jpg,.jpeg,.webp,.svg";
@@ -357,5 +459,7 @@ const StudioAssets = (() => {
     return `/library/${encodeURIComponent(id)}`;
   }
 
-  return { page, pick, collect, url, manageLayouts, layoutDiagram };
+  const motionUrl = id => "/api/library/motion/" + encodeURIComponent(id);
+
+  return { page, pick, collect, url, manageLayouts, layoutDiagram, motionUrl };
 })();

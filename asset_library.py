@@ -10,7 +10,9 @@ import threading
 import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
+
+import motion_asset
 
 
 SVG_NS = "http://www.w3.org/2000/svg"
@@ -19,7 +21,7 @@ SVG_ELEMENTS = frozenset("svg g path rect circle ellipse line polyline polygon d
 SVG_ATTRIBUTES = frozenset("id viewBox width height x y x1 x2 y1 y2 cx cy r rx ry d points fill fill-rule stroke stroke-width stroke-linecap stroke-linejoin stroke-dasharray stroke-dashoffset opacity fill-opacity stroke-opacity transform gradientTransform gradientUnits spreadMethod offset stop-color stop-opacity clip-path clip-rule clipPathUnits mask maskUnits maskContentUnits preserveAspectRatio font-size font-weight text-anchor dominant-baseline dx dy".split())
 LOCAL_PAINT = re.compile(r"url\(#[A-Za-z_][\w.:-]*\)")
 USER_ID = re.compile(r"user:[0-9a-f]{32}")
-LIMITS = {"image": 8 * 1024 * 1024, "svg": 300 * 1024, "layout": 64 * 1024}
+LIMITS = {"image": 8 * 1024 * 1024, "svg": 300 * 1024, "layout": 64 * 1024, "lottie": motion_asset.LOTTIE_LIMIT}
 LAYOUT_VARIANTS = {
     "header": ("pill-title+chapter-rail",),
     "chapters": ("rail",),
@@ -29,7 +31,7 @@ LAYOUT_VARIANTS = {
     "disclaimer": ("note",),
     "progress": ("bar",),
 }
-LAYOUT_CONTENTS = frozenset(("image", "card", "scene", "svg", "asset"))
+LAYOUT_CONTENTS = frozenset(("image", "card", "scene", "svg", "asset", "mg"))
 REGION_FIELDS = frozenset(("x", "y", "w", "h", "component"))
 
 
@@ -86,6 +88,11 @@ def validate_layout(definition):
             or ("avatarSize" in slots and not _layout_number(slots["avatarSize"], 20, 540))):
         raise ValueError("布局头像大小无效。")
     return definition
+
+
+def layout_supports(definition, item):
+    return list(dict.fromkeys([*definition["supports"],
+                               *(kind for kind in item.get("extraSupports", ()) if kind in LAYOUT_CONTENTS)]))
 
 
 def clean_svg(data):
@@ -192,7 +199,11 @@ class LocalLibrary:
 
     @staticmethod
     def public(item):
-        return {**{key: value for key, value in item.items() if key != "file"}, "url": asset_url(item["id"])}
+        row = {**{key: value for key, value in item.items() if key not in ("file", "previewDigest")}, "url": asset_url(item["id"])}
+        if item.get("previewDigest"):
+            prefix = "/library-preview/" + quote(item["id"], safe="")
+            row.update(thumbnailUrl=prefix + "/poster.jpg", previewUrl=prefix + "/preview.mp4")
+        return row
 
     def resolve(self, asset_id, kinds=()):
         if not isinstance(asset_id, str):
@@ -219,7 +230,7 @@ class LocalLibrary:
             if item["kind"] != "layout":
                 continue
             definition, _, _ = self.layout(item["id"])
-            layouts.append({**item, "aspect": definition["aspect"], "supports": definition["supports"],
+            layouts.append({**item, "aspect": definition["aspect"], "supports": layout_supports(definition, item),
                             "regions": definition["regions"]})
         return layouts
 
@@ -231,7 +242,54 @@ class LocalLibrary:
         return self.add("layout", json.dumps(definition, ensure_ascii=False).encode("utf-8"),
                         fields, None, "copy", origin=origin)
 
-    def upload(self, payload, ffmpeg):
+    def motion(self, asset_id):
+        path, item = self.resolve(asset_id, ("lottie",))
+        return motion_asset.lottie_package(path.read_bytes(), item.get("palette", {})), item, path
+
+    def motion_preview_file(self, asset_id, name):
+        _, item = self.resolve(asset_id, ("lottie",))
+        if name not in ("poster.jpg", "preview.mp4") or not item.get("previewUrl", "").startswith("/library-preview/"):
+            raise ValueError("素材预览不存在。")
+        key = self._read_user()
+        entry = next((row for row in key if row["id"] == asset_id), {})
+        path = self.root / "previews" / entry.get("previewDigest", "") / name
+        if not path.is_file():
+            raise ValueError("素材预览不存在。")
+        return path
+
+    def add_motion(self, kind, raw, fields, preview_renderer, source, origin_id=None):
+        if kind != "lottie":
+            raise ValueError("请选择 Lottie 动画文件。")
+        asset = motion_asset.lottie_package(raw, fields.get("palette", {}))
+        metadata = {key: text_field(fields, key, limit, required=required)
+                    for key, limit, required in (("useFor", 180, True), ("sourceUrl", 400, False),
+                                                  ("licenseText", 1600, False))}
+        text_field(fields, "name", 80, required=True)
+        text_field(fields, "license", 120, required=True)
+        text_field(fields, "credit", 200, required=True)
+        if metadata["sourceUrl"]:
+            url = urlparse(metadata["sourceUrl"])
+            if url.scheme != "https" or not url.hostname or url.username or not metadata["licenseText"]:
+                raise ValueError("外部动画请填写 HTTPS 原始链接及页面授权原文。")
+        cache_key = hashlib.sha256(json.dumps(asset, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        folder = self.root / "previews" / cache_key
+        if not all((folder / file).is_file() for file in ("poster.jpg", "preview.mp4")):
+            preview_renderer(asset, folder)
+        data = json.dumps(asset["animation"], ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        extra = {**{key: value for key, value in metadata.items() if value},
+                 "palette": asset["palette"], "markers": asset["markers"], "previewDigest": cache_key}
+        if origin_id:
+            extra["originId"] = origin_id
+        return self.add(kind, data, fields, None, source, extra=extra)
+
+    def copy_motion_palette(self, payload, preview_renderer):
+        path, item = self.resolve(payload.get("id"), ("lottie",))
+        fields = {**item, "name": text_field(payload, "name", 80, required=True),
+                  "tags": ", ".join(item.get("tags", [])), "palette": payload.get("palette"),
+                  "credit": item.get("credit") or f'来源素材：{item["name"]}'}
+        return self.add_motion("lottie", path.read_bytes(), fields, preview_renderer, "copy", item["id"])
+
+    def upload(self, payload, ffmpeg, preview_renderer=None):
         kind = payload.get("kind")
         if kind not in LIMITS:
             raise ValueError("请选择图片、SVG 或布局 JSON。")
@@ -239,9 +297,11 @@ class LocalLibrary:
             raw = base64.b64decode(payload["data"], validate=True)
         except (KeyError, TypeError, ValueError, binascii.Error) as error:
             raise ValueError("文件数据无效。") from error
+        if kind == "lottie":
+            return self.add_motion(kind, raw, payload, preview_renderer, "upload")
         return self.add(kind, raw, payload, ffmpeg, "upload")
 
-    def add(self, kind, data, fields, ffmpeg, source, origin=None):
+    def add(self, kind, data, fields, ffmpeg, source, origin=None, extra=None):
         if not 0 < len(data) <= LIMITS[kind]:
             raise ValueError("文件大小无效。图片上限 8 MB，SVG 上限 300 KB，布局上限 64 KB。")
         if kind == "svg":
@@ -252,6 +312,8 @@ class LocalLibrary:
             except (UnicodeDecodeError, json.JSONDecodeError) as error:
                 raise ValueError("请选择 UTF-8 编码的布局 JSON 文件。") from error
             data = json.dumps(validate_layout(definition), sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ext = ".json"
+        elif kind == "lottie":
             ext = ".json"
         else:
             ext = check_image(data, ffmpeg)
@@ -268,7 +330,7 @@ class LocalLibrary:
         sha = hashlib.sha256(data).hexdigest()
         with self.lock:
             entries = self._read_user()
-            for item in entries if kind != "layout" else ():
+            for item in entries if kind not in ("layout", "lottie") else ():
                 if item.get("sha256") == sha and item["kind"] == kind and not item.get("archived"):
                     return self.public(item)
             files = self.root / "files"
@@ -288,6 +350,7 @@ class LocalLibrary:
                     item["originId"] = origin["id"]
                     if origin.get("termsUrl"):
                         item["termsUrl"] = origin["termsUrl"]
+            item.update(extra or {})
             entries.insert(0, item)
             self._write_user(entries)
             return self.public(item)

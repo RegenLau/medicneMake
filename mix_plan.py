@@ -2,6 +2,7 @@
 
 import re
 
+import asset_library
 import draft_content
 import stage_video
 import svg_motion
@@ -16,8 +17,8 @@ def validate_setup(item, library):
     mode = item.get("presentation")
     if mode not in (*FIXED_MODES, "mix"):
         raise ValueError("请选择制作方式。")
-    layout, _, _ = library.layout(item.get("layoutId"))
-    supports = layout["supports"]
+    layout, layout_item, _ = library.layout(item.get("layoutId"))
+    supports = asset_library.layout_supports(layout, layout_item)
     if mode == "mix" and not any(kind in supports for kind in ("card", "scene", "svg")):
         raise ValueError("Mix 需要支持信息图动效、代码动效场景或 SVG 的布局。")
     if mode != "mix" and mode not in supports:
@@ -119,16 +120,18 @@ def write_script(client, model, item, reference, catalog):
             "chapters": chapters, "shots": [{field: row[field] for field in SHOT_FIELDS} for row in rows]}
 
 
-def asset_candidates(library, topic, rows):
+def asset_candidates(library, topic, rows, allowed_kinds):
     context = "\n".join([topic, *(f'{row["name"]} {row["line"]} {row["points"]}' for row in rows)])
     ranked = []
     for item in library.items():
-        if item["kind"] not in ("image", "svg"):
+        if item["kind"] not in allowed_kinds:
             continue
         fields = {item["name"], *item.get("tags", ())}
+        if item.get("useFor"):
+            fields.add(item["useFor"])
         score = sum(len(term) for term in fields if len(term) >= 2 and term in context)
         if score:
-            ranked.append((score, {key: item[key] for key in ("id", "name", "tags")}))
+            ranked.append((score, {key: item[key] for key in ("id", "name", "tags", "kind", "useFor") if key in item}))
     ranked.sort(key=lambda entry: (-entry[0], entry[1]["id"]))
     return [item for _, item in ranked[:10]]
 
@@ -157,9 +160,14 @@ def content_for(kind, row, params, catalog, candidates):
         result["imagePrompt"] = draft_content.string_field(params, "imagePrompt", 400, optional=True)
     else:
         asset = candidates.get(result.get("assetId"))
-        if not asset:
+        if not asset or asset["kind"] not in catalog["assetKinds"][kind]:
             raise ValueError("素材库没有可用的候选素材")
-        result.update(assetName=asset["name"], move=params.get("move", "still"))
+        result["assetName"] = asset["name"]
+        if kind == "asset":
+            result.setdefault("move", "still")
+        else:
+            result.setdefault("overlay", "points")
+            result.setdefault("fit", "auto")
     for field, allowed in capabilities.items():
         if field in result and isinstance(allowed, list) and result[field] not in allowed:
             raise ValueError("专有参数的值不符合清单")
@@ -237,7 +245,9 @@ def arrange(client, model, item, script, library):
     indices = target_indices(item, rows) if mode == "mix" else list(range(len(rows)))
     if not indices:
         return {**script, "plannedIndices": []}
-    available = asset_candidates(library, item["topic"], rows) if mode == "mix" else []
+    asset_kinds = {kind: values for kind, values in catalog["assetKinds"].items() if kind in supports}
+    allowed_assets = {asset for kinds in asset_kinds.values() for asset in kinds}
+    available = asset_candidates(library, item["topic"], rows, allowed_assets) if mode == "mix" else []
     candidates = {asset["id"]: asset for asset in available}
     payload = {"topic": item["topic"], "title": script["title"], "chapters": script["chapters"], "shots": [
         {"index": i, **{key: row[key] for key in SHOT_FIELDS},
@@ -249,7 +259,10 @@ def arrange(client, model, item, script, library):
     if mode == "mix":
         payload.update(
             presenters={kind: details for kind, details in catalog["presenters"].items() if kind in supports},
-            supports=supports, imageBudget=budget, remainingImageBudget=remaining, candidateAssets=available,
+            supports=supports, imageBudget=budget, remainingImageBudget=remaining,
+            candidateAssets=[{key: value for key, value in asset.items() if key != "kind"} for asset in available],
+            availableByPresenter={kind: [item["id"] for item in available if item["kind"] in values]
+                                  for kind, values in asset_kinds.items()},
             transitions=catalog["transitions"],
         )
         instruction = (
@@ -259,7 +272,8 @@ def arrange(client, model, item, script, library):
             "能用清单里的实物动作讲清过程时优先演示，尤其要考虑动作是否能让观众看懂怎么做、在哪看。"
             "看前后幕的内容和 currentKind 决定节奏，合适时选两种以上方式，不能机械轮换。"
             "图片只在直观示意明显有价值时使用，遵守 remainingImageBudget，纯文字或流程不要拿图凑数。"
-            "asset 只使用 candidateAssets 中贴切的素材。fallback 从 supports 中选非 image 方式，优先选无需专有参数的方式。"
+            "需要素材的方式只从 availableByPresenter 对应 ID 选取，并核对 candidateAssets 中的适用描述。"
+            "fallback 从 supports 中选非 image 方式，优先选无需专有参数的方式。"
             "reason 用一句话，逐字引用本幕 name，再具体说明这幕的对象、动作或信息结构为什么适合该方式。"
             "params 可为空对象。选择 SVG 时按清单选动作，给 1–3 段 beats，line 必须是对应口播中的原文片段，"
             "label 不超过 10 字，不重复演示与本幕无关的动作。"

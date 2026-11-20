@@ -11,6 +11,7 @@
   let plan, deck, imgMap, mounted, content, lastSubtitle;
 
   async function setPlan(input) {
+    for (const shot of plan?.shots || []) Contents[shot.kind].dispose?.(shot);
     plan = input;
     deck = TemplateVideo.normalizeDeck(input.deck);
     deck.slides.forEach((slide, index) => {

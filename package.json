@@ -2,6 +2,7 @@
   "name": "medicne-make",
   "private": true,
   "dependencies": {
+    "lottie-web": "5.13.0",
     "playwright": "1.65.1"
   }
 }

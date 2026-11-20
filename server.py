@@ -29,6 +29,7 @@ import asset_library
 import svg_motion
 import stage_video
 import mix_plan
+import motion_asset
 import music_gen
 import work_costs
 
@@ -2911,6 +2912,40 @@ def build_timeline(p, shots, folder, speech_key, record=None, progress=None):
     return {"shots": shots, "entries": entries, "fps": fps, "frames": round(elapsed * fps), "vtt": vtt}
 
 
+def render_motion_preview(asset, destination):
+    if not code_motion_ready():
+        raise ValueError("生成动画预览需要 Node.js、Chrome、Playwright 和 FFmpeg。")
+    destination.mkdir(parents=True, exist_ok=True)
+    duration = max(2.0, min(4.0, asset["duration"]))
+    fps = 12
+    with tempfile.TemporaryDirectory(prefix="motion-preview-", dir=destination) as tmp:
+        scratch = Path(tmp)
+        manifest = scratch / "preview.json"
+        slide = {"name": "动画预览", "line": "", "type": "explain", "layoutMode": "explain", "seconds": duration}
+        plan = {
+            "fps": fps, "frames": round(duration * fps), "fontId": None, "images": {},
+            "layout": {"canvas": {"w": 1280, "h": 720}, "regions": {
+                "media": {"x": 0, "y": 0, "w": 100, "h": 100, "component": "media"}}},
+            "deck": {"title": "动画预览", "presenter": "none", "chapters": ["预览", "结束"], "slides": [slide]},
+            "shots": [{"name": "动画预览", "line": "", "kind": "mg", "start": 0, "end": duration, "captions": [],
+                       "overlay": "off", "fit": "auto", "motionAsset": asset}],
+        }
+        write_json(manifest, plan)
+        try:
+            response = subprocess.run([shutil.which("node"), str(ROOT / "scripts/render-stage.mjs"),
+                                       str(manifest), str(scratch)], cwd=ROOT, capture_output=True, timeout=45)
+        except subprocess.TimeoutExpired:
+            raise ValueError("动画预览渲染超时，请检查文件并重试。") from None
+        if response.returncode:
+            raise ValueError("动画预览失败，请检查导出的图层与关键帧。")
+        run_ffmpeg("-f", "concat", "-safe", "0", "-i", scratch / "frames.txt", "-vf", f"fps={fps},scale=480:270",
+                   "-t", f"{duration:.3f}", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                   "-movflags", "+faststart", scratch / "preview.mp4")
+        run_ffmpeg("-i", scratch / "poster.jpg", "-vf", "scale=480:270", scratch / "thumb.jpg")
+        (scratch / "thumb.jpg").replace(destination / "poster.jpg")
+        (scratch / "preview.mp4").replace(destination / "preview.mp4")
+
+
 def render_stage_video(p, job, save, speech_key, record=None, dashscope_key=""):
     layout, deck, shots, images, used = stage_video.stage_input(p, ASSETS, media_path)
     appearance = code_motion_appearance(p)
@@ -3399,6 +3434,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "stageLayouts": ASSETS.layout_items(),
                     "layoutVariants": asset_library.LAYOUT_VARIANTS,
                     "stageCatalog": ASSETS.stage_catalog(),
+                    "motionPalette": motion_asset.THEME_PALETTE,
                     "imageRates": work_costs.image_estimate_rates(),
                     "sfxPacks": ASSETS.sound_packs(),
                     "svgMotion": {"actions": svg_motion.ACTIONS, "exportReady": svg_motion.ready(FFMPEG)},
@@ -3411,6 +3447,17 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/library":
             with CACHE_LOCK:
                 return self.send_json(200, {"items": list_assets()})
+        if m := re.fullmatch(r"/api/library/motion/([^/]+)", path):
+            try:
+                asset, _, _ = ASSETS.motion(unquote(m[1]))
+                return self.send_json(200, asset)
+            except ValueError as error:
+                return self.send_json(404, {"error": str(error)})
+        if m := re.fullmatch(r"/library-preview/([^/]+)/(poster\.jpg|preview\.mp4)", path):
+            try:
+                return self.file_response(ASSETS.motion_preview_file(unquote(m[1]), m[2]))
+            except ValueError:
+                return self.send_error(404)
         if path.startswith("/library/"):
             try:
                 file, _ = ASSETS.resolve(unquote(path.removeprefix("/library/")))
@@ -3488,7 +3535,7 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         if (
             self.path not in ("/api/jobs", "/api/costs", "/api/ark-key", "/api/deepseek-key", "/api/speech-key", "/api/dashscope-key", "/api/mureka-key", "/api/upload-frame", "/api/generate-music", "/api/music-library/rename", "/api/music-library/delete",
-                              "/api/library/upload", "/api/library/collect-image", "/api/library/copy-layout", "/api/library/archive")
+                              "/api/library/upload", "/api/library/collect-image", "/api/library/copy-layout", "/api/library/motion-palette", "/api/library/archive")
             or not self.allowed()
             or self.headers.get("Origin") not in (ORIGIN, f"http://localhost:{PORT}")
             or self.headers.get_content_type() != "application/json"
@@ -3499,7 +3546,7 @@ class Handler(SimpleHTTPRequestHandler):
             max_bytes = 8_000_000 if self.path == "/api/upload-frame" else (100000 if self.path in ("/api/jobs", "/api/costs", "/api/generate-music") else 4096)
             if self.path == "/api/library/upload":
                 max_bytes = 11_200_000
-            elif self.path in ("/api/library/collect-image", "/api/library/copy-layout"):
+            elif self.path in ("/api/library/collect-image", "/api/library/copy-layout", "/api/library/motion-palette"):
                 max_bytes = 32_000
             if not 0 < n <= max_bytes:
                 raise ValueError("请求大小无效")
@@ -3509,7 +3556,9 @@ class Handler(SimpleHTTPRequestHandler):
             if self.path == "/api/upload-frame":
                 return self.send_json(200, save_uploaded_frame(p))
             if self.path == "/api/library/upload":
-                return self.send_json(200, {"item": ASSETS.upload(p, FFMPEG)})
+                return self.send_json(200, {"item": ASSETS.upload(p, FFMPEG, render_motion_preview)})
+            if self.path == "/api/library/motion-palette":
+                return self.send_json(200, {"item": ASSETS.copy_motion_palette(p, render_motion_preview)})
             if self.path == "/api/library/copy-layout":
                 return self.send_json(200, {"item": ASSETS.copy_layout(p)})
             if self.path == "/api/library/collect-image":
