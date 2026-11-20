@@ -8,7 +8,7 @@ const plan = JSON.parse(await readFile(manifestPath, "utf8"));
 
 let browser;
 try {
-  browser = await chromium.launch({ channel: "chrome", headless: true, timeout: 15000 });
+  browser = await chromium.launch({ channel: "chrome", headless: true, timeout: 30000 });
 } catch (error) {
   throw new Error("无法启动本机 Google Chrome。请安装 Chrome 后重试。", { cause: error });
 }

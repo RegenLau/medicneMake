@@ -1,27 +1,100 @@
 {
   "schemaVersion": 1,
   "aspect": "16:9",
-  "canvas": {"w": 1280, "h": 720},
+  "canvas": {
+    "w": 1280,
+    "h": 720
+  },
   "regions": {
-    "chapters": {"x": 1.875, "y": 3.3333333333333335, "w": 20.625, "h": 93.33333333333333, "component": "chapters", "variant": "nav-panel"},
-    "header": {"x": 24.375, "y": 2.2222222222222223, "w": 73.75, "h": 5.555555555555555, "component": "header", "variant": "breadcrumb"},
-    "media": {"x": 24.375, "y": 8.88888888888889, "w": 73.75, "h": 71.11111111111111, "component": "media"},
-    "subtitle": {"x": 24.375, "y": 82.77777777777777, "w": 73.75, "h": 13.88888888888889, "component": "subtitle", "variant": "card"}
+    "chapters": {
+      "x": 1.875,
+      "y": 3.3333333333333335,
+      "w": 20.625,
+      "h": 93.33333333333333,
+      "component": "chapters",
+      "variant": "nav-panel"
+    },
+    "header": {
+      "x": 24.375,
+      "y": 2.2222222222222223,
+      "w": 73.75,
+      "h": 5.555555555555555,
+      "component": "header",
+      "variant": "breadcrumb"
+    },
+    "media": {
+      "x": 24.375,
+      "y": 8.88888888888889,
+      "w": 73.75,
+      "h": 71.11111111111111,
+      "component": "media"
+    },
+    "subtitle": {
+      "x": 24.375,
+      "y": 82.77777777777777,
+      "w": 73.75,
+      "h": 13.88888888888889,
+      "component": "subtitle",
+      "variant": "card"
+    }
   },
   "stages": {
     "hook": {
       "regions": {
-        "media": {"x": 0, "y": 0, "w": 100, "h": 86.11111111111111, "component": "media", "variant": "hook"},
-        "subtitle": {"x": 0, "y": 86.11111111111111, "w": 100, "h": 13.88888888888889, "component": "subtitle", "variant": "band"}
+        "media": {
+          "x": 0,
+          "y": 0,
+          "w": 100,
+          "h": 86.11111111111111,
+          "component": "media",
+          "variant": "hook"
+        },
+        "subtitle": {
+          "x": 0,
+          "y": 86.11111111111111,
+          "w": 100,
+          "h": 13.88888888888889,
+          "component": "subtitle",
+          "variant": "band"
+        }
       }
     },
     "outro": {
       "regions": {
-        "header": {"x": 0, "y": 0, "w": 100, "h": 10.277777777777779, "component": "header", "variant": "pill-title+chapter-rail"},
-        "media": {"x": 0, "y": 10.277777777777779, "w": 100, "h": 77.5, "component": "media", "variant": "outro"},
-        "subtitle": {"x": 0, "y": 87.77777777777777, "w": 100, "h": 12.222222222222223, "component": "subtitle", "variant": "band"}
+        "header": {
+          "x": 0,
+          "y": 0,
+          "w": 100,
+          "h": 10.277777777777779,
+          "component": "header",
+          "variant": "pill-title+chapter-rail"
+        },
+        "media": {
+          "x": 0,
+          "y": 10.277777777777779,
+          "w": 100,
+          "h": 77.5,
+          "component": "media",
+          "variant": "outro"
+        },
+        "subtitle": {
+          "x": 0,
+          "y": 87.77777777777777,
+          "w": 100,
+          "h": 12.222222222222223,
+          "component": "subtitle",
+          "variant": "band"
+        }
       }
     }
   },
-  "supports": ["image", "card", "scene", "svg", "asset", "mg"]
+  "supports": [
+    "image",
+    "card",
+    "scene",
+    "svg",
+    "asset",
+    "mg",
+    "clip"
+  ]
 }

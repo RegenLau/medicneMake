@@ -8,7 +8,7 @@ const plan = JSON.parse(await readFile(manifestPath, "utf8"));
 const { fps, frames } = plan;
 const staticImage = plan.shots.every(shot => shot.kind === "image");
 const format = staticImage ? "png" : "jpeg";
-const browser = await chromium.launch({ channel: "chrome", headless: true, timeout: 15000 });
+const browser = await chromium.launch({ channel: "chrome", headless: true, timeout: 30000 });
 
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });

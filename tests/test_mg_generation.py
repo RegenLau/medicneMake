@@ -79,12 +79,11 @@ class MGGenerationTests(unittest.TestCase):
             self.assertTrue(library.pending_preview_file(draft_id,"preview.mp4").is_file())
             self.assertNotIn(draft_id,[row["id"] for row in library.items()])
             script = script_fixture()
-            item = {"topic":"药盒滑动演示","presentation":"mix","layoutId":stage_video.CLASSIC_LAYOUT,"imageBudget":0}
-            shots = [choice(script,i,"mg",params={"assetId":draft_id},mgRequest="让药盒从左滑入") for i in range(3)]
+            item = {"topic":"药盒滑动演示","presentation":"mg","layoutId":stage_video.CLASSIC_LAYOUT,"imageBudget":0}
+            shots = [{"index":i,"params":{"assetId":draft_id},"reason":"展示药盒动作。"} for i in range(3)]
             model = Mock(return_value=model_response({"shots":shots}))
-            output = mix_plan.arrange(model,"deepseek-flash",item,script,library)
-            self.assertEqual(["scene"]*3,[row["content"]["kind"] for row in output["shots"]])
-            self.assertEqual("让药盒从左滑入",output["shots"][0]["content"]["mgRequest"])
+            output = mix_plan.arrange(model,"deepseek-flash",item,script,library,allow_legacy=True)
+            self.assertNotIn("assetId",output["shots"][0]["content"])
             payload = {"title":script["title"],"items":[{**script["shots"][0],"content":{"kind":"mg","assetId":draft_id}}]}
             with self.assertRaises(ValueError):
                 stage_video.stage_input(payload,library,server.media_path)
@@ -103,9 +102,9 @@ class MGGenerationTests(unittest.TestCase):
             for row in shots:
                 row["params"]["assetId"] = confirmed["id"]
             model.return_value = model_response({"shots":shots})
-            output = mix_plan.arrange(model,"deepseek-flash",item,script,library)
+            output = mix_plan.arrange(model,"deepseek-flash",item,script,library,allow_legacy=True)
             self.assertEqual(["mg"]*3,[row["content"]["kind"] for row in output["shots"]])
-            self.assertNotIn("mgRequest",output["shots"][0]["content"])
+            self.assertEqual(confirmed["id"],output["shots"][0]["content"]["assetId"])
 
             discard_id = "pending:" + str(uuid.uuid4())
             discarded = library.save_pending(discard_id,generated,"deepseek-flash",preview,draft_id)

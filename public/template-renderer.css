@@ -565,16 +565,6 @@
   display: block;
 }
 
-/* Spotlight Focus Overlay over AI Full-Image Infographics */
-.pt-spotlight-svg {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  z-index: 4;
-}
-
 /* Fallback Card Native Focus Highlighting */
 .pt-card-fallback.pt-has-focus .pt-focus-target.is-dimmed {
   opacity: 0.34;

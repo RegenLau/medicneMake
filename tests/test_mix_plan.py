@@ -34,8 +34,7 @@ def choice(script, index, kind, fallback="scene", **kwargs):
 
 class MixPlanningTests(unittest.TestCase):
     def setUp(self):
-        self.item = {"topic": "出门怎么带药", "layoutId": "builtin:layout/info-classic", "presentation": "mix",
-                     "imageBudget": 2}
+        self.item = {"topic": "出门怎么带药", "layoutId": "builtin:layout/info-classic", "presentation": "mix"}
         self.supports = ["image", "card", "scene", "svg", "asset"]
         self.library = Mock()
         self.library.layout.return_value = ({"supports": self.supports}, {}, None)
@@ -51,36 +50,50 @@ class MixPlanningTests(unittest.TestCase):
             client = Mock(return_value=model_response({"shots": rows}))
         return mix_plan.arrange(client, "deepseek-flash", self.item, self.script, self.library), client
 
-    def test_unsupported_kind_and_invalid_asset_use_fallback(self):
-        self.supports.remove("svg")
+    def test_unsupported_kind_and_invalid_form_use_fallback(self):
         choices = [choice(self.script, 0, "svg", "card"),
-                   choice(self.script, 1, "asset", params={"assetId": "outside-catalog"}),
-                   choice(self.script, 2, "asset", params={"assetId": "builtin:svg/0", "move": "zoom"})]
+                   choice(self.script, 1, "scene", params={"form": "nonexistent-form"}),
+                   choice(self.script, 2, "card", params={"form": "check-list", "formData": {"items": [{"title": "记录时间"}, {"title": "核对时间"}]}})]
         result, client = self.arrange(choices)
         contents = [row["content"] for row in result["shots"]]
-        self.assertEqual(["card", "scene", "asset"], [entry["kind"] for entry in contents])
+        self.assertEqual(["card", "scene", "card"], [entry["kind"] for entry in contents])
         self.assertIn("布局", contents[0]["adjusted"])
         self.assertIn("参数", contents[1]["adjusted"])
-        self.assertEqual({"assetId": "builtin:svg/0", "assetName": "药盒 0", "move": "zoom"},
-                         {key: contents[2][key] for key in ("assetId", "assetName", "move")})
+        self.assertEqual("check-list", contents[2]["form"])
+        self.assertIn(contents[2]["variant"], ("solid", "outline", "split"))
         payload = json.loads(client.call_args.args[1]["messages"][1]["content"])
-        self.assertEqual(self.supports, payload["supports"])
-        self.assertEqual(2, payload["imageBudget"])
+        self.assertEqual(["image", "card", "scene"], payload["supports"])
+        self.assertEqual({"image", "card", "scene"}, set(payload["presenters"]))
+        self.assertNotIn("imageBudget", payload)
+        self.assertNotIn("remainingImageBudget", payload)
         self.assertEqual([shot["line"] for shot in self.script["shots"]], [shot["line"] for shot in payload["shots"]])
-        self.assertEqual(10, len(payload["candidateAssets"]))
-        self.assertEqual({"id", "name", "tags"}, set(payload["candidateAssets"][0]))
+        self.assertTrue(len(payload["formCatalog"]) >= 20)
         for details in payload["presenters"].values():
             self.assertEqual({"strengths", "avoid", "cost", "options"}, set(details))
 
-    def test_budget_prioritizes_model_rank_and_zero_rejects_all(self):
-        rows = [choice(self.script, i, "image", priority=priority) for i, priority in enumerate((25, 90, 75))]
+    def test_mix_allows_unlimited_images_without_priority_and_ignores_legacy_budget(self):
+        extra = [
+            {"name": f"补充第{i}幕", "line": f"第{i}幕核对用药说明。", "seconds": 4, "chapterIndex": 1,
+             "points": {"type": "explain", "headline": f"补充第{i}幕", "items": [{"title": "核对说明", "detail": "", "tag": ""}]},
+             "cues": [{"text": f"第{i}幕核对用药说明。", "focus": "0", "weight": 10}]}
+            for i in (4, 5)
+        ]
+        self.script["shots"].extend(extra)
+        rows = [choice(self.script, i, "image", params={"imagePrompt": f"第 {i + 1} 幕药盒示意"}) for i in range(5)]
         result, _ = self.arrange(rows)
-        contents = [row["content"] for row in result["shots"]]
-        self.assertEqual(["scene", "image", "image"], [c["kind"] for c in contents])
-        self.assertIn("上限", contents[0]["adjusted"])
-        self.item["imageBudget"] = 0
-        result, _ = self.arrange(rows)
-        self.assertEqual(["scene"] * 3, [row["content"]["kind"] for row in result["shots"]])
+        self.assertEqual(["image"] * 5, [row["content"]["kind"] for row in result["shots"]])
+        self.assertTrue(all("adjusted" not in row["content"] for row in result["shots"]))
+        # Legacy callers passing imageBudget=0 or >4 are ignored without error or capping.
+        for legacy in (0, 99):
+            with self.subTest(legacy=legacy):
+                self.item["imageBudget"] = legacy
+                result, _ = self.arrange(rows)
+                self.assertEqual(["image"] * 5, [row["content"]["kind"] for row in result["shots"]])
+        # Invalid image params still fall back safely.
+        bad_rows = [choice(self.script, 0, "image", params={"unexpected": "x"}), *rows[1:]]
+        result, _ = self.arrange(bad_rows)
+        self.assertEqual(["scene", "image", "image", "image", "image"], [row["content"]["kind"] for row in result["shots"]])
+        self.assertIn("参数", result["shots"][0]["content"]["adjusted"])
 
     def test_malformed_output_and_network_failure_continue(self):
         for client in (Mock(side_effect=OSError("offline")), Mock(return_value=model_response({"shots": []}))):
@@ -91,18 +104,18 @@ class MixPlanningTests(unittest.TestCase):
                 self.assertTrue(all(row["content"]["adjusted"] for row in result["shots"]))
                 self.assertEqual([shot["line"] for shot in self.script["shots"]], [shot["line"] for shot in result["shots"]])
 
-    def test_replan_preserves_user_rows_and_allocates_remaining_images(self):
+    def test_replan_preserves_user_rows_and_allows_unbounded_images(self):
         self.script["shots"][0]["content"] = {"kind": "image", "image": "/existing.jpg", "decidedBy": "user"}
         self.script["shots"][1]["content"] = {"kind": "scene", "decidedBy": "mix"}
         self.script["shots"][2]["content"] = {"kind": "card", "decidedBy": "mix"}
         self.item["script"] = self.script
-        rows = [choice(self.script, 1, "image", priority=60), choice(self.script, 2, "image", priority=80)]
+        rows = [choice(self.script, 1, "image"), choice(self.script, 2, "image")]
         result, client = self.arrange(rows)
         self.assertEqual([1, 2], result["plannedIndices"])
         self.assertEqual(self.script["shots"][0], result["shots"][0])
-        self.assertEqual(["image", "scene", "image"], [row["content"]["kind"] for row in result["shots"]])
+        self.assertEqual(["image", "image", "image"], [row["content"]["kind"] for row in result["shots"]])
         payload = json.loads(client.call_args.args[1]["messages"][1]["content"])
-        self.assertEqual(1, payload["remainingImageBudget"])
+        self.assertNotIn("remainingImageBudget", payload)
         self.assertEqual(["image", "scene", "card"], [row["currentKind"] for row in payload["shots"]])
         self.item["targetIndex"] = 0
         result, _ = self.arrange([choice(self.script, 0, "card")])
@@ -120,7 +133,7 @@ class MixPlanningTests(unittest.TestCase):
         self.assertEqual([1], result["plannedIndices"])
         self.assertEqual(self.script["shots"][::2], result["shots"][::2])
         payload = json.loads(client.call_args.args[1]["messages"][1]["content"])
-        self.assertEqual(1, payload["remainingImageBudget"])
+        self.assertNotIn("remainingImageBudget", payload)
         self.assertEqual("", payload["shots"][0]["line"])
         for target in (None, 0, 2):
             with self.subTest(target=target), self.assertRaises(ValueError):
@@ -274,11 +287,14 @@ class MixPlanningTests(unittest.TestCase):
         asset = {"id": "builtin:lottie/clock", "kind": "lottie", "name": "时间动画", "tags": ["时间"]}
         self.library.items.return_value = [asset, {"id": "pending:clock", "kind": "pending", "name": "时间", "tags": []}]
         suggestion = "药盒标签在画面中央停住，框出需要查看的区域。"
-        result, client = self.arrange([
+        with self.assertRaises(ValueError):
+            mix_plan.validate_setup(self.item, self.library)
+        client = Mock(return_value=model_response({"shots": [
             {"index": 0, "params": {}, "mgRequest": suggestion, "reason": "突出标签。"},
             {"index": 1, "params": {"assetId": asset["id"]}, "reason": "误选其他幕的动画。"},
             {"index": 2, "params": {"assetId": asset["id"], "overlay": "title", "fit": "hold"}, "reason": "时钟突出记录时间。"},
-        ])
+        ]}))
+        result = mix_plan.arrange(client, "deepseek-flash", self.item, self.script, self.library, allow_legacy=True)
         contents = [row["content"] for row in result["shots"]]
         self.assertEqual(["mg"] * 3, [content["kind"] for content in contents])
         self.assertEqual(suggestion, contents[0]["mgRequest"])
@@ -290,16 +306,28 @@ class MixPlanningTests(unittest.TestCase):
         self.assertEqual([[], [], [asset]], [shot["candidateAssets"] for shot in payload["shots"]])
         self.assertEqual([row["line"] for row in self.script["shots"]], [row["line"] for row in result["shots"]])
 
-    def test_fixed_modes_force_kind_and_only_svg_requests_second_pass(self):
-        beats = [[{"action": "carton", "line": row["line"], "label": row["name"]}] for row in self.script["shots"]]
-        for mode in ("image", "card", "scene", "svg"):
+    def test_fixed_modes_force_kind_and_reject_retired_draft_modes(self):
+        for retired in ("svg", "mg", "asset"):
+            with self.subTest(retired=retired), self.assertRaises(ValueError):
+                mix_plan.validate_setup({**self.item, "presentation": retired}, self.library)
+        for mode in ("image", "card", "scene"):
             with self.subTest(mode=mode):
                 self.item["presentation"] = mode
-                result, client = self.arrange([{"index": i, "beats": b} for i, b in enumerate(beats)])
+                result, client = self.arrange([])
                 self.assertEqual([mode] * 3, [row["content"]["kind"] for row in result["shots"]])
-                self.assertEqual(int(mode == "svg"), client.call_count)
-                if mode == "svg":
-                    self.assertEqual(beats[0], result["shots"][0]["content"]["beats"])
+                self.assertEqual(0, client.call_count)
+                if mode in ("card", "scene"):
+                    forms = [row["content"]["form"] for row in result["shots"]]
+                    self.assertTrue(all(forms))
+                    self.assertNotEqual(forms[0], forms[1])
+                    self.assertNotEqual(forms[1], forms[2])
+        # Legacy svg arrange still works when explicitly enabled for old callers.
+        self.item["presentation"] = "svg"
+        beats = [[{"action": "carton", "line": row["line"], "label": row["name"]}] for row in self.script["shots"]]
+        svg_client = Mock(return_value=model_response({"shots": [{"index": i, "beats": b} for i, b in enumerate(beats)]}))
+        svg_result = mix_plan.arrange(svg_client, "deepseek-flash", self.item, self.script, self.library, allow_legacy=True)
+        self.assertEqual(["svg"] * 3, [row["content"]["kind"] for row in svg_result["shots"]])
+        self.assertEqual(beats[0], svg_result["shots"][0]["content"]["beats"])
 
     def test_script_request_ignores_presentation_and_normalizes_cues(self):
         raw = copy.deepcopy(self.script)

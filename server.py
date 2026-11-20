@@ -87,6 +87,8 @@ SPEAKERS = {
     "流畅女声 2.0": "zh_female_liuchangnv_uranus_bigtts",
     "女声": "zh_female_xiaohe_uranus_bigtts",
     "男声": "zh_male_m191_uranus_bigtts",
+    "医生音色": "S_5yB2w6uk2",
+    "刘飞 2.0": "zh_male_liufei_uranus_bigtts",
 }
 IMAGE_MODELS = {
     "doubao-seedream-5-5-261028": ("Seedream 5.5", ["1K", "2K"]),
@@ -826,7 +828,7 @@ def media_path(url):
     elif re.fullmatch(r"/assets/template-[a-z0-9-]+\.(jpg|png|webp)", url):
         path = PUBLIC / url.lstrip("/")
     elif url.startswith("/library/"):
-        path, _ = ASSETS.resolve(unquote(url.removeprefix("/library/")), ("image",))
+        path, _ = ASSETS.resolve(unquote(url.removeprefix("/library/")), ("image", "video"))
     else:
         raise ValueError("请选择本作品的本地素材")
     if not path.is_file():
@@ -892,6 +894,67 @@ CODE_MOTION_FPS = 25
 
 def code_motion_ready():
     return bool(FFMPEG and shutil.which("node") and (ROOT / "node_modules/playwright/package.json").is_file())
+
+
+def _is_usable_temp_dir(path):
+    if not path:
+        return False
+    candidate = Path(path)
+    return candidate.is_dir() and os.access(candidate, os.W_OK | os.X_OK)
+
+
+def render_subprocess_env(base=None):
+    """Ensure Playwright/Chrome subprocesses get an existing, socket-safe temp directory."""
+    env = dict(os.environ if base is None else base)
+    if os.name == "nt":
+        for key in ("TMPDIR", "TEMP", "TMP"):
+            if key in env and not _is_usable_temp_dir(env[key]):
+                env.pop(key, None)
+        return env
+    fallback = "/tmp" if _is_usable_temp_dir("/tmp") else tempfile.gettempdir()
+    for key in ("TMPDIR", "TEMP", "TMP"):
+        value = env.get(key)
+        if not value:
+            if key == "TMPDIR":
+                env[key] = fallback
+            continue
+        if not _is_usable_temp_dir(value) or "antigravity-tmp" in value or len(value) > 60:
+            env[key] = fallback
+    return env
+
+
+_RENDER_ERROR_PREFIXES = (
+    "Error: ",
+    "page.",
+    "browserType.",
+    "browser.",
+    "cdpSession.",
+    "TimeoutError:",
+    "TypeError:",
+    "ReferenceError:",
+    "SyntaxError:",
+    "RangeError:",
+    "URIError:",
+    "EvalError:",
+    "AggregateError:",
+)
+
+
+def extract_render_error(stderr_bytes, fallback="请核对 Chrome 和 Playwright 安装。"):
+    detail = stderr_bytes.decode("utf-8", "replace") if isinstance(stderr_bytes, (bytes, bytearray)) else str(stderr_bytes or "")
+    stripped = detail.strip()
+    if stripped:
+        print(f"[render-error] {stripped[:1500]}", file=sys.stderr, flush=True)
+    lines = [line.strip() for line in detail.splitlines() if line.strip()]
+    for line in lines:
+        if line.startswith(_RENDER_ERROR_PREFIXES):
+            return line.removeprefix("Error: ")
+    for line in lines:
+        if (line.startswith(("node:", "at ", "^", "Node.js v", "{", "}", "]", "Call log:", "- "))
+                or line == "triggerUncaughtException("):
+            continue
+        return line
+    return fallback
 
 
 def validate_template_avatar(avatar, voiced, *, check_key=True):
@@ -1017,8 +1080,32 @@ def code_motion_shot_captions(scene, start, audible):
 
 
 def setting_valid(p):
-    if p.get("mode") != "ark" or p.get("kind") not in ("images", "video", "draft", "svg-speech", "mg-draft"):
+    if p.get("mode") != "ark" or p.get("kind") not in ("images", "video", "draft", "svg-speech", "mg-draft", "stage-clip"):
         raise ValueError("未知的生成方式")
+    if p["kind"] == "stage-clip":
+        if not current_ark_key():
+            raise ValueError("请先连接火山方舟，再生成 AI 视频片段。")
+        s = p.get("settings")
+        if not isinstance(s, dict):
+            raise ValueError("视频生成设置无效。")
+        model = s.get("videoModel")
+        if model not in VIDEO_MODELS or s.get("resolution") not in VIDEO_MODELS[model][1]:
+            raise ValueError("请选择有效的视频模型和清晰度。")
+        if "targetSize" in s:
+            parse_target_size(s["targetSize"])
+        clip = p.get("clip")
+        if not isinstance(clip, dict):
+            raise ValueError("AI 视频片段参数无效。")
+        draft_content.string_field(clip, "prompt", 400)
+        if clip.get("clipStyle", "demo") not in stage_video.CLIP_STYLES:
+            raise ValueError("AI 视频风格无效。")
+        seconds = clip.get("seconds")
+        if type(seconds) is not int or not 4 <= seconds <= VIDEO_MODELS[model][2]:
+            raise ValueError(f"AI 视频时长须为 4–{VIDEO_MODELS[model][2]} 秒整数。")
+        img_path = media_path(clip.get("image", ""))
+        if img_path.suffix not in (".png", ".jpg", ".webp"):
+            raise ValueError("请先生成或选择有效的首帧图片。")
+        return
     if p["kind"] == "mg-draft":
         if not current_deepseek_key():
             raise ValueError("请先连接 DeepSeek，再制作 MG 动画。")
@@ -1281,7 +1368,24 @@ def seedance_frame(image, role, folder, width, height):
     return {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{raw}"}, "role": role}
 
 
-def source_clip(p, item, dest, state, save, tail_image=None, on_success=None):
+def clip_frame_size(resolution, target_size=None, fallback_ratio="16:9"):
+    short = int(str(resolution or "720p")[:-1])
+    if target_size:
+        tw, th = parse_target_size(target_size)
+        ar = max(0.5, min(2.2, tw / th))
+    else:
+        a, b = map(int, fallback_ratio.split(":"))
+        ar = a / b
+    if ar >= 1:
+        h = round(short / 2) * 2
+        w = round(short * ar / 2) * 2
+    else:
+        w = round(short / 2) * 2
+        h = round(short / ar / 2) * 2
+    return w, h
+
+
+def source_clip(p, item, dest, state, save, tail_image=None, on_success=None, dimensions=None):
     s = p["settings"]
     if not state.get("remote"):
         if state.get("submitting"):
@@ -1289,7 +1393,7 @@ def source_clip(p, item, dest, state, save, tail_image=None, on_success=None):
                 "上一次提交结果未知。请先到方舟控制台确认任务，以免重复计费。"
             )
         # 首帧决定方舟视频的画幅。重新选画幅时，先把现有分镜裁成目标尺寸。
-        width, height = frame_size(s)
+        width, height = dimensions or frame_size(s)
         content = [
             {"type": "text", "text": item["prompt"]},
             seedance_frame(item["image"], "first_frame", dest.parent, width, height),
@@ -1786,8 +1890,17 @@ def library_sound_mix(shots, music, track, duration, voiced, events=()):
 
 def stage_sound_mix(p, shots, music, track, duration, voiced, event_rows):
     pack, gain = stage_video.sound_settings(p, ASSETS)
-    events = [(pack[row["type"]], row["t"], gain)
-              for row in event_rows if row["type"] in pack and 0 <= row["t"] < duration]
+    sticker_on = stage_video.sticker_sound_enabled(p)
+    events = []
+    for row in event_rows:
+        t = row.get("t")
+        if not isinstance(t, (int, float)) or not 0 <= t < duration:
+            continue
+        if row.get("type") == "sticker" and row.get("sfxId"):
+            if sticker_on:
+                events.append((row["sfxId"], t, gain))
+        elif row.get("type") in pack:
+            events.append((pack[row["type"]], t, gain))
     return library_sound_mix(shots, music, track, duration, voiced, events)
 
 
@@ -2869,12 +2982,10 @@ def render_code_motion(p, job, save, speech_key, record, dashscope_key=""):
         save()
         result = subprocess.run(
             [shutil.which("node"), str(ROOT / "scripts/render-code-motion.mjs"), str(manifest), str(scratch)],
-            cwd=ROOT, capture_output=True, timeout=max(300, frames / 15 + 60),
+            cwd=ROOT, env=render_subprocess_env(), capture_output=True, timeout=max(300, frames / 15 + 60),
         )
         if result.returncode:
-            detail = result.stderr.decode("utf-8", "replace")
-            error = next((line.removeprefix("Error: ") for line in detail.splitlines()
-                          if line.startswith(("Error: ", "page."))), "请核对 Chrome 和 Playwright 安装。")
+            error = extract_render_error(result.stderr)
             raise ValueError(f"代码动效渲染失败：{error[:260]}")
         job["progress"] = "合成代码动效、配音与 MP4"
         save()
@@ -3049,10 +3160,12 @@ def render_motion_preview(asset, destination):
         write_json(manifest, plan)
         try:
             response = subprocess.run([shutil.which("node"), str(ROOT / "scripts/render-stage.mjs"),
-                                       str(manifest), str(scratch)], cwd=ROOT, capture_output=True, timeout=45)
+                                       str(manifest), str(scratch)], cwd=ROOT, env=render_subprocess_env(),
+                                      capture_output=True, timeout=45)
         except subprocess.TimeoutExpired:
             raise ValueError("动画预览渲染超时，请检查文件并重试。") from None
         if response.returncode:
+            extract_render_error(response.stderr)
             raise ValueError("动画预览失败，请检查导出的图层与关键帧。")
         run_ffmpeg("-f", "concat", "-safe", "0", "-i", scratch / "frames.txt", "-vf", f"fps={fps},scale=480:270",
                    "-t", f"{duration:.3f}", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
@@ -3106,17 +3219,40 @@ def render_stage_video(p, job, save, speech_key, record=None, dashscope_key=""):
                        f"fps={fps},scale={avatar_size}:{avatar_size}:force_original_aspect_ratio=increase,"
                        f"crop={avatar_size}:{avatar_size}:(iw-ow)/2:(ih-oh)*0.2,tpad=stop_mode=clone:stop_duration={duration:.3f}",
                        "-frames:v", frames, "-start_number", 0, "-q:v", 3, scratch / "avatar-%05d.jpg")
+        slot_spec = stage_video.layout_media_spec(layout)
+        slot_w = max(64, round(slot_spec["w"] / 2) * 2)
+        slot_h = max(64, round(slot_spec["h"] / 2) * 2)
+        for shot_idx, shot in enumerate(shots):
+            if shot.get("kind") != "clip":
+                continue
+            clip_file = Path(shot.pop("clipFile"))
+            clip_dir = scratch / f"clip-{shot_idx}"
+            clip_dir.mkdir(parents=True, exist_ok=True)
+            shot_len = max(0.5, float(shot["end"]) - float(shot["start"]))
+            max_frames = max(1, math.ceil(shot_len * fps) + 2)
+            run_ffmpeg(
+                "-i", clip_file, "-an", "-vf",
+                f"fps={fps},scale={slot_w}:{slot_h}:force_original_aspect_ratio=increase,crop={slot_w}:{slot_h},setsar=1",
+                "-frames:v", max_frames, "-start_number", 0, "-q:v", 3, clip_dir / "frame-%05d.jpg",
+            )
+            extracted = len(list(clip_dir.glob("frame-*.jpg")))
+            if not extracted:
+                raise ValueError(f"第 {shot_idx + 1} 幕的 AI 视频片段无法读取视频帧。")
+            shot["clipFramesDir"] = clip_dir.as_uri()
+            shot["clipFrameCount"] = extracted
+            shot["clipFps"] = fps
+            shot["clipDuration"] = extracted / fps
         manifest = scratch / "stage.json"
         write_json(manifest, {"deck": deck, "layout": layout, "images": images, "shots": shots, "fps": fps,
                               "frames": frames, "compatibility": p.get("compatibility"), "fontId": font_id,
-                              "hasAvatarFrames": bool(avatar_mp4), "imageFocus": not bool(p.get("compatibility"))})
+                              "hasAvatarFrames": bool(avatar_mp4)})
         progress(f"渲染统一舞台（{len(shots)} 幕 · {frames} 帧）")
-        result = subprocess.run([shutil.which("node"), str(ROOT / "scripts/render-stage.mjs"), str(manifest), str(scratch)],
-                                cwd=ROOT, capture_output=True, timeout=max(300, frames / 15 + 60))
+        result = subprocess.run(
+            [shutil.which("node"), str(ROOT / "scripts/render-stage.mjs"), str(manifest), str(scratch)],
+            cwd=ROOT, env=render_subprocess_env(), capture_output=True, timeout=max(300, frames / 15 + 60),
+        )
         if result.returncode:
-            detail = result.stderr.decode("utf-8", "replace")
-            error = next((line.removeprefix("Error: ") for line in detail.splitlines()
-                          if line.startswith(("Error: ", "page."))), "请核对 Chrome 和 Playwright 安装。")
+            error = extract_render_error(result.stderr)
             raise ValueError(f"舞台渲染失败：{error[:260]}")
         progress("合成画面、配音与 MP4")
         music_input = ["-stream_loop", "-1", "-i", music] if music else []
@@ -3286,6 +3422,20 @@ def write_draft(p, job, save, record=None):
     if item["type"] == "video":
         settings = p["settings"]
         if item.get("videoMode") == "stage":
+            if "planStickers" in item:
+                job["progress"] = "为分镜自动匹配贴纸"
+                save()
+                planned_stickers = mix_plan.plan_stickers(
+                    tracked_deepseek("自动配贴纸"), model, item, item["script"], ASSETS,
+                    target_index=item.get("targetIndex"),
+                )
+                job["output"] = {"stickersByShot": {str(k): v for k, v in planned_stickers.items()}}
+                return
+            if "clipPrompt" in item:
+                job["progress"] = "撰写 AI 视频动作描述"
+                save()
+                job["output"] = mix_plan.write_clip_prompt(tracked_deepseek("AI 视频描述"), model, item, ASSETS)
+                return
             if "produceShot" in item:
                 job["progress"] = "按所选方式制作本幕画面"
                 save()
@@ -3301,10 +3451,22 @@ def write_draft(p, job, save, record=None):
                 )
                 job["stageScript"] = script
                 save()
-            job["progress"] = "编排各幕呈现方式"
-            save()
-            label = {"mix": "Mix 编排呈现", "svg": "SVG 道具编排", "mg": "MG 动画编排"}.get(item["presentation"])
-            job["output"] = mix_plan.arrange(tracked_deepseek(label), model, item, script, ASSETS)
+            arranged = job.get("stageArranged")
+            if arranged is None:
+                job["progress"] = "编排各幕呈现方式"
+                save()
+                label = {"mix": "Mix 编排呈现", "svg": "SVG 道具编排", "mg": "MG 动画编排"}.get(item["presentation"])
+                arranged = mix_plan.arrange(tracked_deepseek(label), model, item, script, ASSETS)
+                job["stageArranged"] = arranged
+                save()
+            if item.get("presentation") == "mix" and item.get("script") is None and item.get("autoStickers", True):
+                job["progress"] = "为分镜自动匹配贴纸"
+                save()
+                sticker_map = mix_plan.plan_stickers(tracked_deepseek("自动配贴纸"), model, item, arranged, ASSETS)
+                for idx, st_list in sticker_map.items():
+                    if st_list and 0 <= idx < len(arranged["shots"]):
+                        arranged["shots"][idx]["stickers"] = st_list
+            job["output"] = arranged
             return
         if item.get("videoMode") == "code-motion":
             ref_duration = settings.get("duration")
@@ -3355,6 +3517,51 @@ def write_draft(p, job, save, record=None):
         job["output"]["images"] = draft_content.article_images(
             tracked_deepseek("规划文章配图"), model, job["output"], item["layout"],
         )
+
+
+def generate_stage_clip(p, job, save, record=None):
+    s = p["settings"]
+    clip = p["clip"]
+    base = job["id"]
+    folder = JOBS / base
+    folder.mkdir(exist_ok=True)
+    dims = clip_frame_size(s["resolution"], s.get("targetSize"), s.get("ratio", "16:9"))
+    shot_index = int(clip.get("shotIndex") or 0)
+    state = job.setdefault("clipState", {})
+    cost_holder = {}
+
+    def on_success(response):
+        tokens = work_costs.usage_value(response.get("usage"), "completion_tokens")
+        actual_sec = response.get("duration") or clip["seconds"]
+        row = work_costs.video_cost(s["videoModel"], s["resolution"], actual_sec, tokens, shot_index, dims)
+        cost_holder["row"] = row
+        if record:
+            record(f"stage-clip:{shot_index}", row)
+
+    job["progress"] = f"正在用 {VIDEO_MODELS[s['videoModel']][0]} 生成第 {shot_index + 1} 幕 AI 视频"
+    save()
+    temp_mp4 = folder / "clip.tmp.mp4"
+    source_clip(
+        {"settings": {**s, "watermark": s.get("watermark", False)}},
+        {"prompt": clip["prompt"], "image": clip["image"], "seconds": clip["seconds"]},
+        temp_mp4, state, save, on_success=on_success, dimensions=dims,
+    )
+    poster = folder / "poster.jpg"
+    run_ffmpeg("-i", temp_mp4, "-frames:v", 1, "-q:v", 3, poster)
+    final_mp4 = MEDIA / f"{base}.mp4"
+    final_poster = MEDIA / f"{base}.jpg"
+    temp_mp4.replace(final_mp4)
+    poster.replace(final_poster)
+    return {
+        "clip": f"/media/{base}.mp4",
+        "clipPoster": f"/media/{base}.jpg",
+        "clipStyle": clip.get("clipStyle", "demo"),
+        "clipModel": s["videoModel"],
+        "clipResolution": s["resolution"],
+        "clipSeconds": clip["seconds"],
+        "clipDuration": float(clip["seconds"]),
+        "clipCost": cost_holder.get("row", {}).get("amount"),
+    }
 
 
 def write_mg_draft(p, job, save, record):
@@ -3412,6 +3619,8 @@ def work(job, key=None, speech_key="", deepseek_key=None, dashscope_key=""):
                 write_draft(p, job, save, record)
             elif p["kind"] == "mg-draft":
                 write_mg_draft(p, job, save, record)
+            elif p["kind"] == "stage-clip":
+                job["output"] = generate_stage_clip(p, job, save, record)
             elif p["kind"] == "svg-speech":
                 preview_svg_speech(p, save, job, speech_key, record)
             else:
@@ -3589,6 +3798,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "motionPalette": motion_asset.THEME_PALETTE,
                     "mgGeneration": True,
                     "imageRates": work_costs.image_estimate_rates(),
+                    "videoRates": work_costs.VIDEO_RATES,
                     "sfxPacks": ASSETS.sound_packs(),
                     "svgMotion": {"actions": svg_motion.ACTIONS, "exportReady": svg_motion.ready(FFMPEG)},
                     **speech_connection(),
@@ -3695,7 +3905,7 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         if (
             self.path not in ("/api/jobs", "/api/costs", "/api/ark-key", "/api/deepseek-key", "/api/speech-key", "/api/dashscope-key", "/api/mureka-key", "/api/upload-frame", "/api/generate-music", "/api/music-library/rename", "/api/music-library/delete",
-                              "/api/library/upload", "/api/library/collect-image", "/api/library/copy-layout", "/api/library/copy-theme", "/api/library/motion-palette", "/api/library/mg-decide", "/api/library/archive")
+                              "/api/library/upload", "/api/library/collect-image", "/api/library/collect-video", "/api/library/copy-layout", "/api/library/copy-theme", "/api/library/motion-palette", "/api/library/mg-decide", "/api/library/archive")
             or not self.allowed()
             or self.headers.get("Origin") not in (ORIGIN, f"http://localhost:{PORT}")
             or self.headers.get_content_type() != "application/json"
@@ -3706,7 +3916,7 @@ class Handler(SimpleHTTPRequestHandler):
             max_bytes = 8_000_000 if self.path == "/api/upload-frame" else (100000 if self.path in ("/api/jobs", "/api/costs", "/api/generate-music") else 4096)
             if self.path == "/api/library/upload":
                 max_bytes = 11_200_000
-            elif self.path in ("/api/library/collect-image", "/api/library/copy-layout", "/api/library/copy-theme", "/api/library/motion-palette"):
+            elif self.path in ("/api/library/collect-image", "/api/library/collect-video", "/api/library/copy-layout", "/api/library/copy-theme", "/api/library/motion-palette"):
                 max_bytes = 32_000
             if not 0 < n <= max_bytes:
                 raise ValueError("请求大小无效")
@@ -3732,6 +3942,11 @@ class Handler(SimpleHTTPRequestHandler):
                 if source.suffix not in (".png", ".jpg", ".webp") or source.stat().st_size > asset_library.LIMITS["image"]:
                     raise ValueError("请选择不超过 8 MB 的现有配图。")
                 return self.send_json(200, {"item": ASSETS.add("image", source.read_bytes(), p, FFMPEG, "project")})
+            if self.path == "/api/library/collect-video":
+                source = media_path(p.get("url"))
+                if source.suffix != ".mp4" or source.stat().st_size > asset_library.LIMITS["video"]:
+                    raise ValueError("请选择不超过 50 MB 的现有 MP4 视频片段。")
+                return self.send_json(200, {"item": ASSETS.add("video", source.read_bytes(), p, FFMPEG, "project")})
             if self.path == "/api/library/archive":
                 ASSETS.archive(p.get("id"))
                 return self.send_json(200, {"ok": True})
@@ -3789,6 +4004,14 @@ class Handler(SimpleHTTPRequestHandler):
 
 if __name__ == "__main__":
     import webbrowser
+
+    _safe_env = render_subprocess_env()
+    for _tmp_key in ("TMPDIR", "TEMP", "TMP"):
+        if _tmp_key in _safe_env:
+            os.environ[_tmp_key] = _safe_env[_tmp_key]
+        else:
+            os.environ.pop(_tmp_key, None)
+    tempfile.tempdir = None
 
     if "--open" in sys.argv:
         try:

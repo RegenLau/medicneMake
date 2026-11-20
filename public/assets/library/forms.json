@@ -1,0 +1,476 @@
+{
+  "relations": {
+    "hook": "开场结论",
+    "number": "数值剂量",
+    "time": "时间节律",
+    "steps": "操作步骤",
+    "compare": "对比权衡",
+    "warning": "警示误区",
+    "checklist": "核对清单",
+    "mechanism": "作用原理",
+    "summary": "要点收口"
+  },
+  "pointTypeRelations": {
+    "cover": "hook",
+    "explain": "mechanism",
+    "compare": "compare",
+    "steps": "steps",
+    "warning": "warning",
+    "summary": "summary",
+    "timeline": "time",
+    "checklist": "checklist"
+  },
+  "legacyVisualMap": {
+    "hook": "big-answer",
+    "mechanism": "cause-chain",
+    "compare": "table-compare",
+    "steps": "flow-h",
+    "timeline": "timeline-h",
+    "checklist": "check-list",
+    "warning": "alert-list",
+    "summary": "three-points"
+  },
+  "forms": [
+    {
+      "id": "big-answer",
+      "relation": "hook",
+      "label": "大字结论",
+      "preferredKind": "card",
+      "when": "开场直接抛出核心结论与一句解释，适合一锤定音的问答结论。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide", "shallow", "portrait"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 18, "required": false},
+        "answer": {"type": "string", "maxLen": 20, "required": true, "fact": true},
+        "note": {"type": "string", "maxLen": 28, "required": false, "fact": true},
+        "tag": {"type": "string", "maxLen": 8, "required": false}
+      }
+    },
+    {
+      "id": "qa-flip",
+      "relation": "hook",
+      "label": "问答翻转",
+      "preferredKind": "card",
+      "when": "先亮出患者常见疑问，再翻面给出明确答案。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide", "shallow"],
+      "avoidOuter": ["hasAnswer"],
+      "schema": {
+        "question": {"type": "string", "maxLen": 24, "required": true},
+        "answer": {"type": "string", "maxLen": 20, "required": true, "fact": true},
+        "note": {"type": "string", "maxLen": 26, "required": false, "fact": true}
+      }
+    },
+    {
+      "id": "stat-hero",
+      "relation": "hook",
+      "label": "核心数字",
+      "preferredKind": "card",
+      "when": "本幕有一个最吸睛的关键数字（温度、时间、天数、次数等）加简短说明。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide", "shallow"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "value": {"type": "string", "maxLen": 10, "required": true, "fact": true, "numeric": true},
+        "unit": {"type": "string", "maxLen": 8, "required": false},
+        "label": {"type": "string", "maxLen": 16, "required": true, "fact": true},
+        "note": {"type": "string", "maxLen": 24, "required": false, "fact": true}
+      }
+    },
+    {
+      "id": "art-answer",
+      "relation": "hook",
+      "label": "插画结论",
+      "preferredKind": "scene",
+      "when": "配插画呈现开场或核心结论，左侧/上方配图，右侧结论与要点。",
+      "variants": ["split", "solid", "outline"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 16, "required": true},
+        "answer": {"type": "string", "maxLen": 24, "required": true, "fact": true},
+        "items": {"type": "array", "min": 0, "max": 3, "item": {"title": 12, "detail": 18}}
+      }
+    },
+    {
+      "id": "dose-card",
+      "relation": "number",
+      "label": "剂量卡",
+      "preferredKind": "card",
+      "when": "强调单个关键剂量、体温阈值或给药数值，带适用条件和提醒。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide", "shallow"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "value": {"type": "string", "maxLen": 10, "required": true, "fact": true, "numeric": true},
+        "unit": {"type": "string", "maxLen": 8, "required": true},
+        "condition": {"type": "string", "maxLen": 18, "required": true, "fact": true},
+        "note": {"type": "string", "maxLen": 24, "required": false, "fact": true}
+      }
+    },
+    {
+      "id": "weight-table",
+      "relation": "number",
+      "label": "体重剂量表",
+      "preferredKind": "card",
+      "when": "按体重/年龄分档对照用量或数值，高亮重点档位。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "ultrawide"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "colA": {"type": "string", "maxLen": 8, "required": true},
+        "colB": {"type": "string", "maxLen": 8, "required": true},
+        "rows": {"type": "array", "min": 2, "max": 4, "item": {"a": 12, "b": 14, "highlight": "bool"}}
+      }
+    },
+    {
+      "id": "measure-scale",
+      "relation": "number",
+      "label": "量杯刻度",
+      "preferredKind": "scene",
+      "when": "液体药量、混悬液毫升数或体温刻度，用刻度液面直观上升到目标值。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "value": {"type": "number", "min": 0.1, "max": 1000, "required": true, "fact": true},
+        "max": {"type": "number", "min": 0.5, "max": 2000, "required": true, "fact": false},
+        "unit": {"type": "string", "maxLen": 8, "required": true},
+        "label": {"type": "string", "maxLen": 16, "required": true, "fact": true},
+        "note": {"type": "string", "maxLen": 22, "required": false, "fact": true}
+      }
+    },
+    {
+      "id": "count-icons",
+      "relation": "number",
+      "label": "次数图标",
+      "preferredKind": "card",
+      "when": "强调每天几次、最多几次或连续几天（1–6 之间的整数）。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide", "shallow"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "count": {"type": "int", "min": 1, "max": 6, "required": true, "fact": true},
+        "max": {"type": "int", "min": 1, "max": 6, "required": false, "fact": false},
+        "icon": {"type": "icon", "required": false},
+        "unit": {"type": "string", "maxLen": 12, "required": true, "fact": true},
+        "note": {"type": "string", "maxLen": 22, "required": false, "fact": true}
+      }
+    },
+    {
+      "id": "timeline-h",
+      "relation": "time",
+      "label": "横向时间轴",
+      "preferredKind": "scene",
+      "when": "按时间先后展开 2–4 个时间节点或时机判断。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide", "shallow"],
+      "maxItemsNarrow": 3,
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "nodes": {"type": "array", "min": 2, "max": 4, "item": {"time": 10, "title": 12, "detail": 16}}
+      }
+    },
+    {
+      "id": "clock-24",
+      "relation": "time",
+      "label": "24小时时钟",
+      "preferredKind": "scene",
+      "when": "标出一天中的具体服药时刻（如早 8 点、晚 8 点）或昼夜间隔。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "ultrawide"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "times": {"type": "array", "min": 1, "max": 4, "item": {"hour": "hour", "label": 10}},
+        "note": {"type": "string", "maxLen": 22, "required": false, "fact": true}
+      }
+    },
+    {
+      "id": "interval-bar",
+      "relation": "time",
+      "label": "间隔时间条",
+      "preferredKind": "scene",
+      "when": "强调两次服药之间的最短间隔（如至少间隔 4–6 小时、漏服是否过半）。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide", "shallow"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "interval": {"type": "string", "maxLen": 12, "required": true, "fact": true},
+        "startLabel": {"type": "string", "maxLen": 10, "required": true},
+        "endLabel": {"type": "string", "maxLen": 10, "required": true},
+        "note": {"type": "string", "maxLen": 24, "required": false, "fact": true}
+      }
+    },
+    {
+      "id": "meal-band",
+      "relation": "time",
+      "label": "饭前饭后带",
+      "preferredKind": "scene",
+      "when": "说明服药与进餐的关系（饭前/饭中/饭后/睡前），指示块滑到对应区间。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide", "shallow"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "active": {"type": "enum", "values": ["before", "during", "after", "bedtime"], "required": true},
+        "label": {"type": "string", "maxLen": 16, "required": true, "fact": true},
+        "note": {"type": "string", "maxLen": 24, "required": false, "fact": true}
+      }
+    },
+    {
+      "id": "flow-h",
+      "relation": "steps",
+      "label": "横向流程",
+      "preferredKind": "scene",
+      "when": "2–4 个有明确先后顺序的操作步骤，连线依次点亮。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide", "shallow"],
+      "maxItemsNarrow": 3,
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "steps": {"type": "array", "min": 2, "max": 4, "item": {"title": 10, "detail": 16, "icon": "icon"}}
+      }
+    },
+    {
+      "id": "steps-v",
+      "relation": "steps",
+      "label": "纵向步骤卡",
+      "preferredKind": "card",
+      "when": "需要略多说明文字的 2–4 个顺序步骤，逐卡上滑展示。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "ultrawide"],
+      "maxItemsShallow": 3,
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "steps": {"type": "array", "min": 2, "max": 4, "item": {"title": 12, "detail": 18, "tag": 8}}
+      }
+    },
+    {
+      "id": "art-steps",
+      "relation": "steps",
+      "label": "插画步骤分屏",
+      "preferredKind": "scene",
+      "when": "操作动作适合配图演示，左侧/上方插画配合右侧逐步说明。",
+      "variants": ["split", "solid", "outline"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "steps": {"type": "array", "min": 1, "max": 4, "item": {"title": 12, "detail": 16}},
+        "note": {"type": "string", "maxLen": 22, "required": false, "fact": true}
+      }
+    },
+    {
+      "id": "cycle",
+      "relation": "steps",
+      "label": "环形循环",
+      "preferredKind": "scene",
+      "when": "重复循环执行的 3–4 步护理或用药动作（如洗—晾—涂、监测—记录—复查）。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "ultrawide"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "center": {"type": "string", "maxLen": 8, "required": false},
+        "steps": {"type": "array", "min": 3, "max": 4, "item": {"title": 8, "detail": 14}}
+      }
+    },
+    {
+      "id": "do-dont",
+      "relation": "compare",
+      "label": "对错对照",
+      "preferredKind": "scene",
+      "when": "明确区分正确做法 ✓ 和错误做法 ✗，左右对照。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide", "shallow"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "do": {"type": "stringList", "min": 1, "max": 3, "maxLen": 16},
+        "dont": {"type": "stringList", "min": 1, "max": 3, "maxLen": 16}
+      }
+    },
+    {
+      "id": "table-compare",
+      "relation": "compare",
+      "label": "多属性对比表",
+      "preferredKind": "scene",
+      "when": "两种药物、剂型或情形按 2–4 个维度客观并排比较。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "leftTitle": {"type": "string", "maxLen": 10, "required": true, "fact": true},
+        "rightTitle": {"type": "string", "maxLen": 10, "required": true, "fact": true},
+        "rows": {"type": "array", "min": 2, "max": 4, "item": {"attr": 6, "left": 14, "right": 14}}
+      }
+    },
+    {
+      "id": "before-after",
+      "relation": "compare",
+      "label": "前后对比",
+      "preferredKind": "scene",
+      "when": "展示用药前后、改善前后或两种状态的动态分割对比。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide", "shallow"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "beforeTitle": {"type": "string", "maxLen": 10, "required": true},
+        "beforeItems": {"type": "stringList", "min": 1, "max": 3, "maxLen": 16},
+        "afterTitle": {"type": "string", "maxLen": 10, "required": true},
+        "afterItems": {"type": "stringList", "min": 1, "max": 3, "maxLen": 16}
+      }
+    },
+    {
+      "id": "balance",
+      "relation": "compare",
+      "label": "取舍天平",
+      "preferredKind": "scene",
+      "when": "权衡两方面的利弊、风险与获益或两种选择。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "leftTitle": {"type": "string", "maxLen": 10, "required": true},
+        "leftDesc": {"type": "string", "maxLen": 18, "required": true, "fact": true},
+        "rightTitle": {"type": "string", "maxLen": 10, "required": true},
+        "rightDesc": {"type": "string", "maxLen": 18, "required": true, "fact": true},
+        "tilt": {"type": "enum", "values": ["left", "right", "even"], "required": false}
+      }
+    },
+    {
+      "id": "myth-fact",
+      "relation": "warning",
+      "label": "误区纠偏",
+      "preferredKind": "scene",
+      "when": "常见用药误区被划掉删除线，随即翻出正确做法。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide", "shallow"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "myth": {"type": "string", "maxLen": 22, "required": true},
+        "fact": {"type": "string", "maxLen": 22, "required": true, "fact": true},
+        "note": {"type": "string", "maxLen": 24, "required": false, "fact": true}
+      }
+    },
+    {
+      "id": "alert-list",
+      "relation": "warning",
+      "label": "分级警示列表",
+      "preferredKind": "scene",
+      "when": "红黄分级列出立即就医信号、不良反应或禁用警告。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide", "shallow"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "items": {"type": "array", "min": 1, "max": 4, "item": {"title": 12, "detail": 18, "level": "level"}}
+      }
+    },
+    {
+      "id": "who-not",
+      "relation": "warning",
+      "label": "禁忌人群网格",
+      "preferredKind": "scene",
+      "when": "明确哪些人群禁忌或慎用（如婴幼儿、孕妇、老人、肝肾不全等），逐个加禁止标记。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide", "shallow"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "groups": {"type": "array", "min": 2, "max": 4, "item": {"label": 10, "icon": "icon", "reason": 14}}
+      }
+    },
+    {
+      "id": "check-list",
+      "relation": "checklist",
+      "label": "勾选清单",
+      "preferredKind": "card",
+      "when": "2–4 条并列的核对事项，逐条勾出确认。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide", "shallow"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "items": {"type": "array", "min": 2, "max": 4, "item": {"title": 12, "detail": 16, "tag": 8}}
+      }
+    },
+    {
+      "id": "icon-grid",
+      "relation": "checklist",
+      "label": "图标网格",
+      "preferredKind": "card",
+      "when": "2–6 个简短并列要素（如携带物品、保存条件、核心场景），以 2×2 或 3×2 网格弹出。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "items": {"type": "array", "min": 2, "max": 6, "item": {"title": 10, "detail": 14, "icon": "icon"}}
+      }
+    },
+    {
+      "id": "label-locate",
+      "relation": "checklist",
+      "label": "说明书定位",
+      "preferredKind": "scene",
+      "when": "指导观众在说明书或药盒外包装上找到特定栏目（如成分、规格、有效期、禁忌）。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "prop": {"type": "enum", "values": ["leaflet", "carton"], "required": false},
+        "section": {"type": "string", "maxLen": 10, "required": true},
+        "highlight": {"type": "string", "maxLen": 20, "required": true, "fact": true},
+        "items": {"type": "stringList", "min": 0, "max": 3, "maxLen": 14}
+      }
+    },
+    {
+      "id": "cause-chain",
+      "relation": "mechanism",
+      "label": "因果链",
+      "preferredKind": "scene",
+      "when": "用 A → B → C 的因果链解释为什么会这样或药物如何起效。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide", "shallow"],
+      "maxItemsNarrow": 3,
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "nodes": {"type": "array", "min": 2, "max": 4, "item": {"title": 10, "detail": 16, "icon": "icon"}}
+      }
+    },
+    {
+      "id": "body-callout",
+      "relation": "mechanism",
+      "label": "部位引线标注",
+      "preferredKind": "scene",
+      "when": "围绕身体部位/器官或药品示意，用引线逐条标注 2–3 个作用点（可配插画）。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "ultrawide"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "organ": {"type": "enum", "values": ["pill", "stomach", "heart", "eye", "body"], "required": false},
+        "callouts": {"type": "array", "min": 2, "max": 3, "item": {"title": 10, "detail": 16}}
+      }
+    },
+    {
+      "id": "three-points",
+      "relation": "summary",
+      "label": "三要点收口",
+      "preferredKind": "card",
+      "when": "结尾提炼 2–3 条最核心的带走要点，逐个出现后整体收束。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide", "shallow"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "items": {"type": "array", "min": 2, "max": 3, "item": {"title": 12, "detail": 16}},
+        "takeaway": {"type": "string", "maxLen": 22, "required": false, "fact": true}
+      }
+    },
+    {
+      "id": "motto",
+      "relation": "summary",
+      "label": "口诀卡",
+      "preferredKind": "card",
+      "when": "用一句朗朗上口的押韵短口诀或金句做收口记忆。",
+      "variants": ["solid", "outline", "split"],
+      "shapes": ["standard", "compact", "narrow", "shallow-wide", "ultrawide", "shallow", "portrait"],
+      "schema": {
+        "headline": {"type": "string", "maxLen": 14, "required": false},
+        "motto": {"type": "string", "maxLen": 22, "required": true, "fact": true},
+        "sub": {"type": "string", "maxLen": 24, "required": false, "fact": true}
+      }
+    }
+  ]
+}

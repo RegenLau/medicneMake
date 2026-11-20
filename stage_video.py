@@ -6,6 +6,7 @@ from urllib.parse import unquote
 import asset_library
 import draft_content
 import motion_asset
+import stage_forms
 import svg_motion
 
 
@@ -16,6 +17,12 @@ FOCUSES = frozenset(("all", "0", "1", "2", "3", "top", "bottom", "question", "an
 TRANSITIONS = ("fade", "wipe", "iris", "slide")
 POINT_TYPES = frozenset(("cover", "explain", "compare", "steps", "warning", "summary", "timeline", "checklist"))
 VERDICT_TONES = frozenset(("ok", "no", "warn"))
+STICKER_ANCHORS = frozenset(("media-tl", "media-tr", "media-bl", "media-br", "headline-end", "item-0", "item-1", "item-2", "item-3"))
+STICKER_SIZES = frozenset(("s", "m", "l"))
+STICKER_ENTERS = frozenset(("pop", "bounce", "slide", "stamp", "float"))
+STICKER_HOLDS = frozenset(("stay", "cue"))
+CLIP_STYLES = frozenset(("demo", "mg"))
+CLIP_SPEEDS = frozenset(("normal", "slow"))
 SLIDE_FIELDS = frozenset(("type", "layoutMode", "headline", "lead", "accentPhrase", "question", "answer",
                           "verdictTone", "items", "points", "pills", "steps", "warnings", "columns", "checks",
                           "takeaway", "listTitle", "footerNote", "outroNote", "highlightWords", "leftTop"))
@@ -138,12 +145,73 @@ def sound_settings(p, library):
     gain = settings.get("gainDb", -14)
     if type(gain) not in (int, float) or not -30 <= gain <= -6:
         raise ValueError("音效音量应在 -30 到 -6 dB 之间。")
+    sticker_sfx = settings.get("stickerSfx", True)
+    if type(sticker_sfx) is not bool:
+        raise ValueError("贴纸音效开关格式无效。")
     if pack == "off":
         return {}, gain
     selected = next((item for item in library.sound_packs() if item["id"] == pack), None)
     if selected is None:
         raise ValueError("请选择有效的音效风格包。")
     return selected["events"], gain
+
+
+def sticker_sound_enabled(p):
+    audio = p.get("audio")
+    if not isinstance(audio, dict):
+        return True
+    settings = audio.get("sfx")
+    if not isinstance(settings, dict):
+        return True
+    return settings.get("stickerSfx", True) is not False
+
+
+def validate_stickers(raw_stickers, cue_count, library, used):
+    if raw_stickers is None:
+        return []
+    if not isinstance(raw_stickers, list) or len(raw_stickers) > 2:
+        raise ValueError("每幕最多添加 2 个贴纸。")
+    out = []
+    max_cue = max(1, cue_count)
+    for row in raw_stickers:
+        st = mapping(row, "贴纸格式无效。")
+        aid = st.get("assetId")
+        path, item = library.resolve(aid, ("image", "svg"))
+        used.append((path, item))
+        cue = st.get("cue", 0)
+        if type(cue) is not int or not 0 <= cue < max_cue:
+            raise ValueError("贴纸出现的字幕序号超出范围。")
+        keyword = draft_content.string_field(st, "keyword", 20, optional=True)
+        anchor = st.get("anchor", "media-tr")
+        if anchor not in STICKER_ANCHORS:
+            raise ValueError("贴纸位置锚点无效。")
+        size = st.get("size", "m")
+        if size not in STICKER_SIZES:
+            raise ValueError("贴纸大小无效。")
+        enter = st.get("enter", "pop")
+        if enter not in STICKER_ENTERS:
+            raise ValueError("贴纸入场动效无效。")
+        hold = st.get("hold", "stay")
+        if hold not in STICKER_HOLDS:
+            raise ValueError("贴纸停留方式无效。")
+        sfx = st.get("sfx", "auto")
+        if not isinstance(sfx, str):
+            raise ValueError("贴纸音效无效。")
+        if sfx not in ("auto", "none"):
+            library.resolve(sfx, ("sfx",))
+        out.append({
+            "assetId": aid,
+            "url": path.as_uri(),
+            "tags": item.get("tags", []),
+            "cue": cue,
+            "keyword": keyword,
+            "anchor": anchor,
+            "size": size,
+            "enter": enter,
+            "hold": hold,
+            "sfx": sfx,
+        })
+    return out
 
 
 def stage_input(p, library, media_path):
@@ -250,8 +318,24 @@ def validate_shot(item, layout, compatible, library, media_path, pictures, used)
     if "sfxId" in item:
         library.resolve(item["sfxId"], ("sfx",))
         base["sfxId"] = item["sfxId"]
+    if item.get("stickers"):
+        base["stickers"] = validate_stickers(item["stickers"], len(base["cues"]), library, used)
     if kind in ("card", "scene") and content.get("art"):
         base["artUrl"] = illustration(content["art"], library, media_path, used)
+    if kind in ("card", "scene") and content.get("form"):
+        form_id = content["form"]
+        reg = stage_forms.load_registry()
+        if not isinstance(form_id, str) or form_id not in reg["byId"]:
+            raise ValueError("所选信息版式无效。")
+        form_def = reg["byId"][form_id]
+        variant = content.get("variant") or form_def["variants"][0]
+        if variant not in form_def["variants"]:
+            raise ValueError("版式视觉变体无效。")
+        raw_data = content.get("formData")
+        if raw_data is None:
+            raw_data = stage_forms.derive_form_data(form_id, item)
+        clean_data = stage_forms.validate_form_data(form_id, raw_data, item, check_facts=False)
+        base.update(form=form_id, variant=variant, formData=clean_data)
     if kind == "image":
         for field, value in (("contentImage", content.get("image")), ("outroImage", content.get("outroImage"))):
             if not value:
@@ -269,7 +353,7 @@ def validate_shot(item, layout, compatible, library, media_path, pictures, used)
         if motion != "auto" and motion not in draft_content.CODE_MOTION_MOTIONS:
             raise ValueError("信息图动效方式无效。")
         slide.update(layoutMode="explain", motionStyle=motion)
-        if "artUrl" in base:
+        if "artUrl" in base or "form" in base:
             base.update(items=items, takeaway=points.get("takeaway", ""), listTitle=points.get("listTitle", ""))
     elif kind == "scene":
         for field, valid in (("visual", draft_content.CODE_MOTION_VISUALS), ("motion", draft_content.CODE_MOTION_MOTIONS),
@@ -309,6 +393,36 @@ def validate_shot(item, layout, compatible, library, media_path, pictures, used)
         motion, asset, path = library.motion(content.get("assetId"))
         used.append((path, asset))
         base.update(motionAsset=motion, overlay=overlay, fit=fit, items=items)
+        slide.update(type="explain", layoutMode="explain", headline=points.get("headline") or base["name"])
+    elif kind == "clip":
+        clip_style = content.get("clipStyle", "demo")
+        overlay = content.get("overlay", "points")
+        clip_speed = content.get("clipSpeed", "normal")
+        if clip_style not in CLIP_STYLES or overlay not in motion_asset.OVERLAY_OPTIONS or clip_speed not in CLIP_SPEEDS:
+            raise ValueError("AI 视频的风格、文字叠加或时长适配设置无效。")
+        clip_val = content.get("clip")
+        if not isinstance(clip_val, str) or not clip_val.strip():
+            raise ValueError("请先生成或选择本幕的 AI 视频片段。")
+        clip_path = media_path(clip_val)
+        if clip_path.suffix != ".mp4":
+            raise ValueError("AI 视频片段必须是 MP4 文件。")
+        if clip_val.startswith("/library/"):
+            used.append(library.resolve(unquote(clip_val.removeprefix("/library/")), ("video",)))
+        base.update(
+            clip=clip_val,
+            clipFile=str(clip_path),
+            clipUrl=clip_path.as_uri(),
+            clipStyle=clip_style,
+            overlay=overlay,
+            clipSpeed=clip_speed,
+            items=items,
+        )
+        if content.get("clipDuration") and type(content["clipDuration"]) in (int, float) and content["clipDuration"] > 0:
+            base["clipDuration"] = float(content["clipDuration"])
+        if content.get("clipPoster"):
+            poster_path = media_path(content["clipPoster"])
+            if poster_path.suffix in (".png", ".jpg", ".webp"):
+                base["clipPoster"] = poster_path.as_uri()
         slide.update(type="explain", layoutMode="explain", headline=points.get("headline") or base["name"])
     else:
         move = content.get("move", "still")

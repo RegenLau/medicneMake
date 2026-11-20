@@ -23,7 +23,7 @@ SVG_ATTRIBUTES = frozenset("id viewBox width height x y x1 x2 y1 y2 cx cy r rx r
 LOCAL_PAINT = re.compile(r"url\(#[A-Za-z_][\w.:-]*\)")
 USER_ID = re.compile(r"user:[0-9a-f]{32}")
 LIMITS = {"image": 8 * 1024 * 1024, "svg": 300 * 1024, "layout": 64 * 1024, "theme": 16 * 1024,
-          "lottie": motion_asset.LOTTIE_LIMIT, "mg": motion_asset.MG_LIMIT}
+          "lottie": motion_asset.LOTTIE_LIMIT, "mg": motion_asset.MG_LIMIT, "video": 50 * 1024 * 1024}
 LAYOUT_VARIANTS = {
     "header": ("pill-title+chapter-rail", "breadcrumb", "ticker", "namecard", "question"),
     "chapters": ("rail", "nav-panel"),
@@ -36,7 +36,7 @@ LAYOUT_VARIANTS = {
     "answer": ("bubble",),
     "headline": ("poster",),
 }
-LAYOUT_CONTENTS = frozenset(("image", "card", "scene", "svg", "asset", "mg"))
+LAYOUT_CONTENTS = frozenset(("image", "card", "scene", "svg", "asset", "mg", "clip"))
 REGION_FIELDS = frozenset(("x", "y", "w", "h", "component"))
 THEME_BASES = frozenset(("medical", "warm"))
 THEME_LENGTH_VARS = frozenset(("--v-card-radius", "--v-card-border-w"))
@@ -247,8 +247,11 @@ def validate_layout(definition):
 
 
 def layout_supports(definition, item):
-    return list(dict.fromkeys([*definition["supports"],
-                               *(kind for kind in item.get("extraSupports", ()) if kind in LAYOUT_CONTENTS)]))
+    base = [*definition["supports"],
+            *(kind for kind in item.get("extraSupports", ()) if kind in LAYOUT_CONTENTS)]
+    if "image" in base and "clip" not in base:
+        base.append("clip")
+    return list(dict.fromkeys(base))
 
 
 def clean_svg(data, *, motion=False):
@@ -316,6 +319,24 @@ def check_image(data, ffmpeg):
     return ext
 
 
+def check_video(path, ffmpeg, poster_dest=None):
+    if not ffmpeg:
+        raise ValueError("导入视频素材需要工作台的 FFmpeg。")
+    cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-i", str(path), "-frames:v", "1"]
+    if poster_dest is not None:
+        poster_dest.parent.mkdir(parents=True, exist_ok=True)
+        cmd.extend(["-vf", "scale=480:-2", "-q:v", "3", str(poster_dest)])
+    else:
+        cmd.extend(["-f", "null", "-"])
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=20)
+    except subprocess.TimeoutExpired as error:
+        raise ValueError("视频读取超时，请换一段较短的 MP4 视频。") from error
+    if result.returncode:
+        raise ValueError("无法读取这段 MP4 视频，请检查文件格式。")
+    return ".mp4"
+
+
 def text_field(fields, name, limit, required=False):
     value = fields.get(name, "")
     if not isinstance(value, str) or len(value.strip()) > limit or (required and not value.strip()):
@@ -360,7 +381,14 @@ class LocalLibrary:
                 if item.get("file") and not item.get("archived")]
 
     def stage_catalog(self):
-        return next(item["data"] for item in self._builtins() if item["id"] == "builtin:stage-config/v1")
+        base = copy.deepcopy(next(item["data"] for item in self._builtins() if item["id"] == "builtin:stage-config/v1"))
+        forms_file = self.builtin_root / "forms.json"
+        if forms_file.is_file():
+            reg = json.loads(forms_file.read_text(encoding="utf-8"))
+            base["formRelations"] = reg.get("relations", {})
+            base["forms"] = reg.get("forms", [])
+            base["legacyVisualMap"] = reg.get("legacyVisualMap", {})
+        return base
 
     def sound_packs(self):
         return [{key: item[key] for key in ("id", "name", "gainDb", "events")}
@@ -469,7 +497,7 @@ class LocalLibrary:
         return package, item, path
 
     def motion_preview_file(self, asset_id, name):
-        _, item = self.resolve(asset_id, ("lottie", "mg"))
+        _, item = self.resolve(asset_id, ("lottie", "mg", "video"))
         if name not in ("poster.jpg", "preview.mp4") or not item.get("previewUrl", "").startswith("/library-preview/"):
             raise ValueError("素材预览不存在。")
         key = self._read_user()
@@ -635,6 +663,8 @@ class LocalLibrary:
             ext = ".json"
         elif kind in ("lottie", "mg"):
             ext = ".json"
+        elif kind == "video":
+            ext = ".mp4"
         else:
             ext = check_image(data, ffmpeg)
         name = text_field(fields, "name", 80, required=True)
@@ -662,10 +692,23 @@ class LocalLibrary:
             if not path.is_file():
                 temp = path.with_suffix(".tmp")
                 temp.write_bytes(data)
+                if kind == "video":
+                    poster = self.root / "previews" / sha / "poster.jpg"
+                    try:
+                        check_video(temp, ffmpeg, poster)
+                    except Exception:
+                        temp.unlink(missing_ok=True)
+                        raise
                 temp.replace(path)
+            elif kind == "video":
+                poster = self.root / "previews" / sha / "poster.jpg"
+                if not poster.is_file():
+                    check_video(path, ffmpeg, poster)
             item = {"id": "user:" + uuid.uuid4().hex, "kind": kind, "name": name, "tags": tags,
                     "source": source, "license": rights, "credit": credit, "sha256": sha,
                     "file": filename, "meta": {key: value for key, value in metadata.items() if value}}
+            if kind == "video":
+                item["previewDigest"] = sha
             if kind == "layout":
                 item["aspect"] = definition["aspect"]
             if kind in ("layout", "theme") and origin:
