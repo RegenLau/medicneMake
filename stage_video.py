@@ -14,9 +14,10 @@ LEGACY_KINDS = frozenset(("image", "card", "scene", "svg"))
 FOCUSES = frozenset(("all", "0", "1", "2", "3", "top", "bottom", "question", "answer", "action", "outro"))
 TRANSITIONS = ("fade", "wipe", "iris", "slide")
 POINT_TYPES = frozenset(("cover", "explain", "compare", "steps", "warning", "summary", "timeline", "checklist"))
+VERDICT_TONES = frozenset(("ok", "no", "warn"))
 SLIDE_FIELDS = frozenset(("type", "layoutMode", "headline", "lead", "accentPhrase", "question", "answer",
-                          "items", "points", "pills", "steps", "warnings", "columns", "checks", "takeaway",
-                          "listTitle", "footerNote", "outroNote", "highlightWords", "leftTop"))
+                          "verdictTone", "items", "points", "pills", "steps", "warnings", "columns", "checks",
+                          "takeaway", "listTitle", "footerNote", "outroNote", "highlightWords", "leftTop"))
 
 
 def mapping(value, message):
@@ -50,6 +51,15 @@ def stage_input(p, library, media_path):
     title = draft_content.string_field(p, "title", 40)
     short_title = draft_content.string_field(p, "shortTitle", 20, optional=True)
     disclaimer = draft_content.string_field(p, "disclaimer", 60, optional=True)
+    drug = draft_content.string_field(p, "drug", 20, optional=True)
+    raw_tags = p.get("drugTags")
+    drug_tags = []
+    if raw_tags is not None:
+        if not isinstance(raw_tags, list) or len(raw_tags) > 2 or not all(
+            isinstance(tag, str) and 1 <= len(tag.strip()) <= 6 for tag in raw_tags
+        ):
+            raise ValueError("药品标签最多 2 个，每个不超过 6 字。")
+        drug_tags = [tag.strip() for tag in raw_tags]
     chapters = p.get("chapters", ["核心讲解", "要点总结"])
     if not isinstance(chapters, list) or not 2 <= len(chapters) <= 5 or not all(
         isinstance(chapter, str) and 1 <= len(chapter.strip()) <= 10 for chapter in chapters
@@ -64,6 +74,10 @@ def stage_input(p, library, media_path):
     deck = {"title": title, "shortTitle": short_title, "chapters": chapters}
     if "disclaimer" in p:
         deck["disclaimer"] = disclaimer
+    if drug:
+        deck["drug"] = drug
+    if drug_tags:
+        deck["drugTags"] = drug_tags
     return layout, deck, shots, pictures, used
 
 
@@ -112,6 +126,9 @@ def validate_shot(item, layout, compatible, library, media_path, pictures, used)
             raise ValueError("请选择有效的幕间转场。")
         base["transition"] = transition
     base.update(kind=kind, tailPause=item.get("tailPause", 0.55))
+    tone_val = points.get("verdictTone")
+    if tone_val not in (None, "") and tone_val not in VERDICT_TONES:
+        raise ValueError("结论语气只能是 ok、no 或 warn。")
     slide = {**{key: points[key] for key in SLIDE_FIELDS & points.keys()}, **base}
     default_points = [{"title": entry.get("title", ""), "desc": entry.get("detail", "")} for entry in items]
     for field in ("points", "steps", "warnings", "checks"):

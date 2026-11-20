@@ -82,6 +82,27 @@ class StageVideoTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "幕间转场"):
             stage_video.stage_input(p, server.ASSETS, server.media_path)
 
+    def test_drug_drug_tags_and_verdict_tone_validation(self):
+        p = self.payload("card")
+        p["drug"] = "硝苯地平缓释片"
+        p["drugTags"] = ["缓释片", "处方药"]
+        p["items"][0]["points"]["verdictTone"] = "no"
+        _, deck, shots, _, _ = stage_video.stage_input(p, server.ASSETS, server.media_path)
+        self.assertEqual("硝苯地平缓释片", deck["drug"])
+        self.assertEqual(["缓释片", "处方药"], deck["drugTags"])
+        self.assertEqual("no", shots[0]["slide"]["verdictTone"])
+
+        for bad_tags in (["a", "b", "c"], ["超过六个字的标签"], [123]):
+            with self.subTest(bad_tags=bad_tags):
+                bad = {**p, "drugTags": bad_tags}
+                with self.assertRaisesRegex(ValueError, "药品标签"):
+                    stage_video.stage_input(bad, server.ASSETS, server.media_path)
+
+        bad_tone = self.payload("card")
+        bad_tone["items"][0]["points"]["verdictTone"] = "bad"
+        with self.assertRaisesRegex(ValueError, "结论语气"):
+            stage_video.stage_input(bad_tone, server.ASSETS, server.media_path)
+
 
 if __name__ == "__main__":
     unittest.main()

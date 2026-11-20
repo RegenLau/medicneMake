@@ -296,6 +296,75 @@ class MixPlanningTests(unittest.TestCase):
         self.assertEqual(["card", "scene", "card"], [row["content"]["kind"] for row in result["shots"]])
         self.assertTrue(all(row["content"]["adjusted"] for row in result["shots"]))
 
+    def test_write_script_prompt_adds_qa_requirements_only_for_qa_layout(self):
+        raw = copy.deepcopy(self.script)
+        client = Mock(return_value=model_response(raw))
+        mix_plan.write_script(client, "deepseek-flash", {**self.item, "layoutId": "builtin:layout/qa-chat"}, 45, CATALOG)
+        qa_prompt = client.call_args.args[1]["messages"][0]["content"]
+        self.assertIn("问答对话布局", qa_prompt)
+        self.assertIn("points 都必须提供 question", qa_prompt)
+        self.assertIn("verdictTone", qa_prompt)
+
+        for other in ("builtin:layout/info-classic", "builtin:layout/headline", "builtin:layout/broadcast"):
+            with self.subTest(layout=other):
+                client.reset_mock()
+                mix_plan.write_script(client, "deepseek-flash", {**self.item, "layoutId": other}, 45, CATALOG)
+                prompt = client.call_args.args[1]["messages"][0]["content"]
+                self.assertNotIn("问答对话布局", prompt)
+                self.assertNotIn("verdictTone", prompt)
+                self.assertIn("accentPhrase", prompt)
+                self.assertIn("lead", prompt)
+
+    def test_write_script_sanitizes_and_truncates_layout_data_fields(self):
+        raw = copy.deepcopy(self.script)
+        raw["drugTags"] = [" 缓释片制剂太长 ", "处方药", "第三个标签"]
+        raw["shots"][0]["points"].update(
+            headline="漏服了，也只吃一次",
+            accentPhrase="也只吃一次",
+            lead="这是一句非常详细的补充解释文字超过三十个字需要被系统自动截断保留前三十个字",
+            question="昨天忘吃降压药今天能不能直接吃两片补回来请问医生这样安全吗会不会有危险",
+            answer="不行一次只能吃常规剂量绝对不能吃双倍哦",
+            verdictTone="no",
+        )
+        raw["shots"][1]["points"].update(
+            headline="整片吞服别掰开",
+            accentPhrase="不在标题里",
+            lead="   ",
+            question="缓释片能掰开吗？",
+            answer="不能掰开",
+            verdictTone="invalid-tone",
+        )
+        raw["shots"][2]["points"].update(
+            headline="记住规律服药九个字超长短语",
+            accentPhrase="记住规律服药九个字",
+            verdictTone="warn",
+        )
+        client = Mock(return_value=model_response(raw))
+        item = {**self.item, "layoutId": "builtin:layout/qa-chat", "drug": "硝苯地平缓释片"}
+        result = mix_plan.write_script(client, "deepseek-flash", item, 45, CATALOG)
+        prompt = client.call_args.args[1]["messages"][0]["content"]
+        self.assertIn("drugTags", prompt)
+
+        self.assertEqual(["缓释片制剂太", "处方药"], result["drugTags"])
+
+        p0 = result["shots"][0]["points"]
+        self.assertEqual("也只吃一次", p0["accentPhrase"])
+        self.assertEqual(30, len(p0["lead"]))
+        self.assertEqual(30, len(p0["question"]))
+        self.assertEqual(16, len(p0["answer"]))
+        self.assertEqual("no", p0["verdictTone"])
+
+        p1 = result["shots"][1]["points"]
+        self.assertNotIn("accentPhrase", p1)
+        self.assertNotIn("lead", p1)
+        self.assertEqual("缓释片能掰开吗？", p1["question"])
+        self.assertEqual("不能掰开", p1["answer"])
+        self.assertNotIn("verdictTone", p1)
+
+        p2 = result["shots"][2]["points"]
+        self.assertNotIn("accentPhrase", p2)  # > 8 chars dropped
+        self.assertEqual("warn", p2["verdictTone"])
+
 
 if __name__ == "__main__":
     unittest.main()

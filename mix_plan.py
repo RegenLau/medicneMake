@@ -86,7 +86,65 @@ def checked_rows(script, target=None):
     return rows
 
 
+QA_LAYOUT = "builtin:layout/qa-chat"
+
+
+def _sanitize_script_points(points):
+    headline = points.get("headline") if isinstance(points.get("headline"), str) else ""
+    accent = points.get("accentPhrase")
+    if isinstance(accent, str):
+        accent = accent.strip()
+        if accent and len(accent) <= 8 and accent in headline:
+            points["accentPhrase"] = accent
+        else:
+            points.pop("accentPhrase", None)
+    else:
+        points.pop("accentPhrase", None)
+
+    for key, limit in (("lead", 30), ("question", 30), ("answer", 16)):
+        value = points.get(key)
+        if isinstance(value, str) and value.strip():
+            points[key] = value.strip()[:limit]
+        else:
+            points.pop(key, None)
+
+    tone = points.get("verdictTone")
+    if isinstance(tone, str) and tone.strip() in stage_video.VERDICT_TONES:
+        points["verdictTone"] = tone.strip()
+    else:
+        points.pop("verdictTone", None)
+
+
+def _sanitize_drug_tags(raw_tags):
+    if not isinstance(raw_tags, list):
+        return []
+    out = []
+    for tag in raw_tags:
+        if isinstance(tag, str) and tag.strip():
+            out.append(tag.strip()[:6])
+        if len(out) >= 2:
+            break
+    return out
+
+
 def write_script(client, model, item, reference, catalog):
+    is_qa = item.get("layoutId") == QA_LAYOUT
+    has_drug = bool((item.get("drug") or "").strip())
+    extra_rules = (
+        "points 可选提供 accentPhrase（必须是 headline 中的一个短语，不超过 8 字）和 lead（不超过 30 字的一句解释）。"
+    )
+    if has_drug:
+        extra_rules += (
+            "填写了关联药品时，顶层可选提供 drugTags（0–2 个，每个不超过 6 字，如剂型、处方药或非处方药；"
+            "只写药品说明书能确认的信息，不确定就不写）。"
+        )
+    if is_qa:
+        extra_rules += (
+            "本片采用问答对话布局：除第一幕外，每一幕的 points 都必须提供 question（患者口吻的问句，不超过 30 字）、"
+            "answer（不超过 16 字的直接结论）和 verdictTone（ok 表示正确推荐、no 表示否定禁止、warn 表示提醒注意）。"
+        )
+    qa_schema = ',"question":"患者口吻提问","answer":"简短直接结论","verdictTone":"ok"' if is_qa else ""
+    drug_tags_schema = ',"drugTags":["剂型","处方药"]' if has_drug else ""
     prompt = draft_content.EDITORIAL_RULES + draft_content.drug_rule(item.get("drug", "")) + (
         "【任务】写一条用药科普短视频脚本。写好全片口播，再按自然内容断点划分各幕。"
         "本步只写内容，不分配画面制作方式，也不预设固定的结构。前八秒回答读者最想知道的问题。"
@@ -96,10 +154,12 @@ def write_script(client, model, item, reference, catalog):
         "【输出】只返回 JSON，结构如下。每个 points.type 从输入 pointTypes 选，按内容选型。"
         "每幕 0–4 条短要点，cues 是按口播顺序切开的连续短句，text 拼起来就等于 line。"
         "focus 用 all、条目序号（字符串）或 question/answer/action，highlightWords 必须来自原口播。"
-        "章节 2–5 个，各不超过 10 字，chapterIndex 从 0 起；标题不超过 40 字，shortTitle 不超过 12 字。\n"
-        '{"title":"全片标题","shortTitle":"主题短句","chapters":["章节一","章节二"],'
+        "章节 2–5 个，各不超过 10 字，chapterIndex 从 0 起；标题不超过 40 字，shortTitle 不超过 12 字。"
+        + extra_rules + "\n"
+        '{"title":"全片标题","shortTitle":"主题短句","chapters":["章节一","章节二"]' + drug_tags_schema + ','
         '"shots":[{"name":"本幕小标题","chapterIndex":0,"line":"本幕口播。",'
-        '"points":{"type":"结构","headline":"屏显标题","items":[{"title":"要点","detail":"短说明","tag":""}],"takeaway":"结论"},'
+        '"points":{"type":"结构","headline":"屏显标题","accentPhrase":"短语","lead":"一句解释"' + qa_schema + ','
+        '"items":[{"title":"要点","detail":"短说明","tag":""}],"takeaway":"结论"},'
         '"cues":[{"text":"本幕口播。","focus":"0","highlightWords":["口播"]}]}]}'
     )
     result = draft_content.ask_json(client, model, prompt, {
@@ -122,6 +182,7 @@ def write_script(client, model, item, reference, catalog):
         points = stage_video.mapping(row.get("points"), "请填写本幕要点。")
         points.setdefault("items", [])
         points.setdefault("highlightWords", [])
+        _sanitize_script_points(points)
         if type(row.get("chapterIndex")) is not int or not 0 <= row["chapterIndex"] < len(chapters):
             raise ValueError("模型返回的章节序号无效。")
         cues = row.get("cues")
@@ -146,8 +207,12 @@ def write_script(client, model, item, reference, catalog):
     rows = checked_rows(result)
     if reference and sum(row["seconds"] for row in rows) > reference + draft_content.DURATION_OVERAGE_LIMIT:
         raise ValueError("脚本估算时长超过参考时长加 4 秒，请重试。")
-    return {"title": title, "shortTitle": draft_content.string_field(result, "shortTitle", 20, optional=True),
-            "chapters": chapters, "shots": [{field: row[field] for field in SHOT_FIELDS} for row in rows]}
+    script = {"title": title, "shortTitle": draft_content.string_field(result, "shortTitle", 20, optional=True),
+              "chapters": chapters, "shots": [{field: row[field] for field in SHOT_FIELDS} for row in rows]}
+    drug_tags = _sanitize_drug_tags(result.get("drugTags"))
+    if drug_tags:
+        script["drugTags"] = drug_tags
+    return script
 
 
 def asset_candidates(library, topic, rows, allowed_kinds, *, current_id=None):

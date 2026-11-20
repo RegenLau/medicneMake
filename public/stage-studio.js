@@ -65,6 +65,7 @@ const StageStudio = (() => {
     return {
       type: type || "explain", headline: raw.headline || raw.name, lead: raw.lead || "", accentPhrase: raw.accentPhrase || "",
       question: raw.question || "", answer: raw.answer || "",
+      verdictTone: ["ok", "no", "warn"].includes(raw.verdictTone) ? raw.verdictTone : "",
       items: items.map(item => typeof item === "string" ? {title: item, detail:"", tag:""}
         : {title: item.title || item.label || item.head || "", detail: item.detail || item.desc || "", tag: item.tag || ""}),
       takeaway: raw.takeaway || raw.footerNote || "", highlightWords: raw.highlightWords || raw.labels || [],
@@ -406,6 +407,9 @@ const StageStudio = (() => {
     w.stagePlan.shortTitle = output.shortTitle || "";
     w.stagePlan.chapters = output.chapters || ["先看要点", "用药提醒"];
     w.stagePlan.disclaimer = output.disclaimer ?? TemplateVideo.DEFAULT_DISCLAIMER;
+    if (Array.isArray(output.drugTags)) {
+      w.stagePlan.drugTags = output.drugTags.map(t => String(t || "").trim().slice(0, 6)).filter(Boolean).slice(0, 2);
+    } else delete w.stagePlan.drugTags;
     delete w.stagePlan.compatibility;
     w.title = output.title;
     w.stage = "script";
@@ -429,7 +433,12 @@ const StageStudio = (() => {
           ...(themeDef.background?.assetId ? { themeBackground: StudioAssets.url(themeDef.background.assetId) } : {}),
         }
       : { theme: w.templateTheme || "medical" };
+    const drug = String(w.drug || "").trim().slice(0, 20);
+    const drugTags = Array.isArray(p.drugTags)
+      ? p.drugTags.map(t => String(t || "").trim().slice(0, 6)).filter(Boolean).slice(0, 2)
+      : [];
     return {title:w.title, shortTitle:p.shortTitle, chapters:p.chapters, disclaimer:p.disclaimer,
+      ...(drug ? { drug } : {}), ...(drugTags.length ? { drugTags } : {}),
       ...themeProps, presenter:w.templatePresenter || "digital", pharmacist:{...TemplateStudio.ensurePharmacist(data)},
       slides:p.shots.map(shot => {
         const {points, content} = shot;
@@ -569,17 +578,33 @@ const StageStudio = (() => {
     if (!shot) return setup(w);
     selected.set(w, index);
     const tabs = inspector.get(w) || "scene";
-    const support = activeLayouts().find(item => item.id === w.stagePlan.layout.id)?.supports;
+    const layoutMeta = activeLayouts().find(item => item.id === w.stagePlan.layout.id);
+    const support = layoutMeta?.supports;
+    const layoutId = w.stagePlan.layout.id;
+    const isQaLayout = layoutId === "builtin:layout/qa-chat" || layoutMeta?.regions?.header?.variant === "question" || Boolean(layoutMeta?.regions?.answer);
+    const isHeadlineLayout = layoutId === "builtin:layout/headline" || Boolean(layoutMeta?.regions?.headline);
+    const isTakeawayLayout = layoutId === "builtin:layout/takeaway" || Boolean(layoutMeta?.regions?.keypoints);
     const kindButtons = Object.entries(kinds).map(([kind,name]) => btn(name, "stage-kind", "chip" + (shot.content.kind === kind ? " selected" : ""),
       kind, `aria-pressed="${shot.content.kind === kind}" ${!support || support.includes(kind) ? "" : "disabled"}`)).join("");
     const isMix = w.stagePlan.mode === "mix";
     const settings = [layoutControls(w), themeControls(w), modeControls(w), text("作品标题", "work-title", w.title, 40),
       text("标题短句", "work-shortTitle", w.stagePlan.shortTitle, 20),
+      text("关联药品", "work-drug", w.drug, 20),
+      text("药品标签（最多 2 个，逗号分隔，每个 ≤6 字）", "work-drugTags", (w.stagePlan.drugTags || []).join("，"), 20),
       ...w.stagePlan.chapters.map((name,i) => text(`章节 ${i+1}`, "work-chapter:"+i, name, 10)),
       text("底部参考声明", "work-disclaimer", w.stagePlan.disclaimer, 60),
       TemplateStudio.templateSetupHtml(w,data,esc,btn,{hideTheme:true}), renderMusicStudioCard(w, {showModeChips:true}), soundControls(w),
       select("全片字体", "font", [["", "默认"], ["builtin:font/noto-sans-sc", "Noto Sans SC"]], w.settings.fontId)].join("");
     const items = shot.points.items.map(item => [item.title,item.detail,item.tag].filter(Boolean).join("｜")).join("\n");
+    const layoutFields = (isQaLayout
+      ? text("提问（≤30 字）", "point-question", shot.points.question, 30) +
+        text("结论（≤16 字）", "point-answer", shot.points.answer, 16) +
+        select("结论语气", "point-verdictTone", [["", "默认（正确 ✓）"], ["ok", "正确 / 推荐（✓）"], ["no", "否定 / 禁止（✗）"], ["warn", "提醒 / 注意（!）"]], shot.points.verdictTone || "")
+      : "") +
+      (isHeadlineLayout
+        ? text("强调短语（须在标题中，≤8 字）", "point-accentPhrase", shot.points.accentPhrase, 8) +
+          text("一句解释（≤30 字）", "point-lead", shot.points.lead, 30)
+        : "");
     const decision = isMix || shot.content.reason || shot.content.adjusted || shot.content.mgRequest ? '<div class="stage-decision">' +
       (shot.content.reason ? `<p>${esc(shot.content.reason)}</p>` : "") +
       (shot.content.adjusted ? `<p class="small stage-adjusted">${esc(shot.content.adjusted)}</p>` : "") +
@@ -595,7 +620,9 @@ const StageStudio = (() => {
       '<div class="tpl-two-col">' + text("预览时长（秒）", "seconds", shot.seconds, 4) +
       select("所属章节", "chapterIndex", w.stagePlan.chapters.map((name,index) => [String(index),name]), String(shot.chapterIndex)) + '</div>' +
       select("要点结构", "point-type", Object.keys(pointVisual()).map(type => [type, TemplateVideo.SLIDE_TYPES[type]?.name || codeMotionVisualSpec(pointVisual()[type]).name]), shot.points.type) +
-      text("屏显要点标题", "point-headline", shot.points.headline) + text("画面结语", "point-takeaway", shot.points.takeaway) +
+      text(isHeadlineLayout ? "大标题" : "屏显要点标题", "point-headline", shot.points.headline) +
+      layoutFields +
+      text(isTakeawayLayout ? "记住这一句" : "画面结语", "point-takeaway", shot.points.takeaway) +
       `<label class="field">要点（每行一条，可用「｜」分隔说明和标签）<textarea data-stage-field="point-items" rows="3">${esc(items)}</textarea></label>` +
       `<details class="shot-options"><summary>字幕节拍（${shot.cues.length}）</summary>${shot.cues.map((cue,i) =>
         '<div class="tpl-two-col">' + text("字幕", "cue-text:"+i, cue.text, 240) +
@@ -796,6 +823,12 @@ const StageStudio = (() => {
       return true;
     }
     if (key === "work-title") w.title = value;
+    else if (key === "work-drug") w.drug = value.slice(0, 20);
+    else if (key === "work-drugTags") {
+      const tags = value.split(/[，,、\s]+/).map(t => t.trim().slice(0, 6)).filter(Boolean).slice(0, 2);
+      if (tags.length) w.stagePlan.drugTags = tags;
+      else delete w.stagePlan.drugTags;
+    }
     else if (key === "work-chapter") w.stagePlan.chapters[Number(rawIndex)] = value;
     else if (key.startsWith("work-")) w.stagePlan[key.slice(5)] = value;
     else if (key === "font") {
@@ -911,6 +944,8 @@ const StageStudio = (() => {
       delete job.payload.svg;
       delete job.payload.svgLayout;
       Object.assign(job.payload,{stage:true,layoutId:p.layout.id,title:w.title,shortTitle:p.shortTitle || undefined,
+        ...(w.drug?.trim() ? {drug:w.drug.trim().slice(0, 20)} : {}),
+        ...(p.drugTags?.length ? {drugTags:p.drugTags.slice(0, 2)} : {}),
         disclaimer:p.disclaimer,chapters:p.chapters,appearance:{theme:appearance.theme,presenter:appearance.presenter,pharmacist:appearance.pharmacist,
           ...(p.themeId ? {themeId:p.themeId} : {})},
         compatibility:p.compatibility,audio:p.audio,...(avatar ? {avatar} : {}),...(w.video?.url ? {previousVideo:w.video.url} : {})});
