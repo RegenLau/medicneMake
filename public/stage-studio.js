@@ -12,6 +12,11 @@ const StageStudio = (() => {
   const inspector = new WeakMap();
   const mgPanels = new WeakMap();
   const pendingAutoPlay = new WeakMap();
+  const batchQueues = new WeakMap();
+  const reviewFilter = new WeakMap();
+  let reviewAudio = null;
+  let reviewPlayingWork = null;
+  let reviewPlayingIndex = null;
   const STAGE_MODULES = [
     { id: "visual",    group: "shot",   label: "画面", title: "本幕画面",   icon: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 15l-5-5L5 20"/>' },
     { id: "points",    group: "shot",   label: "要点", title: "本幕要点",   icon: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>' },
@@ -26,6 +31,133 @@ const StageStudio = (() => {
   const PLAY_ICON = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><polygon points="6,4 20,12 6,20" fill="currentColor" stroke="none"/></svg>';
   const PAUSE_ICON = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1" fill="currentColor" stroke="none"/><rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor" stroke="none"/></svg>';
   const HIGHLIGHT_ICON = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z" fill="currentColor" stroke="none"/></svg>';
+  const REVIEW_ICON = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></svg>';
+  const STUDIO_ICON = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>';
+  const currentView = w => w?.stagePlan?.editorView === "review" ? "review" : "studio";
+  const shotReadyState = s => s?.content?.kind === "image" ? (s.content.image ? "ok" : "pending")
+    : s?.content?.kind === "clip" ? (s.content.clip ? "ok" : "pending")
+    : s?.content?.kind === "svg" ? (s.content.svgCode ? "ok" : "pending")
+    : s?.content?.kind === "scene" ? (s.content.code ? "ok" : "pending")
+    : ["asset", "mg"].includes(s?.content?.kind) ? (s.content.assetId ? "ok" : "pending")
+    : "ok";
+  const shotNeedsRegen = s => shotReadyState(s) === "ok" && Boolean(s?.presentationStale);
+
+  function stopReviewAudio() {
+    if (reviewAudio) {
+      try { reviewAudio.pause(); } catch {}
+      reviewAudio.src = "";
+      reviewAudio = null;
+    }
+    const prevIdx = reviewPlayingIndex;
+    reviewPlayingWork = null;
+    reviewPlayingIndex = null;
+    if (prevIdx !== null) {
+      const btnEl = app?.querySelector?.(`[data-action="stage-review-speech"][data-val="${prevIdx}"]`);
+      if (btnEl) {
+        btnEl.classList.remove("is-playing");
+        const cached = btnEl.classList.contains("is-cached");
+        btnEl.innerHTML = `${PLAY_ICON}<span>试听口播</span>${cached ? '<em class="stage-speech-tag">已缓存</em>' : ""}`;
+      }
+    }
+  }
+
+  function playReviewSpeech(w, index) {
+    const shot = w?.stagePlan?.shots?.[index];
+    const cached = shot?.speech;
+    if (!cached?.url || cached.line !== shot.line.trim() || cached.voice !== w.settings.voice) return false;
+    if (reviewPlayingWork === w && reviewPlayingIndex === index && reviewAudio && !reviewAudio.paused) {
+      stopReviewAudio();
+      return true;
+    }
+    stopReviewAudio();
+    const audio = new Audio(cached.url);
+    reviewAudio = audio;
+    reviewPlayingWork = w;
+    reviewPlayingIndex = index;
+    const syncBtn = playing => {
+      const btnEl = app?.querySelector?.(`[data-action="stage-review-speech"][data-val="${index}"]`);
+      if (!btnEl) return;
+      btnEl.classList.toggle("is-playing", playing);
+      btnEl.classList.add("is-cached");
+      btnEl.innerHTML = playing
+        ? `${PAUSE_ICON}<span>停止试听</span>`
+        : `${PLAY_ICON}<span>试听口播</span><em class="stage-speech-tag">已缓存</em>`;
+    };
+    syncBtn(true);
+    audio.addEventListener("ended", () => {
+      if (reviewAudio === audio) stopReviewAudio();
+    });
+    audio.addEventListener("error", () => {
+      if (reviewAudio === audio) stopReviewAudio();
+    });
+    audio.play().catch(() => {
+      if (reviewAudio === audio) stopReviewAudio();
+    });
+    return true;
+  }
+
+  function usesDynamicAvatar(w) {
+    const presenter = w.templatePresenter || "digital";
+    const avatarMode = w.videoMode === "svg" ? "static"
+      : w.videoMode === "code-motion" ? codeMotionAvatarMode(w) : resolveAvatarMode(w.settings.avatarMode);
+    return w.settings.voice !== "无配音" && presenter !== "none" && avatarMode !== "static";
+  }
+
+  function collectBatchPlan(w, { includeStale = false } = {}) {
+    const shots = w?.stagePlan?.shots || [];
+    const image = [];
+    const svg = [];
+    const scene = [];
+    const missingClips = [];
+    const missingAssets = [];
+    let staleCount = 0;
+    let readyCount = 0;
+    shots.forEach((s, i) => {
+      const ready = shotReadyState(s) === "ok";
+      const stale = ready && Boolean(s.presentationStale);
+      if (ready) readyCount++;
+      if (stale) staleCount++;
+      const need = !ready || (includeStale && stale);
+      const kind = s.content.kind;
+      if (kind === "image" && need) image.push(i);
+      else if (kind === "svg" && need) svg.push(i);
+      else if (kind === "scene" && need) scene.push(i);
+      else if (kind === "clip" && !ready) missingClips.push(i);
+      else if (["asset", "mg"].includes(kind) && !ready) missingAssets.push(i);
+    });
+    return {
+      image,
+      svg,
+      scene,
+      missingClips,
+      missingAssets,
+      staleCount,
+      readyCount,
+      totalShots: shots.length,
+      totalBatchShots: image.length + svg.length + scene.length,
+    };
+  }
+
+  function canAutoCompose(w, plan) {
+    return Boolean(
+      config?.codeMotionReady &&
+      !usesDynamicAvatar(w) &&
+      plan.missingClips.length === 0 &&
+      plan.missingAssets.length === 0,
+    );
+  }
+
+  function clearBatchQueue(w) {
+    if (w) batchQueues.delete(w);
+  }
+
+  function formatJobProgress(w, job, rawText) {
+    const queue = w ? batchQueues.get(w) : null;
+    const base = rawText || "";
+    if (!queue || queue.totalSteps <= 1) return base;
+    const stepNo = Math.min(queue.doneSteps + 1, queue.totalSteps);
+    return `步骤 ${stepNo}/${queue.totalSteps} · ${base}`;
+  }
   let narrationCleanup = null;
   const pointVisual = () => config.stageCatalog.pointVisuals;
   const copy = value => structuredClone(value);
@@ -685,14 +817,31 @@ const StageStudio = (() => {
 
   function requestDraft(w) {
     if (typeof validateVideoScriptPrompt === "function" && !validateVideoScriptPrompt(w)) return;
-    const mode = fixedKinds.includes(w.stagePlan.mode) ? w.stagePlan.mode : "image";
-    const detail = "生成口播、要点、字幕节拍与自动版式。";
-    const image = mode === "image" ? "生成脚本不自动出图，进入分镜页核对文案并确认各幕方式后再批量生成配图。" : "";
+    const detail = "生成全片口播脚本、屏显要点与各幕画面构想。";
+    const image = "仅生成文字蓝图（暂不产生出图/动画费用），生成后将先进入「总览审稿」页，方便一页核对修改后再统一生成全部画面。";
     return authorize(w, 1, "draft", () => submitDraft(w), 1, {detail, image});
   }
 
   function showShotIssue(w, index, message, focus) {
     selected.set(w, index);
+    if (currentView(w) === "review" && (focus?.includes('="line"') || focus?.includes('="name"'))) {
+      const reviewField = focus.includes('="name"') ? `review-name:${index}` : `review-line:${index}`;
+      let target = $(`[data-stage-field="${reviewField}"]`);
+      if (!target && getReviewFilter(w) !== "all") {
+        reviewFilter.set(w, index);
+        render(true);
+        target = $(`[data-stage-field="${reviewField}"]`);
+      }
+      if (target) {
+        target.scrollIntoView({ block: "center", behavior: "smooth" });
+        target.focus();
+        notify(message, "warn");
+        return;
+      }
+    }
+    if (currentView(w) === "review") {
+      w.stagePlan.editorView = "studio";
+    }
     if (focus?.includes('="name"')) inspector.set(w, "points");
     else if (!focus?.includes('="line"')) inspector.set(w, "visual");
     render(true);
@@ -943,6 +1092,7 @@ const StageStudio = (() => {
       w.stagePlan.drugTags = output.drugTags.map(t => String(t || "").trim().slice(0, 6)).filter(Boolean).slice(0, 2);
     } else delete w.stagePlan.drugTags;
     delete w.stagePlan.compatibility;
+    if (mode === "stage") w.stagePlan.editorView = "review";
     w.title = output.title;
     w.stage = "script";
     w.viewingSetup = false;
@@ -980,7 +1130,7 @@ const StageStudio = (() => {
           contentImage: content.kind === "image" ? (content.image || (options.placeholder ? IMAGE_PLACEHOLDER : "")) : "",
           outroImage:content.kind === "image" ? content.outroImage : "",
           focusRegions:content.focusRegions, motionStyle:content.motionStyle,
-          ...(content.kind === "svg" ? {action:content.beats[0]?.action, svgBeats:content.beats, layoutMode:"explain"} : {}),
+          ...(content.kind === "svg" ? {action:content.beats?.[0]?.action, svgBeats:content.beats || [], layoutMode:"explain"} : {}),
           ...(["card", "scene", "asset", "mg", "clip"].includes(content.kind) ? {layoutMode:"explain"} : {})};
       })};
   }
@@ -1136,6 +1286,7 @@ const StageStudio = (() => {
     const slot = LayoutEngine.describeMediaSlot(layout || currentLayoutDef(w));
     const theme = themeDef || currentThemeDef(w);
     const items = (shot?.points?.items || []).map(it => [it.title, it.detail].filter(Boolean).join("：")).filter(Boolean);
+    const desc = shot?.content?.codePrompt?.trim();
     return [
       `内容区尺寸：${slot.w}×${slot.h}（${slot.ratioLabel}，形态 ${slot.shape}），视觉主题：${theme?.name || themeName(w)}。`,
       `本幕标题：${shot?.name || ""}`,
@@ -1143,7 +1294,7 @@ const StageStudio = (() => {
       items.length ? `本幕要点：\n${items.map((row, i) => `${i + 1}. ${row}`).join("\n")}` : "",
       shot?.points?.takeaway ? `画面结语：${shot.points.takeaway}` : "",
       w.drug ? `关联药品：${w.drug}` : "",
-      "画面与动效要求：用扁平医学科普纯矢量 <svg> 绘制核心主体与关键动作（含路径描边、部件位移或状态变化），按口播节拍与时间 t 逐帧演进，少而精的简短标注。",
+      desc ? `画面与动效要求：${desc}` : "画面与动效要求：用扁平医学科普纯矢量 <svg> 绘制核心主体与关键动作（含路径描边、部件位移或状态变化），按口播节拍与时间 t 逐帧演进，少而精的简短标注。",
       "硬性要求：纯矢量 SVG + JS 逐帧实现，禁止使用位图/插图/外部链接，配色继承主题 CSS 变量。",
     ].filter(Boolean).join("\n").slice(0, 4000);
   }
@@ -1354,9 +1505,19 @@ const StageStudio = (() => {
   }
 
   function updateProductionJob(w) {
-    const area = $("#stage-production-job");
-    if (!area || !hasProductionJob(w)) return;
+    if (!hasProductionJob(w)) return;
     const job = w.job;
+    const singleIdx = job.stageShotIndex ?? job.stageSpeechIndex;
+    const shotArea = currentView(w) === "review" && singleIdx !== undefined
+      ? app.querySelector(`[data-review-job="${singleIdx}"]`)
+      : null;
+    const topArea = $("#stage-production-job");
+    const area = shotArea || topArea;
+    if (!area) return;
+    if (shotArea && topArea) { topArea.innerHTML = ""; topArea.hidden = true; }
+    app.querySelectorAll("[data-review-job]").forEach(el => {
+      if (el !== area) { el.innerHTML = ""; el.hidden = true; }
+    });
     const picture = job.stageClipFrame ? "首帧" : job.stageArt ? "插画" : "配图";
     const subject = job.stageSpeechIndex !== undefined ? `第 ${job.stageSpeechIndex + 1} 幕口播配音`
       : job.stageClipShot !== undefined ? `第 ${job.stageClipShot + 1} 幕 AI 视频`
@@ -1364,11 +1525,12 @@ const StageStudio = (() => {
       : job.stageDraft === "scene-batch" ? "缺失代码动画"
       : job.stageDraft === "clip-prompt" ? `第 ${job.stageShotIndex + 1} 幕视频描述`
       : job.stageShotIndex === undefined ? "缺失" + picture : `第 ${job.stageShotIndex + 1} 幕${job.stageImageSlots ? picture : "画面"}`;
+    const progressText = formatJobProgress(w, job, job.progress || `正在制作${subject}…`);
     area.hidden = false;
     area.innerHTML = job.error
       ? `<div class="banner err" role="alert">${subject}未制作完成。${esc(job.error)}<div class="banner-actions">` +
         btn("继续此任务", "retry", "secondary") + btn("关闭提示", "abort-job", "textbtn") + '</div></div>'
-      : `<div class="inline-progress" role="status"><span class="spinner" aria-hidden="true"></span><span id="progress">${esc(job.progress || `正在制作${subject}…`)}</span></div>`;
+      : `<div class="inline-progress" role="status"><span class="spinner" aria-hidden="true"></span><span id="progress">${esc(progressText)}</span></div>`;
     app.querySelectorAll('[data-stage-production-lock], .stage-rail button').forEach(control => { control.disabled = true; });
   }
 
@@ -1396,7 +1558,413 @@ const StageStudio = (() => {
     return actions ? '<div class="asset-inline">' + actions + '</div>' : "";
   }
 
+  function viewSwitchHtml(w, activeView) {
+    const plan = collectBatchPlan(w, { includeStale: false });
+    const badge = plan.totalBatchShots > 0
+      ? `<span class="stage-view-dot is-pending" title="还有 ${plan.totalBatchShots} 幕待生成画面"></span>`
+      : plan.staleCount > 0
+        ? `<span class="stage-view-dot is-stale" title="有 ${plan.staleCount} 幕内容已改待重画"></span>`
+        : "";
+    return `<div class="stage-view-switch" role="tablist" aria-label="分镜工作视图">` +
+      `<button type="button" class="stage-view-tab${activeView === "review" ? " is-active" : ""}" data-action="stage-view" data-val="review" role="tab" aria-selected="${activeView === "review"}">${REVIEW_ICON}<span>总览审稿</span></button>` +
+      `<button type="button" class="stage-view-tab${activeView === "studio" ? " is-active" : ""}" data-action="stage-view" data-val="studio" role="tab" aria-selected="${activeView === "studio"}">${STUDIO_ICON}<span>逐幕精修</span>${badge}</button>` +
+      `</div>`;
+  }
+
+  function reviewBatchBreakdown(plan) {
+    const parts = [];
+    if (plan.image.length) parts.push(`${plan.image.length} 张 AI 完整图`);
+    if (plan.svg.length) parts.push(`${plan.svg.length} 幕 SVG 动画`);
+    if (plan.scene.length) parts.push(`${plan.scene.length} 幕代码动效`);
+    return parts.join("、");
+  }
+
+  function getReviewFilter(w) {
+    const val = reviewFilter.get(w);
+    const len = w?.stagePlan?.shots?.length || 0;
+    if (typeof val === "number" && val >= 0 && val < len) return val;
+    return "all";
+  }
+
+  function reviewBatchPrimaryText(w, missingPlan, fullPlan) {
+    if (!fullPlan.totalBatchShots) return "";
+    const willAuto = Boolean(w.stagePlan.autoComposeAfterBatch && canAutoCompose(w, fullPlan));
+    const isOnlyStale = missingPlan.totalBatchShots === 0;
+    const hasSomeReady = missingPlan.readyCount > 0 && missingPlan.totalBatchShots > 0;
+    if (willAuto) {
+      if (isOnlyStale) return `重画已修改画面并合成（${fullPlan.totalBatchShots} 幕）`;
+      return hasSomeReady ? `生成剩余画面并合成视频（${fullPlan.totalBatchShots} 幕）` : "确认内容，生成画面并合成视频";
+    }
+    if (isOnlyStale) return `重新生成已修改画面（${fullPlan.totalBatchShots} 幕）`;
+    return hasSomeReady
+      ? `生成剩余画面（${fullPlan.totalBatchShots} 幕）`
+      : `确认内容，生成全部画面（${fullPlan.totalBatchShots} 幕）`;
+  }
+
+  function reviewSingleActionLabel(shot) {
+    const kind = shot?.content?.kind;
+    const ready = shotReadyState(shot) === "ok";
+    if (kind === "image") return ready ? "重新生成 AI 完整图" : "生成 AI 完整图";
+    if (kind === "svg") return ready ? "重新生成 SVG 动画" : "生成 SVG 动画";
+    if (kind === "scene") return ready ? "重新生成代码动效" : "生成代码动效";
+    if (kind === "clip") return `去精修页生成${shot.content.clipStyle === "mg" ? " AI MG 动画" : " AI 演示视频"}`;
+    return "精修此幕";
+  }
+
+  function refreshReviewSummaryDom(w) {
+    if (currentView(w) !== "review") return;
+    const shots = w.stagePlan.shots;
+    const totalSec = Math.round(shots.reduce((n, s) => n + (Number(s.seconds) || 0), 0));
+    const totalChars = shots.reduce((n, s) => n + String(s.line || "").trim().length, 0);
+    const sumEl = $("#stage-review-summary");
+    if (sumEl) sumEl.textContent = `共 ${shots.length} 幕 · 约 ${totalSec} 秒 · ${totalChars} 字`;
+    const missingPlan = collectBatchPlan(w, { includeStale: false });
+    const fullPlan = collectBatchPlan(w, { includeStale: true });
+    const pillEl = $("#stage-review-readiness");
+    if (pillEl) {
+      if (missingPlan.totalBatchShots > 0) {
+        pillEl.className = "stage-review-pill is-pending";
+        pillEl.textContent = `待生成 ${missingPlan.totalBatchShots} 幕`;
+      } else if (fullPlan.staleCount > 0) {
+        pillEl.className = "stage-review-pill is-stale";
+        pillEl.textContent = `${fullPlan.staleCount} 幕已改 · 待重画`;
+      } else {
+        pillEl.className = "stage-review-pill is-ok";
+        pillEl.textContent = `全部 ${shots.length} 幕画面就绪`;
+      }
+    }
+    const footMeta = $("#stage-review-footer-meta");
+    if (footMeta) {
+      const breakdown = reviewBatchBreakdown(fullPlan);
+      footMeta.textContent = breakdown
+        ? `共 ${shots.length} 幕 · 约 ${totalSec} 秒 · 待生成：${breakdown}`
+        : `共 ${shots.length} 幕 · 约 ${totalSec} 秒 · 全部画面已就绪`;
+    }
+    app.querySelectorAll('[data-action="stage-batch-all"]').forEach(b => {
+      b.hidden = fullPlan.totalBatchShots === 0;
+      if (fullPlan.totalBatchShots > 0) {
+        const isOnlyStale = missingPlan.totalBatchShots === 0;
+        b.dataset.val = isOnlyStale ? "stale" : "all";
+        b.textContent = reviewBatchPrimaryText(w, missingPlan, fullPlan);
+      }
+    });
+  }
+
+  function renderReviewEditor(w) {
+    if (narrationCleanup) { narrationCleanup(); narrationCleanup = null; }
+    const p = w.stagePlan;
+    const shots = p.shots;
+    const activeFilter = getReviewFilter(w);
+    const layoutMeta = currentLayoutDef(w);
+    const support = layoutMeta?.supports;
+    const layoutId = p.layout.id;
+    const layoutName = layoutMeta?.name || "信息图模板";
+    const isQaLayout = layoutId === "builtin:layout/qa-chat" || layoutMeta?.regions?.header?.variant === "question" || Boolean(layoutMeta?.regions?.answer);
+    const isHeadlineLayout = layoutId === "builtin:layout/headline" || Boolean(layoutMeta?.regions?.headline);
+    const isTakeawayLayout = layoutId === "builtin:layout/takeaway" || Boolean(layoutMeta?.regions?.keypoints);
+    const isBroadcastLayout = layoutId === "builtin:layout/broadcast" || layoutMeta?.regions?.header?.variant === "ticker";
+    const totalSec = Math.round(shots.reduce((n, s) => n + (Number(s.seconds) || 0), 0));
+    const totalChars = shots.reduce((n, s) => n + String(s.line || "").trim().length, 0);
+    const missingPlan = collectBatchPlan(w, { includeStale: false });
+    const fullPlan = collectBatchPlan(w, { includeStale: true });
+    const allowAuto = canAutoCompose(w, fullPlan);
+    const willAuto = Boolean(p.autoComposeAfterBatch && allowAuto);
+    const hasAvatar = usesDynamicAvatar(w);
+    const voiceList = typeof voiceOptions !== "undefined"
+      ? voiceOptions.map(item => Array.isArray(item) ? item : [item, item])
+      : [[w.settings.voice || "无配音", w.settings.voice || "无配音"]];
+    const currentVoice = w.settings.voice || "无配音";
+    const presenterText = (w.templatePresenter || "digital") === "none"
+      ? "无出镜人物"
+      : hasAvatar ? `动态数字人（${resolveAvatarMode(w.settings.avatarMode) === "wan2.2-s2v" ? "Wan2.2" : "VideoRetalk"} · 定稿合成时生成）`
+      : "静态主讲肖像";
+
+    const readinessHtml = missingPlan.totalBatchShots > 0
+      ? `<span class="stage-review-pill is-pending" id="stage-review-readiness">待生成 ${missingPlan.totalBatchShots} 幕</span>`
+      : fullPlan.staleCount > 0
+        ? `<span class="stage-review-pill is-stale" id="stage-review-readiness">${fullPlan.staleCount} 幕已改 · 待重画</span>`
+        : `<span class="stage-review-pill is-ok" id="stage-review-readiness">全部 ${shots.length} 幕画面就绪</span>`;
+
+    const batchActionMode = missingPlan.totalBatchShots > 0 ? "all" : "stale";
+    const batchPrimaryLabel = reviewBatchPrimaryText(w, missingPlan, fullPlan);
+
+    const topActions = btn("全片配音与模型", "work-settings", "outline") +
+      btn(batchPrimaryLabel || "重新生成已修改画面", "stage-batch-all", "primary", batchActionMode, fullPlan.totalBatchShots > 0 ? "" : "hidden") +
+      (fullPlan.totalBatchShots > 0
+        ? (missingPlan.totalBatchShots === 0 ? btn("合成视频", "stage-compose", "outline") : "")
+        : btn("进入逐幕精修", "stage-view", "outline", "studio") +
+          btn("合成视频", "stage-compose", "primary"));
+
+    const guideBanner = missingPlan.totalBatchShots > 0
+      ? `<div class="stage-review-guide" role="note">` +
+          `<strong>医学审校提示</strong>` +
+          `<span>请核对每幕的「口播台词」「屏显要点」与「画面构想」（重点确认药品通用名、用法用量条件、禁忌人群与就医指征）。确认一幕可直接单幕生成，也可全部核对完后一键统一生成。</span>` +
+        `</div>`
+      : fullPlan.staleCount > 0
+        ? `<div class="stage-review-guide is-stale" role="note">` +
+            `<strong>内容已更新</strong>` +
+            `<span>有 ${fullPlan.staleCount} 幕已修改口播或画面构想，可单幕重画，或一键仅重新生成改过的幕，其余画面自动保留不重复计费。</span>` +
+          `</div>`
+        : "";
+
+    const shotTabsHtml = `<div class="stage-review-tabs-bar" role="tablist" aria-label="按幕切换审稿">` +
+      `<button type="button" class="stage-review-tab${activeFilter === "all" ? " is-active" : ""}" data-action="stage-review-filter" data-val="all" role="tab" aria-selected="${activeFilter === "all"}">` +
+        `<span>全部</span><em class="stage-review-tab-count">${shots.length}</em>` +
+      `</button>` +
+      shots.map((s, idx) => {
+        const ready = shotReadyState(s) === "ok";
+        const stale = shotNeedsRegen(s);
+        const st = !ready ? "pending" : stale ? "stale" : "ok";
+        const stTitle = !ready ? "待生成画面" : stale ? "内容已改 · 建议重画" : "画面就绪";
+        return `<button type="button" class="stage-review-tab${activeFilter === idx ? " is-active" : ""}" data-action="stage-review-filter" data-val="${idx}" role="tab" aria-selected="${activeFilter === idx}" title="第 ${idx + 1} 幕 · ${esc(s.name || "未命名")}（${stTitle}）">` +
+          `<span class="stage-review-tab-dot is-${st}" data-review-tab-dot="${idx}"></span>` +
+          `<span class="stage-review-tab-num">第 ${idx + 1} 幕</span>` +
+          `<span class="stage-review-tab-name" data-review-tab-name="${idx}">${esc(s.name || "未命名")}</span>` +
+        `</button>`;
+      }).join("") +
+    `</div>`;
+
+    const visibleIndices = activeFilter === "all"
+      ? shots.map((_, idx) => idx)
+      : [activeFilter];
+
+    const cardsHtml = visibleIndices.map((i) => {
+      const shot = shots[i];
+      const c = shot.content;
+      const kind = c.kind;
+      const ready = shotReadyState(shot) === "ok";
+      const stale = shotNeedsRegen(shot);
+      const statusKind = !ready ? "pending" : stale ? "stale" : "ok";
+      const statusLabel = !ready ? "待生成画面" : stale ? "内容已改 · 建议重画" : "画面就绪";
+      const lineText = formatLineByCues(shot);
+      const lineRows = Math.max(3, Math.min(8, lineText.split("\n").length + 1));
+      const hasCachedSpeech = Boolean(shot.speech && shot.speech.line === shot.line.trim() && shot.speech.voice === currentVoice);
+      const isPlaying = reviewPlayingWork === w && reviewPlayingIndex === i && reviewAudio && !reviewAudio.paused;
+      const speechBtn = `<button type="button" class="stage-review-speech-btn${hasCachedSpeech ? " is-cached" : ""}${isPlaying ? " is-playing" : ""}" data-action="stage-review-speech" data-val="${i}" title="${currentVoice === "无配音" ? "当前为无配音，请在上方选择音色" : "试听本幕口播，合成视频时自动复用不重复计费"}">${isPlaying ? `${PAUSE_ICON}<span>停止试听</span>` : `${PLAY_ICON}<span>试听口播</span>${hasCachedSpeech ? '<em class="stage-speech-tag">已缓存</em>' : ""}`}</button>`;
+
+      const modeChoices = [
+        ["image", "AI 完整图", kind === "image", !support || support.includes("image")],
+        ["svg", "SVG 动画", kind === "svg", !support || support.includes("svg")],
+        ["scene", "代码动效", kind === "scene", !support || support.includes("scene")],
+        ["clip:demo", "AI 演示视频", kind === "clip" && (c.clipStyle || "demo") === "demo", !support || support.includes("clip") || support.includes("image")],
+        ["clip:mg", "AI MG 动画", kind === "clip" && c.clipStyle === "mg", !support || support.includes("clip") || support.includes("image")],
+      ];
+      const kindChips = modeChoices.map(([val, label, active, allowed]) =>
+        btn(label, "stage-review-kind", "chip" + (active ? " selected" : ""), `${i}:${val}`, `aria-pressed="${active}" ${allowed ? "" : "disabled"}`)
+      ).join("") + (["card", "mg", "asset"].includes(kind) ? `<span class="stage-legacy-badge">${esc(kinds[kind] || "旧版")}</span>` : "");
+
+      const previewStrip = kind === "image" && c.image
+        ? `<div class="stage-review-thumb-bar">` +
+            `<button type="button" class="stage-review-thumb-btn" data-action="stage-review-zoom" data-val="${i}" title="点击查看大图核对画面文字">` +
+              `<img src="${esc(c.image)}" alt="第 ${i + 1} 幕配图缩略图">` +
+            `</button>` +
+            `<div class="stage-review-thumb-info"><strong>已生成 AI 完整图</strong><span class="small">点击左侧缩略图可放大核对画面文字</span></div>` +
+            btn("查看大图", "stage-review-zoom", "textbtn stage-review-inline-btn", String(i)) +
+          `</div>`
+        : kind === "clip" && c.clipPoster
+          ? `<div class="stage-review-thumb-bar"><img src="${esc(c.clipPoster)}" alt="第 ${i + 1} 幕视频封面"><div class="stage-review-thumb-info"><strong>已生成 AI 视频片段</strong><span class="small">可在「精修此幕」中播放核对</span></div></div>`
+          : (kind === "svg" && c.svgCode?.svg) || (kind === "scene" && c.code?.html)
+            ? `<div class="stage-review-ready-note"><strong>已生成${kind === "svg" ? " SVG 动画" : "代码动效"}</strong><span class="small">点击「精修此幕」可播放逐帧效果</span></div>`
+            : "";
+
+      const hasCustomFullPrompt = (kind === "image" && Boolean(c.customFullImagePrompt?.trim()))
+        || (kind === "svg" && Boolean(c.customSvgPrompt?.trim()))
+        || (kind === "scene" && Boolean(c.customCodePrompt?.trim()));
+      const customNote = hasCustomFullPrompt ? `<span class="prompt-badge is-custom">精修页已手改提示词</span>` : "";
+
+      const visualIdeaField = kind === "image"
+        ? `<label class="field stage-review-field"><span class="stage-review-field-head"><span>画面构想 <em class="small">（描述希望画面画什么）</em></span>${customNote}</span><textarea data-stage-field="review-imagePrompt:${i}" rows="2" maxlength="400" placeholder="用大白话写希望画面突出什么，如：带刻度的滴管量取混悬液、药盒放大有效期…">${esc(c.imagePrompt || "")}</textarea></label>`
+        : kind === "svg" || kind === "scene"
+          ? `<label class="field stage-review-field"><span class="stage-review-field-head"><span>画面与动效构想 <em class="small">（描述主体与动态变化）</em></span>${customNote}</span><textarea data-stage-field="review-codePrompt:${i}" rows="2" maxlength="600" placeholder="用大白话描述想演示的动作或图示，如：胶囊缓慢溶解释放颗粒，突出不可掰开…">${esc(c.codePrompt || "")}</textarea></label>`
+          : kind === "clip"
+            ? `<label class="field stage-review-field"><span class="stage-review-field-head"><span>视频动作构想 <em class="small">（AI 视频按秒计费，请在精修页单独生成）</em></span></span><textarea data-stage-field="review-clipPrompt:${i}" rows="2" maxlength="400" placeholder="描述近景动作与镜头，不含文字、品牌与医生正面像…">${esc(c.clipPrompt || "")}</textarea></label>`
+            : "";
+
+      const qaFields = isQaLayout
+        ? `<div class="stage-review-subgrid">` +
+            `<label class="field stage-review-field"><span>患者提问（≤30 字）</span><input data-stage-field="review-question:${i}" value="${esc(shot.points.question || "")}" maxlength="30" placeholder="如：缓释片太大能不能掰半吃？"></label>` +
+            `<div class="stage-review-qa-row">` +
+              `<label class="field stage-review-field"><span>药师结论（≤16 字）</span><input data-stage-field="review-answer:${i}" value="${esc(shot.points.answer || "")}" maxlength="16" placeholder="如：不能掰开，需整片吞服"></label>` +
+              `<label class="field stage-review-field"><span>结论语气</span><select data-stage-field="review-verdictTone:${i}">${opts([["", "默认（正确 ✓）"], ["ok", "正确 / 推荐（✓）"], ["no", "否定 / 禁止（✗）"], ["warn", "提醒 / 注意（!）"]], shot.points.verdictTone || "")}</select></label>` +
+            `</div>` +
+          `</div>`
+        : "";
+
+      const headlineFields = isHeadlineLayout
+        ? `<div class="stage-review-subgrid">` +
+            `<label class="field stage-review-field"><span>大标题</span><input data-stage-field="review-headline:${i}" value="${esc(shot.points.headline || "")}" maxlength="40"></label>` +
+            `<div class="stage-review-qa-row">` +
+              `<label class="field stage-review-field"><span>强调短语（须在标题内，≤8 字）</span><input data-stage-field="review-accentPhrase:${i}" value="${esc(shot.points.accentPhrase || "")}" maxlength="8"></label>` +
+              `<label class="field stage-review-field"><span>一句解释（≤30 字）</span><input data-stage-field="review-lead:${i}" value="${esc(shot.points.lead || "")}" maxlength="30"></label>` +
+            `</div>` +
+          `</div>`
+        : "";
+
+      const itemsText = (shot.points.items || []).map(item => [item.title, item.detail, item.tag].filter(Boolean).join("｜")).join("\n");
+      const itemsLabel = kind === "image"
+        ? "画面要点 <em class=\"small\">（每行一条，会融入配图文字）</em>"
+        : isTakeawayLayout
+          ? "右侧要点清单 <em class=\"small\">（每行一条，最多 4 条）</em>"
+          : "屏显要点 <em class=\"small\">（每行一条，可用「｜」补充说明）</em>";
+      const showTakeawayRow = isTakeawayLayout || ["card", "scene", "svg"].includes(kind) || Boolean(shot.points.takeaway?.trim());
+      const pointsSection =
+        `<label class="field stage-review-field"><span>${itemsLabel}</span><textarea data-stage-field="review-items:${i}" rows="${Math.max(2, Math.min(4, (shot.points.items?.length || 1) + 1))}" placeholder="每行一条核心要点…">${esc(itemsText)}</textarea></label>` +
+        (showTakeawayRow
+          ? `<label class="field stage-review-field"><span>${isTakeawayLayout ? "记住这一句" : "画面结语"}</span><input data-stage-field="review-takeaway:${i}" value="${esc(shot.points.takeaway || "")}" maxlength="40" placeholder="一句话收口提醒…"></label>`
+          : "");
+
+      const genLabel = reviewSingleActionLabel(shot);
+      const genBtnCls = (!ready || stale) ? "primary stage-review-gen-btn" : "outline stage-review-gen-btn";
+      const singleGenBar = ["image", "svg", "scene"].includes(kind)
+        ? `<div class="stage-review-shot-actions">` +
+            btn(genLabel, "stage-review-generate", genBtnCls, String(i), `data-review-gen-btn="${i}"`) +
+            (kind === "image" ? btn(ready ? "从素材库换图" : "从素材库选图", "stage-review-choose", "textbtn stage-review-inline-btn", String(i)) : "") +
+            `<span class="small stage-review-shot-hint">${!ready ? "确认本幕无误可直接生成" : stale ? "本幕文案已改，可单独重画" : "可随时微调后单独重做"}</span>` +
+          `</div>`
+        : kind === "clip"
+          ? `<div class="stage-review-shot-actions">` +
+              btn(genLabel, "stage-review-open", "outline stage-review-gen-btn", String(i)) +
+              `<span class="small stage-review-shot-hint">AI 视频按秒计费，在精修页确认首帧后生成</span>` +
+            `</div>`
+          : "";
+
+      const chapterSelect = p.chapters.length > 1
+        ? `<select class="stage-review-chapter" data-stage-field="review-chapter:${i}" aria-label="第 ${i + 1} 幕所属章节">${opts(p.chapters.map((name, idx) => [String(idx), name]), String(shot.chapterIndex))}</select>`
+        : "";
+
+      return `<article class="sheet stage-review-card" data-review-shot="${i}">` +
+        `<div class="stage-review-card-head">` +
+          `<div class="stage-review-card-id">` +
+            `<span class="stage-review-num">第 ${i + 1} 幕</span>` +
+            `<input class="stage-review-title-input" data-stage-field="review-name:${i}" value="${esc(shot.name)}" maxlength="40" aria-label="第 ${i + 1} 幕标题" placeholder="输入本幕标题">` +
+            chapterSelect +
+          `</div>` +
+          `<div class="stage-review-card-ops">` +
+            `<span class="stage-review-sec" data-review-sec="${i}">约 ${Math.round(shot.seconds)} 秒</span>` +
+            `<span class="stage-review-status is-${statusKind}" data-review-status="${i}">${statusLabel}</span>` +
+            `<div class="stage-review-move-group">` +
+              btn(ico("up"), "stage-review-move", "icon-btn", `${i}:-1`, `title="上移一幕" aria-label="上移第 ${i + 1} 幕" ${i === 0 ? "disabled" : ""}`) +
+              btn(ico("down"), "stage-review-move", "icon-btn", `${i}:1`, `title="下移一幕" aria-label="下移第 ${i + 1} 幕" ${i === shots.length - 1 ? "disabled" : ""}`) +
+              btn(ico("trash"), "stage-review-remove", "icon-btn danger", String(i), `title="删除本幕" aria-label="删除第 ${i + 1} 幕" ${shots.length === 1 ? "disabled" : ""}`) +
+            `</div>` +
+            btn("精修此幕", "stage-review-open", "textbtn stage-review-open-btn", String(i)) +
+          `</div>` +
+        `</div>` +
+        `<div class="stage-review-card-body">` +
+          `<div class="stage-review-col-script">` +
+            `<div class="stage-review-col-head">` +
+              `<div><strong>口播台词</strong><span class="small"> · 换行即字幕断句</span></div>` +
+              `<div class="stage-review-script-tools">` +
+                `<span class="small" data-review-stats="${i}">${shot.cues.length} 句 · ${shot.line.trim().length} 字</span>` +
+                speechBtn +
+              `</div>` +
+            `</div>` +
+            `<textarea class="stage-review-line" data-stage-field="review-line:${i}" maxlength="450" rows="${lineRows}" aria-label="第 ${i + 1} 幕口播台词" placeholder="输入本幕口播台词，按回车换行即可调整字幕断句…">${esc(lineText)}</textarea>` +
+          `</div>` +
+          `<div class="stage-review-col-visual">` +
+            `<div class="stage-review-kinds"><span class="stage-review-sublabel">画面方式</span><div class="chips stage-review-kind-chips">${kindChips}</div></div>` +
+            previewStrip +
+            visualIdeaField +
+            qaFields +
+            headlineFields +
+            pointsSection +
+            singleGenBar +
+          `</div>` +
+        `</div>` +
+        `<div class="stage-review-shot-job" data-review-job="${i}" hidden></div>` +
+      `</article>`;
+    }).join("");
+
+    const singlePagerHtml = activeFilter !== "all"
+      ? `<div class="stage-review-pager">` +
+          btn(activeFilter > 0 ? `← 上一幕：${esc(shots[activeFilter - 1].name || `第 ${activeFilter} 幕`)}` : "← 已是第 1 幕",
+            "stage-review-filter", "outline", activeFilter > 0 ? String(activeFilter - 1) : "0", activeFilter === 0 ? "disabled" : "") +
+          `<div class="stage-review-pager-mid"><span class="small">第 ${activeFilter + 1} / ${shots.length} 幕</span>` +
+            btn("查看全部幕", "stage-review-filter", "textbtn stage-review-inline-btn", "all") + `</div>` +
+          btn(activeFilter < shots.length - 1 ? `下一幕：${esc(shots[activeFilter + 1].name || `第 ${activeFilter + 2} 幕`)} →` : "已是最后一幕 →",
+            "stage-review-filter", "outline", activeFilter < shots.length - 1 ? String(activeFilter + 1) : String(shots.length - 1), activeFilter === shots.length - 1 ? "disabled" : "") +
+        `</div>`
+      : "";
+
+    const footerBreakdown = reviewBatchBreakdown(fullPlan);
+    const footerGuard = hasAvatar && fullPlan.totalBatchShots > 0
+      ? `<p class="small stage-review-guard">当前已开启数字人对口型：为避免画面未确认即产生数字人费用，生成画面后将先进入逐幕精修核对，确认无误再合成。</p>`
+      : fullPlan.missingClips.length > 0
+        ? `<p class="small stage-review-guard">第 ${fullPlan.missingClips.map(idx => idx + 1).join("、")} 幕为 AI 视频片段，不参与一键批量生成，将在逐幕精修中单独确认后生成。</p>`
+        : "";
+    const autoComposeToggle = fullPlan.totalBatchShots > 0 && allowAuto
+      ? `<label class="stage-review-autocompose"><input type="checkbox" data-stage-field="work-autoCompose" ${willAuto ? "checked" : ""}><span>画面全部生成后自动合成视频（静态肖像，省去手动点合成）</span></label>`
+      : "";
+
+    const footerActions = fullPlan.totalBatchShots > 0
+      ? btn("先去逐幕精修", "stage-view", "outline", "studio") +
+        btn(batchPrimaryLabel, "stage-batch-all", "primary", batchActionMode)
+      : btn("进入逐幕精修", "stage-view", "outline", "studio") +
+        btn("重新生成已修改画面", "stage-batch-all", "primary", "stale", "hidden") +
+        btn("合成视频", "stage-compose", "primary");
+
+    const showDrugTags = isBroadcastLayout || Boolean(p.drugTags?.length);
+
+    shell(w, "编辑视频分镜", 1, `<div class="vstudio stage-review-shell">` +
+      `<div class="sheet vstudio-bar">` +
+        `<div class="vstudio-summary">` +
+          viewSwitchHtml(w, "review") +
+          `<span class="vstudio-metric" id="stage-review-summary">共 ${shots.length} 幕 · 约 ${totalSec} 秒 · ${totalChars} 字</span>` +
+          readinessHtml +
+        `</div>` +
+        `<fieldset class="vstudio-actions stage-edit-fields" data-stage-production-lock>${topActions}</fieldset>` +
+      `</div>` +
+      `<div id="stage-production-job" hidden></div>` +
+      `<fieldset class="stage-edit-fields stage-review-fieldset" data-stage-production-lock>` +
+        `<section class="sheet stage-review-meta">` +
+          `<div class="stage-review-meta-grid">` +
+            `<label class="field stage-review-meta-title">视频标题<input data-stage-field="work-title" value="${esc(w.title || "")}" maxlength="40" placeholder="输入科普视频标题"></label>` +
+            `<label class="field">关联药品（选填）<input data-stage-field="work-drug" value="${esc(w.drug || "")}" maxlength="20" placeholder="如：硝苯地平缓释片"></label>` +
+            (showDrugTags ? `<label class="field">药品标签（最多 2 个）<input data-stage-field="work-drugTags" value="${esc((p.drugTags || []).join("，"))}" maxlength="20" placeholder="如：缓释片，处方药"></label>` : "") +
+            `<label class="field">配音音色<select data-stage-field="work-voice">${opts(voiceList, currentVoice)}</select></label>` +
+          `</div>` +
+          `<div class="stage-review-meta-bar">` +
+            `<div class="stage-review-meta-pills">` +
+              `<span class="pill">布局：${esc(layoutName)}</span>` +
+              `<span class="pill">主题：${esc(themeName(w))}</span>` +
+              `<span class="pill">主讲：${esc(presenterText)}</span>` +
+              btn("调整模板与主讲", "stage-goto-module", "textbtn stage-review-inline-btn", "template") +
+            `</div>` +
+            `<details class="stage-review-more"><summary>编辑章节名与免责声明</summary>` +
+              `<div class="stage-review-more-grid">` +
+                p.chapters.map((name, idx) => text(`章节 ${idx + 1}`, "work-chapter:" + idx, name, 10)).join("") +
+                `<label class="field stage-review-disclaimer-field">底部参考声明<input data-stage-field="work-disclaimer" value="${esc(p.disclaimer || "")}" maxlength="60"></label>` +
+              `</div>` +
+            `</details>` +
+          `</div>` +
+        `</section>` +
+        guideBanner +
+        shotTabsHtml +
+        `<div class="stage-review-list">${cardsHtml}</div>` +
+        singlePagerHtml +
+        `<div class="stage-review-add-row">${btn("+ 添加一幕（最多 12 幕）", "stage-add", "outline", "", shots.length >= 12 ? "disabled" : "")}</div>` +
+        `<section class="sheet stage-review-footer">` +
+          `<div class="stage-review-footer-info">` +
+            `<strong id="stage-review-footer-meta">${footerBreakdown ? `共 ${shots.length} 幕 · 约 ${totalSec} 秒 · 待生成：${footerBreakdown}` : `共 ${shots.length} 幕 · 约 ${totalSec} 秒 · 全部画面已就绪`}</strong>` +
+            autoComposeToggle +
+            footerGuard +
+          `</div>` +
+          `<div class="stage-review-footer-actions">${footerActions}</div>` +
+        `</section>` +
+      `</fieldset>` +
+    `</div>`);
+    updateProductionJob(w);
+  }
+
   function editor(w) {
+    const shots = w.stagePlan.shots;
+    if (!shots.length) return setup(w);
+    if (currentView(w) === "review") return renderReviewEditor(w);
+    stopReviewAudio();
+    return renderStudioEditor(w);
+  }
+
+  function renderStudioEditor(w) {
     const shots = w.stagePlan.shots;
     const index = Math.min(selected.get(w) ?? w.job?.stageSpeechIndex ?? w.job?.stageShotIndex ?? 0, shots.length - 1);
     const shot = shots[index];
@@ -1520,10 +2088,6 @@ const StageStudio = (() => {
       (missingCodes ? btn(`生成缺失代码动画（${missingCodes} 幕）`, "stage-scene-batch", (missingImages || missingSvgs) ? "outline" : "primary") : "") +
       btn("合成视频", "stage-compose", (missingImages || missingSvgs || missingCodes) ? "outline" : "primary");
 
-    const shotReadyState = s => s.content.kind === "image" ? (s.content.image ? "ok" : "pending")
-      : s.content.kind === "clip" ? (s.content.clip ? "ok" : "pending")
-      : s.content.kind === "svg" ? (s.content.svgCode ? "ok" : "pending")
-      : s.content.kind === "scene" ? (s.content.code ? "ok" : "pending") : "ok";
     const strip = shots.map((s, i) => `<button type="button" class="scene-choice" data-action="stage-select" data-val="${i}" aria-pressed="${i === index}"${s.content.reason ? ` title="${esc(s.content.reason)}"` : ""}>
       <span class="scene-choice-head"><span class="scene-choice-num">${i + 1}</span><span class="scene-choice-title">${esc(s.name)}</span><span class="scene-dot is-${shotReadyState(s)}" title="${shotReadyState(s) === "ok" ? "画面就绪" : "待生成画面"}"></span></span>
       <span class="scene-choice-meta"><span class="stage-kind-badge">${kindLabel(s.content)}</span><span>${s.seconds} 秒</span></span></button>`).join("");
@@ -1540,6 +2104,7 @@ const StageStudio = (() => {
 
     const seekDefault = Math.min(1, shot.seconds / 2);
     shell(w, "编辑视频分镜", 1, `<div class="vstudio"><div class="sheet vstudio-bar"><div class="vstudio-summary">
+      ${viewSwitchHtml(w, "studio")}
       <span class="vstudio-metric">共 ${shots.length} 幕 · ${Math.round(shots.reduce((n, s) => n + s.seconds, 0))} 秒</span></div><fieldset class="vstudio-actions stage-edit-fields" data-stage-production-lock>${actions}</fieldset></div>
       <div class="stage-studio-grid">
         <aside class="sheet stage-scenes-col" aria-label="分镜列表">
@@ -1865,15 +2430,17 @@ const StageStudio = (() => {
 
   function syncVoiceUi(w) {
     if (!isActive(w)) return;
-    const index = Math.min(selected.get(w) || 0, w.stagePlan.shots.length - 1);
-    const shot = w.stagePlan.shots[index];
-    if (!shot) return;
+    const shots = w.stagePlan.shots;
+    const index = Math.min(selected.get(w) || 0, shots.length - 1);
+    const shot = shots[index];
     const voice = w.settings.voice || "无配音";
+    stopReviewAudio();
     $("#stage-preview")?.stopSpeech?.();
-    const sel = $('[data-stage-field="work-voice"]');
-    if (sel && sel.value !== voice) sel.value = voice;
+    app.querySelectorAll('[data-stage-field="work-voice"]').forEach(sel => {
+      if (sel.value !== voice) sel.value = voice;
+    });
     const speechBtn = $("#stage-speech-btn");
-    if (speechBtn) {
+    if (speechBtn && shot) {
       const hasCached = Boolean(shot.speech && shot.speech.line === shot.line.trim() && shot.speech.voice === voice);
       speechBtn.classList.toggle("is-cached", hasCached);
       speechBtn.classList.remove("is-playing");
@@ -1882,15 +2449,42 @@ const StageStudio = (() => {
         : "试听本幕配音并同步预览，合成时自动复用不重复计费";
       speechBtn.innerHTML = `${PLAY_ICON}<span>试听口播</span>${hasCached ? '<em class="stage-speech-tag">已缓存</em>' : ""}`;
     }
+    app.querySelectorAll('[data-action="stage-review-speech"]').forEach(btnEl => {
+      const idx = Number(btnEl.dataset.val);
+      const row = shots[idx];
+      if (!row) return;
+      const hasCached = Boolean(row.speech && row.speech.line === row.line.trim() && row.speech.voice === voice);
+      btnEl.classList.toggle("is-cached", hasCached);
+      btnEl.classList.remove("is-playing");
+      btnEl.title = voice === "无配音"
+        ? "当前为无配音，请在上方选择音色"
+        : "试听本幕口播，合成视频时自动复用不重复计费";
+      btnEl.innerHTML = `${PLAY_ICON}<span>试听口播</span>${hasCached ? '<em class="stage-speech-tag">已缓存</em>' : ""}`;
+    });
   }
 
   function finishSpeechUi(w, index) {
     if (!isActive(w) || current() !== w) return false;
-    const iframe = $("#stage-preview");
-    if (!iframe?.isReady?.() || (selected.get(w) || 0) !== index) return false;
     const shots = w.stagePlan.shots;
     const shot = shots[index];
     if (!shot) return false;
+    if (currentView(w) === "review") {
+      const area = $("#stage-production-job");
+      if (area) { area.innerHTML = ""; area.hidden = true; }
+      app.querySelectorAll("[data-review-job]").forEach(el => { el.innerHTML = ""; el.hidden = true; });
+      app.querySelectorAll('[data-stage-production-lock]').forEach(control => { control.disabled = false; });
+      const secEl = app.querySelector(`[data-review-sec="${index}"]`);
+      if (secEl) secEl.textContent = `约 ${Math.round(shot.seconds)} 秒`;
+      refreshReviewSummaryDom(w);
+      syncVoiceUi(w);
+      if (pendingAutoPlay.get(w) === index) {
+        pendingAutoPlay.delete(w);
+        playReviewSpeech(w, index);
+      }
+      return true;
+    }
+    const iframe = $("#stage-preview");
+    if (!iframe?.isReady?.() || (selected.get(w) || 0) !== index) return false;
     const area = $("#stage-production-job");
     if (area) { area.innerHTML = ""; area.hidden = true; }
     app.querySelectorAll('[data-stage-production-lock], .stage-rail button').forEach(control => { control.disabled = false; });
@@ -1910,9 +2504,85 @@ const StageStudio = (() => {
   function handleInput(w, el) {
     const field = el.dataset.stageField;
     if (!isActive(w) || !field) return false;
-    const shot = w.stagePlan.shots[selected.get(w) || 0];
     const [key, rawIndex] = field.split(":");
     const value = el.value;
+    if (key === "work-autoCompose") {
+      w.stagePlan.autoComposeAfterBatch = Boolean(el.checked);
+      touch(w);
+      refreshReviewSummaryDom(w);
+      return true;
+    }
+    if (key.startsWith("review-")) {
+      const idx = Number(rawIndex);
+      const row = w.stagePlan.shots[idx];
+      if (!row) return true;
+      const sub = key.slice(7);
+      let marksStale = false;
+      if (sub === "line") {
+        row.line = value;
+        row.cues = authoredCues(value, row.points.highlightWords, row.cues);
+        delete row.speech;
+        if (reviewPlayingWork === w && reviewPlayingIndex === idx) stopReviewAudio();
+        el.rows = Math.max(3, Math.min(8, value.split("\n").length + 1));
+        const stats = app.querySelector(`[data-review-stats="${idx}"]`);
+        if (stats) stats.textContent = `${row.cues.length} 句 · ${value.trim().length} 字`;
+        const speechBtn = app.querySelector(`[data-action="stage-review-speech"][data-val="${idx}"]`);
+        if (speechBtn) {
+          speechBtn.classList.remove("is-cached", "is-playing");
+          speechBtn.innerHTML = `${PLAY_ICON}<span>试听口播</span>`;
+        }
+        marksStale = true;
+      } else if (sub === "name") {
+        row.name = value;
+        const tabName = app.querySelector(`[data-review-tab-name="${idx}"]`);
+        if (tabName) tabName.textContent = value.trim() || "未命名";
+        marksStale = true;
+      } else if (sub === "chapter") {
+        row.chapterIndex = Number(value);
+      } else if (sub === "imagePrompt") {
+        row.content.imagePrompt = value;
+        row.variants[row.content.kind] = row.content;
+        marksStale = true;
+      } else if (sub === "codePrompt") {
+        row.content.codePrompt = value;
+        row.variants[row.content.kind] = row.content;
+        marksStale = true;
+      } else if (sub === "clipPrompt") {
+        row.content.clipPrompt = value;
+        row.variants[`clip:${row.content.clipStyle || "demo"}`] = row.content;
+        marksStale = true;
+      } else if (sub === "items") {
+        row.points.items = value.split("\n").filter(Boolean).slice(0, 4).map(r => {
+          const [title, detail = "", tag = ""] = r.split("｜");
+          return { title, detail, tag };
+        });
+        for (const f of ["points", "steps", "warnings", "columns", "checks"]) delete row.points[f];
+        marksStale = true;
+      } else if (["takeaway", "headline", "accentPhrase", "lead", "question", "answer", "verdictTone"].includes(sub)) {
+        row.points[sub] = value;
+        marksStale = true;
+      }
+      if (marksStale && shotReadyState(row) === "ok") {
+        row.presentationStale = true;
+        const stEl = app.querySelector(`[data-review-status="${idx}"]`);
+        if (stEl) {
+          stEl.className = "stage-review-status is-stale";
+          stEl.textContent = "内容已改 · 建议重画";
+        }
+        const dotEl = app.querySelector(`[data-review-tab-dot="${idx}"]`);
+        if (dotEl) dotEl.className = "stage-review-tab-dot is-stale";
+        const genBtn = app.querySelector(`[data-review-gen-btn="${idx}"]`);
+        if (genBtn) {
+          genBtn.classList.remove("outline");
+          genBtn.classList.add("primary");
+          genBtn.textContent = reviewSingleActionLabel(row);
+        }
+      }
+      touch(w, true);
+      refreshReviewSummaryDom(w);
+      return true;
+    }
+    const shot = w.stagePlan.shots[selected.get(w) || 0];
     if (key === "work-voice") {
       w.settings.voice = value;
       touch(w);
@@ -2238,6 +2908,7 @@ const StageStudio = (() => {
         } else {
           shot.content.image = output.images[i];
           if (targetSize) shot.content.imageMediaSize = { w: targetSize.w, h: targetSize.h };
+          delete shot.presentationStale;
         }
         shot.variants[shot.content.kind] = shot.content;
       }
@@ -2245,23 +2916,279 @@ const StageStudio = (() => {
     touch(w);
   }
 
+  function submitPromptBatchNow(w, kind, indices) {
+    const isSvg = kind === "svg";
+    const producePromptMeta = typeof resolveExtraPromptForSubmit === "function"
+      ? resolveExtraPromptForSubmit(w, "stage-produce") : null;
+    const layout = currentLayoutDef(w);
+    const themeDef = currentThemeDef(w);
+    const batch = indices.map(idx => {
+      const s = w.stagePlan.shots[idx];
+      const prompt = isSvg
+        ? renderSvgPromptForShot(w, s, layout, themeDef)
+        : renderCodePromptForShot(w, s, layout, themeDef);
+      return {
+        index: idx,
+        shot: shotScript(s),
+        prompt,
+        ...(isSvg && s.content.customSvgPrompt?.trim() ? { customSvgPrompt: s.content.customSvgPrompt.trim() } : {}),
+        ...(!isSvg && s.content.customCodePrompt?.trim() ? { customCodePrompt: s.content.customCodePrompt.trim() } : {}),
+      };
+    });
+    return submitDraft(w, {
+      presentation: kind,
+      ...(isSvg ? { produceSvgBatch: batch } : { produceSceneBatch: batch }),
+      ...(producePromptMeta?.customPrompt ? { produceShotPrompt: producePromptMeta.customPrompt } : {}),
+    }, isSvg ? "svg-batch" : "scene-batch");
+  }
+
+  function startComposeJob(w) {
+    const p = w.stagePlan;
+    const appearance = deck(w);
+    const avatarMode = w.videoMode === "svg" ? "static"
+      : w.videoMode === "code-motion" ? codeMotionAvatarMode(w) : resolveAvatarMode(w.settings.avatarMode);
+    const avatar = w.settings.voice !== "无配音" && appearance.presenter !== "none" && avatarMode !== "static"
+      ? {enabled:true,model:avatarMode,resolution:w.settings.avatarResolution || "480P",presenter:appearance.presenter,image:TemplateVideo.resolveAvatarSrc(appearance)} : null;
+    const items = p.shots.map(({variants,speech,sfxId,sfxName,stickers,...shot}) => ({...shot, tailPause:shot.cues.some(cue => cue.focus === "outro") ? 1.15 : 0.55}));
+    const job = createJob(w,"compose",items,{...w.settings,...videoMusicSettings(w),ratio:"16:9"});
+    delete job.payload.storyboard;
+    delete job.payload.codeMotion;
+    delete job.payload.svg;
+    delete job.payload.svgLayout;
+    Object.assign(job.payload,{stage:true,layoutId:p.layout.id,title:w.title,shortTitle:p.shortTitle || undefined,
+      ...(w.drug?.trim() ? {drug:w.drug.trim().slice(0, 20)} : {}),
+      ...(p.drugTags?.length ? {drugTags:p.drugTags.slice(0, 2)} : {}),
+      disclaimer:p.disclaimer,chapters:p.chapters,appearance:{theme:appearance.theme,presenter:appearance.presenter,pharmacist:appearance.pharmacist,
+        ...(p.themeId ? {themeId:p.themeId} : {})},
+      compatibility:p.compatibility,audio:{sfx:{pack:"off",stickerSfx:false}},...(avatar ? {avatar} : {}),...(w.video?.url ? {previousVideo:w.video.url} : {})});
+    // Drop optional absent values before saving so the replay payload is byte-stable.
+    job.payload = JSON.parse(JSON.stringify(job.payload));
+    w.job = job;
+    return sendJob(w);
+  }
+
+  function runNextBatchStep(w) {
+    const queue = batchQueues.get(w);
+    if (!queue || !queue.steps.length) {
+      batchQueues.delete(w);
+      return false;
+    }
+    const step = queue.steps.shift();
+    if (step.type === "images") {
+      startImagesJob(w, step.indices, { mode: "missing", layout: step.layout, themeDef: step.themeDef, settings: step.settings });
+      return true;
+    }
+    if (step.type === "svg" || step.type === "scene") {
+      submitPromptBatchNow(w, step.type, step.indices);
+      return true;
+    }
+    if (step.type === "compose") {
+      startComposeJob(w);
+      return true;
+    }
+    batchQueues.delete(w);
+    return false;
+  }
+
+  function onJobFinished(w, job) {
+    if (!isActive(w)) return false;
+    const queue = batchQueues.get(w);
+    if (!queue) return false;
+    if (job.target === "compose") {
+      batchQueues.delete(w);
+      w.stagePlan.editorView = "studio";
+      save();
+      return false;
+    }
+    queue.doneSteps += 1;
+    if (queue.steps.length > 0) {
+      return runNextBatchStep(w);
+    }
+    const focusIndex = queue.firstShotIndex ?? 0;
+    const switchToStudio = queue.switchToStudio !== false;
+    const totalShots = queue.totalShots || 0;
+    batchQueues.delete(w);
+    if (switchToStudio) {
+      w.stagePlan.editorView = "studio";
+      selected.set(w, Math.min(focusIndex, Math.max(0, w.stagePlan.shots.length - 1)));
+      save();
+      if (current() === w) {
+        notify(`已生成 ${totalShots} 幕画面，请快速核对各幕效果后合成视频`, "ok");
+      }
+    }
+    return false;
+  }
+
+  async function prepareBatchAll(w, mode = "all") {
+    if (w.job) return;
+    const plan = collectBatchPlan(w, { includeStale: true });
+    if (!plan.totalBatchShots) {
+      if (plan.missingClips.length) {
+        w.stagePlan.editorView = "studio";
+        selected.set(w, plan.missingClips[0]);
+        render(true);
+        notify(`第 ${plan.missingClips[0] + 1} 幕为 AI 视频片段，请在精修页单独确认并生成。`, "warn");
+      }
+      return;
+    }
+    const targetIndices = [...new Set([...plan.image, ...plan.svg, ...plan.scene])].sort((a, b) => a - b);
+    if (!checkShotText(w, targetIndices)) return;
+    if (plan.image.length && !config.keyPresent) return openApiKeys("ark");
+    if ((plan.svg.length || plan.scene.length) && !config.deepseekKeyPresent) return openApiKeys("deepseek");
+    const allowAuto = canAutoCompose(w, plan);
+    const willAutoCompose = Boolean(w.stagePlan.autoComposeAfterBatch && allowAuto);
+    if (willAutoCompose && w.settings.voice !== "无配音" && !config.speechKeyPresent && !w.video) {
+      return openApiKeys("speech");
+    }
+
+    const layout = await resolveWorkLayout(w);
+    const themeDef = currentThemeDef(w);
+    const slot = LayoutEngine.describeMediaSlot(layout);
+    const pxSize = LayoutEngine.imagePixelSize(w.settings.imageSize, slot.w, slot.h);
+    const imgSettings = { ...w.settings, ratio: slot.arkRatio, targetSize: { w: slot.w, h: slot.h } };
+
+    const lines = [];
+    if (plan.image.length) {
+      const rate = Number(config.imageRates?.[w.settings.imageModel]?.[w.settings.imageSize] || 0);
+      const est = rate > 0 ? `，预计约 <strong>¥${(rate * plan.image.length).toFixed(2)}</strong>` : "";
+      const modelLabel = config.imageModels?.[w.settings.imageModel]?.[0] || w.settings.imageModel;
+      lines.push(`<li><strong>AI 完整图（${plan.image.length} 张）</strong>：${esc(modelLabel)} · ${esc(w.settings.imageSize)}（${esc(slot.ratioLabel)} · ${esc(pxSize)}）${est}</li>`);
+    }
+    if (plan.svg.length) {
+      lines.push(`<li><strong>SVG 动画（${plan.svg.length} 幕）</strong>：调用 DeepSeek 生成纯矢量动画，按实际 Token 计费</li>`);
+    }
+    if (plan.scene.length) {
+      lines.push(`<li><strong>代码动效（${plan.scene.length} 幕）</strong>：调用 DeepSeek 生成纯代码动效，按实际 Token 计费</li>`);
+    }
+    if (willAutoCompose) {
+      const voice = w.settings.voice || "无配音";
+      if (voice !== "无配音") {
+        const uncachedChars = w.stagePlan.shots.reduce((sum, s) => {
+          const cached = s.speech && s.speech.line === s.line.trim() && s.speech.voice === voice;
+          return sum + (cached ? 0 : s.line.trim().length);
+        }, 0);
+        const estVoice = uncachedChars > 0 ? `约 ${uncachedChars} 字待配音，预计约 ¥${(uncachedChars * 0.0003).toFixed(2)}` : "全部配音已缓存，直接复用";
+        lines.push(`<li><strong>自动合成 MP4</strong>：${esc(voiceLabel(voice))}（${estVoice}）+ 本地 1280×720 渲染（0 画面费用）</li>`);
+      } else {
+        lines.push(`<li><strong>自动合成 MP4</strong>：无配音，本地 1280×720 渲染，无额外费用</li>`);
+      }
+    }
+
+    const clipHint = plan.missingClips.length
+      ? `<p class="small">第 ${plan.missingClips.map(i => i + 1).join("、")} 幕为 AI 视频片段，不参与本次一键批量生成，稍后可在逐幕精修页单独生成。</p>`
+      : "";
+    const nextHint = willAutoCompose
+      ? `<p class="small">全部完成后将直接进入成品草稿页供您审片。</p>`
+      : `<p class="small">全部画面生成完成后，将自动进入「逐幕精修」页供您快速核对画面与合成视频。</p>`;
+
+    const steps = [];
+    if (plan.image.length) steps.push({ type: "images", indices: plan.image, layout, themeDef, settings: imgSettings });
+    if (plan.svg.length) steps.push({ type: "svg", indices: plan.svg });
+    if (plan.scene.length) steps.push({ type: "scene", indices: plan.scene });
+    if (willAutoCompose) steps.push({ type: "compose" });
+
+    retryPayload = () => {
+      stopReviewAudio();
+      batchQueues.set(w, {
+        totalSteps: steps.length,
+        doneSteps: 0,
+        steps: [...steps],
+        switchToStudio: !willAutoCompose,
+        firstShotIndex: targetIndices[0] ?? 0,
+        totalShots: plan.totalBatchShots,
+      });
+      runNextBatchStep(w);
+    };
+
+    const modalTitle = mode === "stale"
+      ? `确认重新生成已修改画面（${plan.totalBatchShots} 幕）`
+      : willAutoCompose
+        ? `确认生成全部画面并合成视频（${plan.totalBatchShots} 幕）`
+        : `确认生成全部画面（${plan.totalBatchShots} 幕）`;
+
+    openModal(modalTitle,
+      `<p>将按您确认后的脚本与分镜内容，依次执行以下生成任务：</p>` +
+      `<ul class="stage-batch-list">${lines.join("")}</ul>` +
+      clipHint + nextHint +
+      `<div class="actions dialog-actions">${btn("取消", "close", "secondary")}${btn(willAutoCompose ? "确认生成并合成" : "确认生成并计费", "confirm-paid", "primary")}</div>`,
+      "confirm");
+  }
+
+  function prepareReviewShotGenerate(w, index) {
+    if (w.job) return;
+    const shot = w.stagePlan.shots[index];
+    if (!shot) return;
+    const kind = shot.content.kind;
+    if (kind === "image") {
+      selected.set(w, index);
+      return prepareImages(w, "one");
+    }
+    if (kind === "svg" || kind === "scene") {
+      if (!config.stageShotProduction || !checkShotText(w, [index])) return;
+      if (!config.deepseekKeyPresent) return openApiKeys("deepseek");
+      const isSvg = kind === "svg";
+      const label = isSvg ? "SVG 动画" : "代码动效";
+      const revisionCount = (shot.content._revCount || 0) + 1;
+      const previousParams = isSvg
+        ? (shot.content.svgCode ? { svgCode: shot.content.svgCode } : {})
+        : (shot.content.code ? { code: shot.content.code } : {});
+      selected.set(w, index);
+      retryPayload = () => {
+        const producePromptMeta = typeof resolveExtraPromptForSubmit === "function"
+          ? resolveExtraPromptForSubmit(w, "stage-produce") : null;
+        const shotPrompt = isSvg
+          ? renderSvgPromptForShot(w, shot, currentLayoutDef(w), currentThemeDef(w))
+          : renderCodePromptForShot(w, shot, currentLayoutDef(w), currentThemeDef(w));
+        return submitDraft(w, {
+          presentation: kind,
+          produceShot: {
+            shot: shotScript(shot),
+            previousParams,
+            revisionCount,
+            revision: "",
+            prompt: shotPrompt,
+            ...(isSvg && shot.content.customSvgPrompt?.trim() ? { customSvgPrompt: shot.content.customSvgPrompt.trim() } : {}),
+            ...(!isSvg && shot.content.customCodePrompt?.trim() ? { customCodePrompt: shot.content.customCodePrompt.trim() } : {}),
+          },
+          ...(producePromptMeta?.customPrompt ? { produceShotPrompt: producePromptMeta.customPrompt } : {}),
+        }, "produce", index);
+      };
+      const idea = shot.content.codePrompt?.trim();
+      openModal(`生成第 ${index + 1} 幕${label}`,
+        `<p>将按第 ${index + 1} 幕「${esc(shot.name || "未命名")}」的口播、要点与画面构想，调用 DeepSeek 生成${isSvg ? "纯矢量 SVG 动画" : "纯代码动效"}。</p>` +
+        (idea ? `<p class="small">画面构想：${esc(idea)}</p>` : "") +
+        `<p class="small">仅生成本幕（提交 1 次文本请求，按 Token 计费），完成后留在当前审稿页。</p>` +
+        `<div class="actions dialog-actions">${btn("取消", "close", "secondary")}${btn("确认生成并计费", "confirm-paid", "primary")}</div>`,
+        "confirm");
+      return;
+    }
+    if (kind === "clip") {
+      stopReviewAudio();
+      selected.set(w, index);
+      w.stagePlan.editorView = "studio";
+      changed(w);
+      render(false);
+    }
+  }
+
   function prepareSpeech(w, index) {
     if (w.job) return;
     const shot = w.stagePlan.shots[index];
     if (!shot) return;
     if (w.settings.voice === "无配音") {
-      notify("当前已设为「无配音」，请先在口播栏选择配音音色。", "warn");
-      $(".stage-voice-select")?.focus();
+      notify("当前已设为「无配音」，请先选择配音音色。", "warn");
+      $('[data-stage-field="work-voice"]')?.focus();
       return;
     }
     const line = shot.line.trim();
     const cached = shot.speech;
     if (cached?.line === line && cached.voice === w.settings.voice) {
+      if (currentView(w) === "review") return playReviewSpeech(w, index);
       return $("#stage-preview")?.toggleSpeech?.(cached);
     }
     if (!line || line.length > 450) {
       notify("逐幕试听口播须为 1–450 字。", "warn");
-      $("#stage-line-input")?.focus();
+      (currentView(w) === "review" ? $(`[data-stage-field="review-line:${index}"]`) : $("#stage-line-input"))?.focus();
       return;
     }
     if (!config.speechKeyPresent) return openApiKeys("speech");
@@ -2307,24 +3234,7 @@ const StageStudio = (() => {
       : w.videoMode === "code-motion" ? codeMotionAvatarMode(w) : resolveAvatarMode(w.settings.avatarMode);
     const avatar = w.settings.voice !== "无配音" && appearance.presenter !== "none" && avatarMode !== "static"
       ? {enabled:true,model:avatarMode,resolution:w.settings.avatarResolution || "480P",presenter:appearance.presenter,image:TemplateVideo.resolveAvatarSrc(appearance)} : null;
-    const send = () => {
-      const items = p.shots.map(({variants,speech,sfxId,sfxName,stickers,...shot}) => ({...shot, tailPause:shot.cues.some(cue => cue.focus === "outro") ? 1.15 : 0.55}));
-      const job = createJob(w,"compose",items,{...w.settings,...videoMusicSettings(w),ratio:"16:9"});
-      delete job.payload.storyboard;
-      delete job.payload.codeMotion;
-      delete job.payload.svg;
-      delete job.payload.svgLayout;
-      Object.assign(job.payload,{stage:true,layoutId:p.layout.id,title:w.title,shortTitle:p.shortTitle || undefined,
-        ...(w.drug?.trim() ? {drug:w.drug.trim().slice(0, 20)} : {}),
-        ...(p.drugTags?.length ? {drugTags:p.drugTags.slice(0, 2)} : {}),
-        disclaimer:p.disclaimer,chapters:p.chapters,appearance:{theme:appearance.theme,presenter:appearance.presenter,pharmacist:appearance.pharmacist,
-          ...(p.themeId ? {themeId:p.themeId} : {})},
-        compatibility:p.compatibility,audio:{sfx:{pack:"off",stickerSfx:false}},...(avatar ? {avatar} : {}),...(w.video?.url ? {previousVideo:w.video.url} : {})});
-      // Drop optional absent values before saving so the replay payload is byte-stable.
-      job.payload = JSON.parse(JSON.stringify(job.payload));
-      w.job = job;
-      return sendJob(w);
-    };
+    const send = () => startComposeJob(w);
     if (w.settings.voice !== "无配音" || avatar) {
       if (!config.speechKeyPresent && !w.video) return openApiKeys("speech");
       if (avatar && !config.dashscopeKeyPresent && !w.video) return openApiKeys("dashscope");
@@ -2340,6 +3250,134 @@ const StageStudio = (() => {
     const p = w.stagePlan;
     const index = selected.get(w) || 0;
     const shot = p.shots[index];
+    if (action === "stage-view") {
+      const next = value === "review" ? "review" : "studio";
+      if (currentView(w) === next) return true;
+      stopReviewAudio();
+      p.editorView = next;
+      changed(w);
+      render(false);
+      return true;
+    }
+    if (action === "stage-goto-module") {
+      stopReviewAudio();
+      p.editorView = "studio";
+      inspector.set(w, normalizeModule(value));
+      changed(w);
+      render(false);
+      return true;
+    }
+    if (action === "stage-batch-all") {
+      prepareBatchAll(w, value || "all");
+      return true;
+    }
+    if (action === "stage-review-filter") {
+      const next = value === "all" ? "all" : Math.max(0, Math.min(p.shots.length - 1, Number(value) || 0));
+      if (getReviewFilter(w) === next) return true;
+      reviewFilter.set(w, next);
+      if (typeof next === "number") selected.set(w, next);
+      render(true);
+      return true;
+    }
+    if (action === "stage-review-generate") {
+      const targetIdx = Math.max(0, Math.min(p.shots.length - 1, Number(value) || 0));
+      prepareReviewShotGenerate(w, targetIdx);
+      return true;
+    }
+    if (action === "stage-review-choose") {
+      const targetIdx = Math.max(0, Math.min(p.shots.length - 1, Number(value) || 0));
+      const targetShot = p.shots[targetIdx];
+      if (!targetShot || targetShot.content.kind !== "image") return true;
+      const slot = LayoutEngine.describeMediaSlot(currentLayoutDef(w));
+      StudioAssets.pick(["image"], item => {
+        targetShot.content.image = item.url;
+        delete targetShot.content.imageMediaSize;
+        delete targetShot.presentationStale;
+        targetShot.variants.image = targetShot.content;
+        touch(w, true);
+        render(true);
+      }, { topic: w.topic, style: w.templateTheme || "medical", ratio: slot.ratioLabel });
+      return true;
+    }
+    if (action === "stage-review-zoom") {
+      const targetIdx = Math.max(0, Math.min(p.shots.length - 1, Number(value) || 0));
+      const targetShot = p.shots[targetIdx];
+      if (!targetShot?.content?.image) return true;
+      openModal(`第 ${targetIdx + 1} 幕 · ${targetShot.name || "AI 完整图"}`,
+        `<div class="stage-review-zoom-box"><img src="${esc(targetShot.content.image)}" alt="第 ${targetIdx + 1} 幕配图大图"></div>` +
+        `<div class="actions dialog-actions">${btn("精修此幕", "stage-review-open", "outline", String(targetIdx))}${btn("关闭", "close", "primary")}</div>`,
+        "info");
+      return true;
+    }
+    if (action === "stage-review-open") {
+      const targetIdx = Math.max(0, Math.min(p.shots.length - 1, Number(value) || 0));
+      if (dialog?.open) dialog.close();
+      stopReviewAudio();
+      selected.set(w, targetIdx);
+      p.editorView = "studio";
+      changed(w);
+      render(false);
+      return true;
+    }
+    if (action === "stage-review-kind") {
+      const parts = String(value || "").split(":");
+      const targetIdx = Number(parts[0]);
+      const rawKind = parts[1];
+      const clipStyle = parts[2];
+      const targetShot = p.shots[targetIdx];
+      if (!targetShot || !Object.hasOwn(kinds, rawKind)) return true;
+      const same = targetShot.content.kind === rawKind && (rawKind !== "clip" || (targetShot.content.clipStyle || "demo") === (clipStyle || "demo"));
+      if (same) return true;
+      const prevIdea = targetShot.content.imagePrompt || targetShot.content.codePrompt || targetShot.content.clipPrompt || "";
+      selectKind(w, targetShot, rawKind, clipStyle);
+      if (rawKind === "image" && !targetShot.content.imagePrompt && prevIdea) targetShot.content.imagePrompt = prevIdea.slice(0, 400);
+      else if ((rawKind === "svg" || rawKind === "scene") && !targetShot.content.codePrompt && prevIdea) targetShot.content.codePrompt = prevIdea.slice(0, 600);
+      else if (rawKind === "clip" && !targetShot.content.clipPrompt && prevIdea) targetShot.content.clipPrompt = prevIdea.slice(0, 400);
+      if (targetShot.content.decidedBy !== "user") delete targetShot.content.reason;
+      delete targetShot.content.adjusted;
+      targetShot.content.decidedBy = "user";
+      delete targetShot.presentationStale;
+      touch(w, true);
+      render(true);
+      return true;
+    }
+    if (action === "stage-review-move") {
+      const [rawIdx, rawDelta] = String(value || "").split(":");
+      const from = Number(rawIdx);
+      const to = from + Number(rawDelta);
+      if (from >= 0 && from < p.shots.length && to >= 0 && to < p.shots.length) {
+        stopReviewAudio();
+        const curFilter = getReviewFilter(w);
+        p.shots.splice(to, 0, p.shots.splice(from, 1)[0]);
+        if (curFilter === from) reviewFilter.set(w, to);
+        else if (curFilter === to) reviewFilter.set(w, from);
+        selected.set(w, to);
+        touch(w, true);
+        render(true);
+      }
+      return true;
+    }
+    if (action === "stage-review-remove" && p.shots.length > 1) {
+      const targetIdx = Number(value);
+      if (targetIdx >= 0 && targetIdx < p.shots.length) {
+        stopReviewAudio();
+        const curFilter = getReviewFilter(w);
+        p.shots.splice(targetIdx, 1);
+        if (typeof curFilter === "number") {
+          if (curFilter === targetIdx) reviewFilter.set(w, Math.min(targetIdx, p.shots.length - 1));
+          else if (curFilter > targetIdx) reviewFilter.set(w, curFilter - 1);
+        }
+        selected.set(w, Math.min(selected.get(w) || 0, p.shots.length - 1));
+        touch(w, true);
+        render(true);
+      }
+      return true;
+    }
+    if (action === "stage-review-speech") {
+      const targetIdx = Number(value);
+      if (targetIdx >= 0 && targetIdx < p.shots.length) prepareSpeech(w, targetIdx);
+      return true;
+    }
     if (action === "stage-manage-layouts") { StudioAssets.manageLayouts(); return true; }
     if (action === "stage-manage-themes") { StudioAssets.manageThemes(); return true; }
     if (action === "stage-theme") {
@@ -2459,7 +3497,18 @@ const StageStudio = (() => {
     else if (action === "stage-add" && p.shots.length < 12) {
       const nextKind = fixedKinds.includes(p.mode) ? p.mode : "image";
       const next = fromLegacy({name:`第 ${p.shots.length + 1} 幕`, line:"", seconds:5}, nextKind, p.shots.length);
-      p.shots.push(next); selected.set(w,p.shots.length-1); touch(w,true);
+      p.shots.push(next);
+      const nextIdx = p.shots.length - 1;
+      selected.set(w, nextIdx);
+      touch(w,true);
+      if (currentView(w) === "review") {
+        if (getReviewFilter(w) !== "all") reviewFilter.set(w, nextIdx);
+        render(true);
+        const addedCard = app.querySelector(`[data-review-shot="${nextIdx}"]`);
+        addedCard?.scrollIntoView({ block: "center", behavior: "smooth" });
+        addedCard?.querySelector(`[data-stage-field="review-line:${nextIdx}"]`)?.focus();
+        return true;
+      }
     } else if (action === "stage-remove" && p.shots.length > 1) {
       p.shots.splice(index,1); selected.set(w,Math.min(index,p.shots.length-1)); touch(w,true);
     } else if (action === "stage-move") {
@@ -2560,5 +3609,5 @@ const StageStudio = (() => {
     return true;
   }
 
-  return {applies,isActive,normalizeWork,initWork,setupControls,themeName,samplePlan,requestDraft,installDraft,installImages,installClip,installSpeech,syncVoiceUi,finishSpeechUi,editor,hasProductionJob,updateProductionJob,handleInput,handleAction,defaultImagePromptTemplate,defaultArtPromptTemplate,renderImagePromptForShot,renderArtPromptForShot,renderSvgPromptForShot,renderCodePromptForShot,currentProduceKind};
+  return {applies,isActive,normalizeWork,initWork,setupControls,themeName,samplePlan,requestDraft,installDraft,installImages,installClip,installSpeech,syncVoiceUi,finishSpeechUi,editor,hasProductionJob,updateProductionJob,handleInput,handleAction,defaultImagePromptTemplate,defaultArtPromptTemplate,renderImagePromptForShot,renderArtPromptForShot,renderSvgPromptForShot,renderCodePromptForShot,currentProduceKind,onJobFinished,clearBatchQueue,formatJobProgress,stopReviewAudio};
 })();

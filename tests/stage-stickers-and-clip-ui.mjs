@@ -97,6 +97,9 @@ try {
   });
   await page.locator('[data-action="generate"]').click();
   await confirm();
+  // Fresh scripts now land in 「总览审稿」 first; switch to 「逐幕精修」 to exercise per-shot controls
+  await page.locator(".stage-review-card").first().waitFor();
+  await page.locator('.stage-view-tab[data-action="stage-view"][data-val="studio"]').click();
   await frame();
 
   // Verify default draft creates AI 完整图 shots, and individual shots can still switch modes in the editor

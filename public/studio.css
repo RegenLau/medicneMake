@@ -5067,3 +5067,846 @@ dialog.prompt-modal {
   width: 14px;
   height: 14px;
 }
+
+/* Stage dual-view switch & Doctor one-page script/storyboard review */
+.stage-view-switch {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 10px;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  flex: none;
+}
+
+.stage-view-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-2);
+  white-space: nowrap;
+  transition: background-color 140ms ease, color 140ms ease, box-shadow 140ms ease;
+}
+
+.stage-view-tab .icon {
+  width: 15px;
+  height: 15px;
+}
+
+.stage-view-tab:hover:not(.is-active) {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.stage-view-tab.is-active {
+  background: var(--paper);
+  color: var(--brand-700);
+  font-weight: 600;
+  box-shadow: var(--shadow-xs);
+}
+
+.stage-view-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.stage-view-dot.is-pending {
+  background: var(--brand-500);
+}
+
+.stage-view-dot.is-stale {
+  background: var(--amber-dot);
+}
+
+.stage-review-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.vstudio-summary:has(.stage-view-switch),
+.stage-review-shell .vstudio-summary {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+}
+
+.stage-review-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.stage-review-pill.is-pending {
+  background: var(--brand-50);
+  color: var(--brand-700);
+  border: 1px solid var(--brand-200);
+}
+
+.stage-review-pill.is-stale {
+  background: var(--amber-bg);
+  color: var(--amber-ink);
+  border: 1px solid var(--amber-line);
+}
+
+.stage-review-pill.is-ok {
+  background: var(--ok-bg);
+  color: var(--ok);
+  border: 1px solid rgba(23, 121, 90, 0.22);
+}
+
+.stage-review-fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 0;
+}
+
+.stage-review-meta {
+  padding: 16px 20px;
+  margin-bottom: 0;
+}
+
+.stage-review-meta-grid {
+  display: grid;
+  grid-template-columns: minmax(240px, 1.8fr) repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px 14px;
+  align-items: end;
+}
+
+.stage-review-meta-title input {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.stage-review-meta-bar {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.stage-review-meta-pills {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.stage-review-inline-btn {
+  font-size: 13px;
+  min-height: 28px;
+  padding: 2px 8px;
+  margin-inline: 0;
+}
+
+.stage-review-more summary {
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+  padding: 2px 0;
+}
+
+.stage-review-more summary:hover {
+  color: var(--ink);
+}
+
+.stage-review-more-grid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px 12px;
+}
+
+.stage-review-disclaimer-field {
+  grid-column: 1 / -1;
+}
+
+.stage-review-guide {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 16px;
+  border-radius: var(--radius-md);
+  background: var(--brand-50);
+  border: 1px solid var(--brand-100);
+  color: var(--brand-800);
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
+.stage-review-guide strong {
+  white-space: nowrap;
+  font-size: 13px;
+  padding: 1px 8px;
+  border-radius: 6px;
+  background: rgba(13, 118, 128, 0.12);
+  color: var(--brand-800);
+}
+
+.stage-review-guide.is-stale {
+  background: var(--amber-bg);
+  border-color: var(--amber-line);
+  color: var(--amber-ink);
+}
+
+.stage-review-guide.is-stale strong {
+  background: rgba(208, 138, 23, 0.16);
+  color: var(--amber-ink);
+}
+
+.stage-review-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.stage-review-card {
+  padding: 0;
+  margin-bottom: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.stage-review-card:focus-within {
+  border-color: var(--brand-200);
+  box-shadow: var(--shadow-sm);
+}
+
+.stage-review-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 11px 16px;
+  background: #f8fbfc;
+  border-bottom: 1px solid var(--line);
+}
+
+.stage-review-card-id {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.stage-review-num {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--brand-700);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.stage-review-title-input {
+  flex: 1 1 180px;
+  min-width: 120px;
+  height: 34px;
+  padding: 4px 10px;
+  border-radius: var(--radius-xs);
+  border: 1px solid transparent;
+  background: transparent;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.stage-review-title-input:hover {
+  border-color: var(--line);
+  background: var(--paper);
+}
+
+.stage-review-title-input:focus {
+  border-color: var(--brand-600);
+  background: var(--paper);
+}
+
+.stage-review-chapter {
+  flex: none;
+  height: 32px;
+  max-width: 150px;
+  padding: 2px 8px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--line);
+  background: var(--paper);
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.stage-review-card-ops {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.stage-review-sec {
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.stage-review-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.stage-review-status.is-pending {
+  background: var(--soft);
+  color: var(--text-2);
+}
+
+.stage-review-status.is-ok {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.stage-review-status.is-stale {
+  background: var(--amber-bg);
+  color: var(--amber-ink);
+  border: 1px solid var(--amber-line);
+}
+
+.stage-review-move-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding-inline: 4px;
+  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+}
+
+.stage-review-open-btn {
+  font-size: 13px;
+  min-height: 30px;
+  padding: 4px 8px;
+  margin-inline: 0;
+}
+
+.stage-review-card-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 0;
+}
+
+.stage-review-col-script {
+  padding: 16px 18px;
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--paper);
+}
+
+.stage-review-col-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.stage-review-script-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stage-review-speech-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.stage-review-speech-btn .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.stage-review-speech-btn:hover {
+  border-color: var(--brand-500);
+  color: var(--brand-700);
+  background: var(--brand-50);
+}
+
+.stage-review-speech-btn.is-cached {
+  border-color: var(--brand-200);
+  background: var(--brand-50);
+  color: var(--brand-700);
+}
+
+.stage-review-speech-btn.is-playing {
+  border-color: var(--brand-600);
+  background: var(--brand-700);
+  color: #ffffff;
+}
+
+.stage-review-line {
+  width: 100%;
+  flex: 1;
+  min-height: 112px;
+  padding: 11px 13px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: #fbfcfd;
+  font-size: 14.5px;
+  line-height: 1.75;
+  color: var(--ink);
+  resize: vertical;
+}
+
+.stage-review-line:focus {
+  background: var(--paper);
+}
+
+.stage-review-col-visual {
+  padding: 16px 18px;
+  background: #fcfdfe;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.stage-review-kinds {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.stage-review-sublabel {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.stage-review-kind-chips {
+  gap: 5px;
+}
+
+.stage-review-kind-chips .chip {
+  font-size: 12px;
+  padding: 3px 9px;
+  min-height: 26px;
+}
+
+.stage-review-thumb-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.stage-review-thumb-bar img {
+  width: 84px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  flex: none;
+}
+
+.stage-review-thumb-bar > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 12.5px;
+}
+
+.stage-review-ready-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--ok-bg);
+  border: 1px solid rgba(23, 121, 90, 0.18);
+  color: var(--ok);
+  font-size: 12.5px;
+}
+
+.stage-review-field {
+  margin: 0;
+  gap: 4px;
+  font-size: 12.5px;
+}
+
+.stage-review-field em {
+  font-style: normal;
+  font-weight: 400;
+}
+
+.stage-review-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.stage-review-field textarea,
+.stage-review-field input,
+.stage-review-field select {
+  font-size: 13px;
+  background: var(--paper);
+}
+
+.stage-review-subgrid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--brand-50);
+  border: 1px solid var(--brand-100);
+}
+
+.stage-review-qa-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.stage-review-add-row {
+  display: flex;
+  justify-content: center;
+}
+
+.stage-review-add-row button {
+  width: 100%;
+  border-style: dashed;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--text-2);
+}
+
+.stage-review-add-row button:hover:not(:disabled) {
+  border-color: var(--brand-500);
+  color: var(--brand-700);
+  background: var(--brand-50);
+}
+
+.stage-review-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 16px 20px;
+  margin-bottom: 0;
+  border-color: var(--brand-200);
+  background: linear-gradient(180deg, #ffffff 0%, #f5fbfb 100%);
+  box-shadow: var(--shadow-sm);
+}
+
+.stage-review-footer-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 360px;
+}
+
+.stage-review-autocompose {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-2);
+  cursor: pointer;
+  user-select: none;
+}
+
+.stage-review-autocompose input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--brand-700);
+  cursor: pointer;
+}
+
+.stage-review-guard {
+  color: var(--amber-ink);
+  line-height: 1.5;
+}
+
+.stage-review-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.stage-batch-list {
+  margin: 10px 0 12px 18px;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  line-height: 1.6;
+}
+
+/* Per-shot sticky tab bar & per-shot generate controls in Review view */
+.stage-review-tabs-bar {
+  position: sticky;
+  top: 66px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: saturate(1.4) blur(10px);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-xs);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.stage-review-tab {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: var(--soft);
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, box-shadow 140ms ease;
+}
+
+.stage-review-tab:hover:not(.is-active) {
+  background: var(--soft-hover);
+  color: var(--ink);
+}
+
+.stage-review-tab.is-active {
+  background: var(--brand-700);
+  border-color: var(--brand-700);
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(8, 75, 83, 0.22);
+}
+
+.stage-review-tab-count {
+  font-style: normal;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 0 6px;
+  line-height: 18px;
+  border-radius: 999px;
+  background: rgba(15, 31, 42, 0.08);
+  color: inherit;
+}
+
+.stage-review-tab.is-active .stage-review-tab-count {
+  background: rgba(255, 255, 255, 0.22);
+  color: #ffffff;
+}
+
+.stage-review-tab-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.stage-review-tab-dot.is-pending {
+  background: #94a3b8;
+}
+
+.stage-review-tab-dot.is-ok {
+  background: var(--ok);
+}
+
+.stage-review-tab-dot.is-stale {
+  background: var(--amber-dot);
+}
+
+.stage-review-tab.is-active .stage-review-tab-dot.is-pending {
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.stage-review-tab.is-active .stage-review-tab-dot.is-ok {
+  background: #6ee7b7;
+}
+
+.stage-review-tab.is-active .stage-review-tab-dot.is-stale {
+  background: #fde047;
+}
+
+.stage-review-tab-num {
+  font-weight: 600;
+}
+
+.stage-review-tab-name {
+  max-width: 112px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.9;
+}
+
+.stage-review-thumb-btn {
+  padding: 0;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  flex: none;
+  cursor: zoom-in;
+  transition: transform 140ms ease, border-color 140ms ease;
+}
+
+.stage-review-thumb-btn:hover {
+  transform: scale(1.03);
+  border-color: var(--brand-500);
+}
+
+.stage-review-thumb-btn img {
+  display: block;
+  width: 112px;
+  height: 63px;
+  object-fit: cover;
+  border: 0;
+  border-radius: 0;
+}
+
+.stage-review-thumb-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+}
+
+.stage-review-shot-actions {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.stage-review-gen-btn {
+  min-height: 34px;
+  padding: 6px 14px;
+  font-size: 13px;
+}
+
+.stage-review-shot-hint {
+  margin-left: auto;
+  font-size: 12px;
+}
+
+.stage-review-shot-job {
+  padding: 10px 16px;
+  border-top: 1px solid var(--line);
+  background: #f8fbfc;
+}
+
+.stage-review-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 2px 0;
+}
+
+.stage-review-pager .outline {
+  min-height: 36px;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stage-review-pager-mid {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.stage-review-zoom-box {
+  margin: 4px 0 12px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--soft);
+}
+
+.stage-review-zoom-box img {
+  display: block;
+  width: 100%;
+  max-height: 65dvh;
+  object-fit: contain;
+}
+
+@media (max-width: 920px) {
+  .stage-review-card-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .stage-review-col-script {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .stage-review-qa-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

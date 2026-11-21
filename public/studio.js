@@ -4038,6 +4038,9 @@ async function poll(w, owner = w) {
           } else {
             save();
           }
+          if (StageStudio.onJobFinished?.(w, job)) {
+            return;
+          }
           if (!(job.target === "svg-speech" && job.stageSpeechIndex !== undefined && StageStudio.finishSpeechUi?.(w, job.stageSpeechIndex))) {
             updateJobView(w, owner, true);
           }
@@ -4046,7 +4049,7 @@ async function poll(w, owner = w) {
         }
         job.progress = result.progress;
         const el = owner === w && current() === w ? $("#progress") : null;
-        if (el) el.textContent = result.progress;
+        if (el) el.textContent = StageStudio.formatJobProgress?.(w, job, result.progress) || result.progress;
       } catch (e) {
         if (owner.job !== job) return;
         if (e.networkError && ++netFails <= 3) {
@@ -4054,6 +4057,7 @@ async function poll(w, owner = w) {
           continue;
         }
         job.error = e.message;
+        StageStudio.clearBatchQueue?.(w);
         save();
         updateJobView(w, owner);
         return;
@@ -4084,6 +4088,7 @@ async function sendJob(w, owner = w) {
   } catch (e) {
     if (owner.job === j) {
       j.error = e.message;
+      StageStudio.clearBatchQueue?.(w);
       save();
       updateJobView(w, owner);
     }
@@ -4639,6 +4644,7 @@ function render(preserveScroll = false) {
     }
   }
   if (route()[0] === "library") {
+    StageStudio.stopReviewAudio?.();
     updateTopbar();
     StudioAssets.page();
     if (!preserveScroll) window.scrollTo(0, 0);
@@ -4646,6 +4652,7 @@ function render(preserveScroll = false) {
   }
   const w = current();
   if (route()[0] !== "work" || !w) {
+    StageStudio.stopReviewAudio?.();
     home();
     if (!preserveScroll) window.scrollTo(0, 0);
     return;
@@ -5252,7 +5259,7 @@ document.addEventListener("change", (e) => {
   if (inside) {
     prefs(modalScope === "global" ? null : w);
     if (w && modalScope !== "global") {
-      if (k === "voice" && StageStudio.isActive(w) && $("#stage-preview")) StageStudio.syncVoiceUi(w);
+      if (k === "voice" && StageStudio.isActive(w)) StageStudio.syncVoiceUi(w);
       else render(true);
     }
   } else if (w) {
@@ -6340,7 +6347,8 @@ document.addEventListener("click", async (e) => {
       }
       case "abort-job": {
         const owner = v === "" || v == null ? w : w.blocks[Number(v)];
-        if (owner.job?.target === "write-draft" && !["produce","replan","clip-prompt"].includes(owner.job.stageDraft)) w.viewingSetup = true;
+        if (owner === w) StageStudio.clearBatchQueue?.(w);
+        if (owner.job?.target === "write-draft" && !["produce","replan","clip-prompt","svg-batch","scene-batch"].includes(owner.job.stageDraft)) w.viewingSetup = true;
         if (owner === w && portraitRejected(owner.job)) rememberRejectedFrame(w);
         const leaderId = owner.job?.referenceLeader ? owner.job.payload.id : "";
         if (leaderId) {
