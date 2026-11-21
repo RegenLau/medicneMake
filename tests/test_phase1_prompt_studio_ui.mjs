@@ -188,11 +188,10 @@ try {
   await page.locator("#stage-shot-prompt").fill(shot2ManualCode);
   assert.equal(await page.locator("#stage-shot-prompt-badge").innerText(), "已手改");
 
-  // 2c. Open produceShot modal -> edit produceShotPrompt -> verify both customCodePrompt & produceShotPrompt sent
+  // 2c. Open produceShot modal -> verify single visible prompt box (no extra revision box) & edit directly
   await page.locator('[data-action="stage-produce"]').click();
-  await dialog.locator("#stage-produce-prompt").evaluate((el) => {
-    el.closest("details").open = true;
-  });
+  assert.equal(await dialog.locator("#stage-production-revision").count(), 0, "Modal should not have extra revision textarea");
+  assert.equal(await dialog.locator("textarea").count(), 1, "Modal should have exactly 1 prompt textarea");
   await page.waitForFunction(() => document.querySelector("#stage-produce-prompt")?.value.includes("纯代码"));
   const customProduce = (await dialog.locator("#stage-produce-prompt").inputValue()) + "\n【单幕调试】优先使用高对比警示色条。";
   await dialog.locator("#stage-produce-prompt").fill(customProduce);

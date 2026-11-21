@@ -755,7 +755,7 @@ const StageStudio = (() => {
           shot:shotScript(shot),
           previousParams,
           revisionCount,
-          revision:$("#stage-production-revision").value.trim(),
+          revision: $("#stage-production-revision", dialogBody)?.value.trim() || "",
           ...(isPromptDriven ? {
             prompt: shotPrompt,
             ...(isPromptSvg && shot.content.customSvgPrompt?.trim() ? { customSvgPrompt: shot.content.customSvgPrompt.trim() } : {}),
@@ -769,28 +769,40 @@ const StageStudio = (() => {
       }
       return res;
     };
+    const promptLabel = isPromptSvg ? "SVG 动画提示词" : isCodeScene ? "代码动画提示词" : "调试单幕制作系统提示词（高级）";
     const promptBoxHtml = prodState
-      ? `<details class="shot-options stage-full-prompt-box"><summary>调试${isPromptSvg ? "SVG 动画" : isCodeScene ? "代码动效" : "单幕制作"}系统提示词（高级）<span id="stage-produce-prompt-badge" class="prompt-badge ${prodState.badgeClass}">${esc(prodState.badgeLabel)}</span></summary>
-          <textarea id="stage-produce-prompt" data-extra-prompt="stage-produce" rows="7" maxlength="20000" aria-label="单幕画面制作系统提示词">${esc(prodState.value)}</textarea>
-          <div class="asset-inline" style="margin-top:6px">
-            ${btn("放大对比与历史", "prompt-studio-open", "outline", "stage-produce")}
-            ${btn("存为常用默认", "extra-prompt-save-default", "outline", "stage-produce", prodState.canSaveDefault ? "" : "disabled")}
-            ${btn("恢复系统默认", "extra-prompt-reset", "textbtn", "stage-produce", prodState.canResetSystem ? "" : "disabled")}
-          </div>
-        </details>`
+      ? isPromptDriven
+        ? `<div class="stage-prompt-card">
+            <div class="stage-prompt-head">
+              <label class="label" for="stage-produce-prompt">${promptLabel}</label>
+              <span id="stage-produce-prompt-badge" class="prompt-badge ${prodState.badgeClass}">${esc(prodState.badgeLabel)}</span>
+            </div>
+            <textarea id="stage-produce-prompt" data-extra-prompt="stage-produce" rows="8" maxlength="20000" aria-label="${promptLabel}">${esc(prodState.value)}</textarea>
+            <div class="asset-inline" style="margin-top:6px">
+              ${btn("放大对比与历史", "prompt-studio-open", "outline", "stage-produce")}
+              ${btn("存为常用默认", "extra-prompt-save-default", "outline", "stage-produce", prodState.canSaveDefault ? "" : "disabled")}
+              ${btn("恢复系统默认", "extra-prompt-reset", "textbtn", "stage-produce", prodState.canResetSystem ? "" : "disabled")}
+            </div>
+          </div>`
+        : `<details class="shot-options stage-full-prompt-box"><summary>${promptLabel}<span id="stage-produce-prompt-badge" class="prompt-badge ${prodState.badgeClass}">${esc(prodState.badgeLabel)}</span></summary>
+            <textarea id="stage-produce-prompt" data-extra-prompt="stage-produce" rows="7" maxlength="20000" aria-label="单幕画面制作系统提示词">${esc(prodState.value)}</textarea>
+            <div class="asset-inline" style="margin-top:6px">
+              ${btn("放大对比与历史", "prompt-studio-open", "outline", "stage-produce")}
+              ${btn("存为常用默认", "extra-prompt-save-default", "outline", "stage-produce", prodState.canSaveDefault ? "" : "disabled")}
+              ${btn("恢复系统默认", "extra-prompt-reset", "textbtn", "stage-produce", prodState.canResetSystem ? "" : "disabled")}
+            </div>
+          </details>`
       : "";
     const descHtml = isPromptSvg
-      ? `<p>用 DeepSeek 按第 ${index + 1} 幕的提示词、口播和要点，直接生成纯矢量 SVG 动画（不含插图）。保留口播、要点和其他幕。</p>`
+      ? `<p>用 DeepSeek 按第 ${index + 1} 幕的本幕提示词、口播和要点，直接生成纯矢量 SVG 动画（不含插图）。可直接在下方提示词上修改。</p>`
       : isCodeScene
-        ? `<p>用 DeepSeek 按第 ${index + 1} 幕的提示词、口播和要点，生成纯代码动效（HTML + CSS + 内联 SVG + JS，不含插图）。保留口播、要点和其他幕。</p>`
+        ? `<p>用 DeepSeek 按第 ${index + 1} 幕的本幕提示词、口播和要点，生成纯代码动效（不含插图）。可直接在下方提示词上修改。</p>`
         : `<p>用 DeepSeek 按第 ${index + 1} 幕的口播和要点，用「${kinds[kind]}」设计新画面。保留口播、要点和其他幕。</p>`;
-    const placeholder = isPromptSvg
-      ? "可选补充微调要求，例如：放大药盒与箭头路径、节奏更轻快、重点处加描边高亮…"
-      : isCodeScene
-        ? "可选补充微调要求，例如：节奏再紧凑一点、把核心数字做得更醒目、增加胶囊溶解曲线…"
-        : "想先展示哪个要点，或想演示哪个动作？";
+    const revisionFieldHtml = isPromptDriven
+      ? ""
+      : `<label class="field">画面要求（选填）<textarea id="stage-production-revision" maxlength="200" rows="3" placeholder="想先展示哪个要点，或想演示哪个动作？"></textarea></label>`;
     openModal(title, `${descHtml}
-      <label class="field">${isPromptDriven ? "补充微调要求（选填）" : "画面要求（选填）"}<textarea id="stage-production-revision" maxlength="200" rows="3" placeholder="${placeholder}"></textarea></label>
+      ${revisionFieldHtml}
       ${promptBoxHtml}
       <p class="small">提交 1 次文本请求，按 Token 计费。</p>
       <div class="actions dialog-actions">${btn("取消","close","secondary")}${btn("确认提交并计费","confirm-paid","primary")}</div>`, "confirm");

@@ -181,6 +181,8 @@ try {
   assert.equal(await page.locator("#stage-shot-prompt-badge").innerText(), "已手改");
 
   await page.locator('[data-action="stage-produce"]').click();
+  assert.equal(await page.locator("#dialog textarea").count(), 1, "SVG modal should have exactly 1 directly editable prompt textarea");
+  assert.equal(await page.locator("#dialog #stage-production-revision").count(), 0, "SVG modal should not show extra revision textarea");
   await page.locator('#dialog [data-action="confirm-paid"]').click();
   await page.waitForSelector(".stage-code-source-box", { timeout: 10000 });
   await preview.locator("[data-custom-code-host]").waitFor({ timeout: 10000 });
@@ -229,6 +231,8 @@ try {
   assert.equal(await page.locator("#stage-shot-prompt-badge").innerText(), "已手改");
 
   await page.locator('[data-action="stage-produce"]').click();
+  assert.equal(await page.locator("#dialog textarea").count(), 1, "SVG modal should have exactly 1 directly editable prompt textarea");
+  assert.equal(await page.locator("#dialog #stage-production-revision").count(), 0, "SVG modal should not show extra revision textarea");
   await page.locator('#dialog [data-action="confirm-paid"]').click();
   await page.waitForSelector(".stage-code-source-box", { timeout: 10000 });
   await preview.locator("[data-custom-code-host]").waitFor({ timeout: 10000 });
