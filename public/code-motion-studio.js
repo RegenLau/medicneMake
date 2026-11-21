@@ -498,7 +498,7 @@ function codeMotionEditor(w) {
       : '<p class="footmeta" style="margin-top:4px">当前版式可不放条目，突出核心标题与图形；也可按需添加。</p>');
 
   const scenePanelHtml =
-    '<div class="vstudio-panel">' +
+    `<div class="vstudio-panel" data-inspector-key="${esc(w.id)}:scene:${selected}">` +
     '<section class="vstudio-section">' +
     `<div class="field-head"><label class="label" for="cm-line-${selected}">本幕口播台词</label>` +
     `<span class="pace" id="cm-pace-${selected}">${esc(pace.label)}</span></div>` +
@@ -540,7 +540,7 @@ function codeMotionEditor(w) {
     "</section></div>";
 
   const globalPanelHtml =
-    '<div class="vstudio-panel">' +
+    `<div class="vstudio-panel" data-inspector-key="${esc(w.id)}:global">` +
     '<section class="vstudio-section">' +
     '<span class="label">模板视觉风格</span><div class="tpl-theme-grid">' +
     TemplateVideo.THEMES.map((t) =>
@@ -554,9 +554,9 @@ function codeMotionEditor(w) {
     "</div>" +
     (appearance.presenter !== "none"
       ? '<span class="label" style="margin-top:12px">人物口型动效（阿里云百炼）</span><div class="chips">' +
+        `<button type="button" class="chip${avatarMode === "static" ? " selected" : ""}" data-action="tpl-avatar-mode" data-val="static" aria-pressed="${avatarMode === "static"}">静态肖像</button>` +
         `<button type="button" class="chip${avatarMode === "videoretalk" ? " selected" : ""}" data-action="tpl-avatar-mode" data-val="videoretalk" aria-pressed="${avatarMode === "videoretalk"}">声动人像（整片）</button>` +
-        `<button type="button" class="chip${avatarMode === "wan2.2-s2v" ? " selected" : ""}" data-action="tpl-avatar-mode" data-val="wan2.2-s2v" aria-pressed="${avatarMode === "wan2.2-s2v"}">万相数字人（生动）</button>` +
-        `<button type="button" class="chip${avatarMode === "static" ? " selected" : ""}" data-action="tpl-avatar-mode" data-val="static" aria-pressed="${avatarMode === "static"}">静态肖像</button></div>`
+        `<button type="button" class="chip${avatarMode === "wan2.2-s2v" ? " selected" : ""}" data-action="tpl-avatar-mode" data-val="wan2.2-s2v" aria-pressed="${avatarMode === "wan2.2-s2v"}">万相数字人（生动）</button></div>`
       : "") +
     '<div class="asset-inline"><span class="small">视频字体</span>' +
     btn(esc(w.settings.fontName || "选择字体"), "cm-pick-asset", "outline", "font") +

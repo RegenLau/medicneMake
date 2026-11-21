@@ -128,8 +128,8 @@ try {
             chapterIndex: 1,
             points: { type: "warning", headline: "别叠加成分", items: [{ title: "查成分表", detail: "避免重复", tag: "" }], takeaway: "先看成分表" },
             cues: [{ text: "复方感冒药常含相同成分，避免叠加。", focus: "all", weight: 18 }],
-            content: { kind: "card", motionStyle: "auto", artPrompt: "家长对比两盒药的成分表" },
-            variants: { card: { kind: "card", motionStyle: "auto", artPrompt: "家长对比两盒药的成分表" } },
+            content: { kind: "scene", codePrompt: "用矢量天平对比两盒感冒药的相同成分" },
+            variants: { scene: { kind: "scene", codePrompt: "用矢量天平对比两盒感冒药的相同成分" } },
           },
         ],
       },
@@ -157,7 +157,7 @@ try {
   await dialog.locator('[data-action="prompt-studio-channel"][data-val="stage-arrange"]').click();
   await page.waitForFunction(() => document.querySelector("#prompt-studio-modal-input")?.value.includes("JSON"));
   await dialog.locator('[data-action="prompt-studio-channel"][data-val="stage-produce"]').click();
-  await page.waitForFunction(() => document.querySelector("#prompt-studio-modal-input")?.value.includes("plans"));
+  await page.waitForFunction(() => document.querySelector("#prompt-studio-modal-input")?.value.includes("纯代码"));
   await dialog.locator('[data-action="close"]').first().click();
 
   // Verify shot 1 per-shot full prompt picked up the global stage-image template
@@ -180,32 +180,29 @@ try {
   // Clear mock job error
   await page.locator('#stage-production-job [data-action="abort-job"]').click();
 
-  // 2b. Select shot 2 (card) -> test per-shot full art prompt + produceShot system prompt
+  // 2b. Select shot 2 (scene) -> test per-shot full code prompt + produceShot system prompt (no illustration)
   await page.locator('.stage-rail [data-action="stage-select"][data-val="1"]').click();
-  await page.locator("#stage-shot-art-full-prompt").evaluate((el) => {
+  assert.equal(await page.locator("#stage-shot-art-full-prompt").count(), 0, "Scene shot should not show illustration prompt");
+  await page.locator("#stage-shot-code-full-prompt").evaluate((el) => {
     el.closest("details").open = true;
   });
-  const shot2ManualArt = "【单幕手改插画提示词】纯色浅蓝底，妈妈放大镜查看两盒药成分表，无任何文字。";
-  await page.locator("#stage-shot-art-full-prompt").fill(shot2ManualArt);
-  await page.locator('[data-action="stage-art"][data-val="one"]').click();
-  await dialog.locator('[data-action="confirm-paid"]').click();
-  await page.waitForFunction(() => document.querySelector("#stage-production-job:not([hidden])") !== null);
-  assert.equal(submitted.length, 3);
-  assert.equal(submitted[2].items[0].prompt, shot2ManualArt);
-  await page.locator('#stage-production-job [data-action="abort-job"]').click();
+  const shot2ManualCode = "【单幕手改代码提示词】左右双栏纯 SVG 对比两盒复方感冒药成分表，高亮相同退烧成分。";
+  await page.locator("#stage-shot-code-full-prompt").fill(shot2ManualCode);
+  assert.equal(await page.locator("#stage-shot-code-prompt-badge").innerText(), "已手改");
 
-  // 2c. Open produceShot modal -> edit produceShotPrompt -> verify sent in payload.draft.produceShotPrompt
+  // 2c. Open produceShot modal -> edit produceShotPrompt -> verify both customCodePrompt & produceShotPrompt sent
   await page.locator('[data-action="stage-produce"]').click();
   await dialog.locator("#stage-produce-prompt").evaluate((el) => {
     el.closest("details").open = true;
   });
-  await page.waitForFunction(() => document.querySelector("#stage-produce-prompt")?.value.includes("plans"));
-  const customProduce = (await dialog.locator("#stage-produce-prompt").inputValue()) + "\n【单幕调试】优先使用强对比警示版式。";
+  await page.waitForFunction(() => document.querySelector("#stage-produce-prompt")?.value.includes("纯代码"));
+  const customProduce = (await dialog.locator("#stage-produce-prompt").inputValue()) + "\n【单幕调试】优先使用高对比警示色条。";
   await dialog.locator("#stage-produce-prompt").fill(customProduce);
   await dialog.locator('[data-action="confirm-paid"]').click();
   await page.waitForFunction(() => document.querySelector("#stage-production-job:not([hidden])") !== null);
-  assert.equal(submitted.length, 4);
-  assert.equal(submitted[3].draft.produceShotPrompt, customProduce.trim());
+  assert.equal(submitted.length, 3);
+  assert.equal(submitted[2].draft.produceShot.customCodePrompt, shot2ManualCode);
+  assert.equal(submitted[2].draft.produceShotPrompt, customProduce.trim());
 
   assert.deepEqual(errors, [], `Unexpected page errors: ${errors.join("; ")}`);
   console.log("PASS: test_phase1_prompt_studio_ui.mjs");

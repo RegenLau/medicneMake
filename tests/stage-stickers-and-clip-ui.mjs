@@ -79,7 +79,7 @@ try {
   await page.locator('[data-action="new"][data-val="video"]').click();
   await button("信息图模板").click();
   const modeButtons = await page.locator('[data-action="stage-mode"]').allTextContents();
-  assert.deepEqual(modeButtons, ["AI 完整图（推荐）", "信息图动效", "代码动效场景"]);
+  assert.deepEqual(modeButtons, ["AI 完整图（推荐）", "SVG 动画", "代码动效场景"]);
   assert.equal(
     await page.locator('[data-action="stage-mode"][data-val="image"]').getAttribute("aria-pressed"),
     "true",
@@ -105,11 +105,11 @@ try {
     ["image", "image", "image"],
   );
   await select(0);
-  await button("信息图动效").click();
+  await button("SVG 动画").click();
   await frame();
   assert.deepEqual(
     await page.evaluate(() => current().stagePlan.shots.map((s) => s.content.kind)),
-    ["card", "image", "image"],
+    ["svg", "image", "image"],
   );
 
   // 2. Phase 3: Add sticker on shot 0 appearing at cue 1 (~1.5s) and verify non-overlap + audio peak in export

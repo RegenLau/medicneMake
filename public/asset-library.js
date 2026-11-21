@@ -281,7 +281,7 @@ const StudioAssets = (() => {
     return hit || (value === "warm" ? "warm" : "medical");
   }
 
-  const layoutKinds = {image:"AI 完整图", card:"信息图动效", scene:"代码动效场景", clip:"AI 演示视频", svg:"旧版 SVG", asset:"旧版素材", mg:"旧版 MG"};
+  const layoutKinds = {image:"AI 完整图", svg:"SVG 动画", scene:"代码动效场景", clip:"AI 演示视频", card:"旧版信息图", asset:"旧版素材", mg:"旧版 MG"};
   function layoutModal(item, copy, managing) {
     openModal(copy ? "复制为我的布局" : item.name, `<div class="asset-form layout-panel"><p role="status">正在读取布局…</p></div>`, "asset-form");
     const panel = dialogBody.querySelector(".layout-panel");
@@ -293,7 +293,7 @@ const StudioAssets = (() => {
       panel.innerHTML = `<form class="layout-form">
         <div class="layout-preview-options">
           <label class="field">主题<select name="theme">${opts(previewThemeChoices(),"medical")}</select></label>
-          <label class="field">制作方式<select name="kind">${opts(entry.map(kind => [kind,layoutKinds[kind]]),entry.includes("card") ? "card" : entry[0])}</select></label>
+          <label class="field">制作方式<select name="kind">${opts(entry.map(kind => [kind,layoutKinds[kind]]),entry.includes("svg") ? "svg" : entry[0])}</select></label>
           ${stages.length > 1 ? `<label class="field">区域方案<select name="stage">${opts(stages,"explain")}</select></label>` : ""}
         </div>
         <iframe class="layout-stage-preview" src="/stage.html" title="布局实时预览"></iframe>

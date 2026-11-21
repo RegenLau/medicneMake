@@ -195,9 +195,9 @@ const voiceLabels = Object.fromEntries(voiceOptions.map((item) => Array.isArray(
 const voiceLabel = (v) => voiceLabels[v] || v || "";
 const musicLabels = { auto: "自动搭配", off: "无背景音乐", calm: "舒缓钢琴", light: "轻快木琴" };
 const avatarModeOptions = [
+  ["static", "静态肖像（免费）"],
   ["videoretalk", "声动人像 VideoRetalk（整片省钱 · ¥0.08/秒）"],
   ["wan2.2-s2v", "万相数字人 Wan2.2-S2V（表情生动 · ¥0.50/秒）"],
-  ["static", "静态肖像（免费）"],
 ];
 const avatarResolutionOptions = [
   ["480P", "480P（¥0.50/秒 · 圆框推荐）"],
@@ -2125,7 +2125,7 @@ const EXTRA_PROMPT_META = {
     requireJson: true,
     maxLen: 20000,
     apiKind: "stage-arrange",
-    hint: "控制 Mix / SVG / MG 自动编排各幕方式、版式多样性与插画建议；建议保留 JSON 格式说明。",
+    hint: "控制 Mix / SVG / MG 自动编排各幕方式与道具动作；建议保留 JSON 格式说明。",
   },
   "stage-produce": {
     label: "单幕画面制作提示词",
@@ -2133,7 +2133,7 @@ const EXTRA_PROMPT_META = {
     requireJson: true,
     maxLen: 20000,
     apiKind: "stage-produce",
-    hint: "控制分镜页点击「制作本幕 / 重新制作本幕」时的单幕方案生成规则；建议保留 JSON 格式说明。",
+    hint: "控制分镜页点击「制作本幕 / 生成代码动画」时的单幕方案与纯代码生成规则；建议保留 JSON 格式说明。",
   },
 };
 
@@ -2143,7 +2143,7 @@ function extraPromptStorageKey(w, channel) {
     return "stage-arrange:" + (pres === "svg" || pres === "mg" ? pres : "mix");
   }
   if (channel === "stage-produce") {
-    const kind = StageStudio.currentProduceKind ? StageStudio.currentProduceKind(w) : "card";
+    const kind = StageStudio.currentProduceKind ? StageStudio.currentProduceKind(w) : "scene";
     return "stage-produce:" + kind;
   }
   return channel;
@@ -2162,7 +2162,7 @@ function extraPromptParams(w, channel) {
     return { kind: "stage-arrange", layoutId, presentation: pres === "svg" || pres === "mg" ? pres : "mix" };
   }
   if (channel === "stage-produce") {
-    const kind = StageStudio.currentProduceKind ? StageStudio.currentProduceKind(w) : "card";
+    const kind = StageStudio.currentProduceKind ? StageStudio.currentProduceKind(w) : "scene";
     return { kind: "stage-produce", layoutId, presentation: kind };
   }
   return { kind: channel, layoutId, themeId: w?.stagePlan?.themeId || w?.templateTheme || "medical" };
@@ -2492,7 +2492,7 @@ function updatePromptStudioModalUI(w) {
 
 function promptStudioChannelsFor(w) {
   if (w?.type === "article") return ["article-draft", "article-images"];
-  return ["stage-image", "stage-art", "stage-arrange", "stage-produce"];
+  return ["stage-image", "stage-arrange", "stage-produce"];
 }
 
 function renderPromptStudioModalBody(w) {
@@ -3494,7 +3494,7 @@ function editor(w) {
         btn("从素材库选动效", "library-pick-motion", "textbtn", selected)
       : "";
     const shotPanel = block
-      ? '<div class="vstudio-panel">' +
+      ? '<div class="vstudio-panel" data-inspector-key="' + esc(w.id) + ':shot:' + selected + '">' +
         '<section class="vstudio-section">' +
         '<label class="field">本幕标题<input maxlength="60" data-block="' + selected + '" data-key="name" value="' + esc(block.name) + '" placeholder="例如：核对药盒有效期"></label>' +
         (hasSvgBeats ? svgBeatFields(block, selected) : '<div style="margin-top:12px"><div class="field-head"><label class="label" for="line-' + selected + '">口播台词</label>' +
@@ -3524,7 +3524,7 @@ function editor(w) {
       : "";
 
     const globalPanel =
-      '<div class="vstudio-panel">' +
+      '<div class="vstudio-panel" data-inspector-key="' + esc(w.id) + ':global">' +
       '<section class="vstudio-section">' +
       '<label class="field">作品标题<input maxlength="300" data-bind="title" value="' + esc(w.title) + '" placeholder="输入清晰易懂的科普标题"></label>' +
       (isSvg ? TemplateStudio.templateSetupHtml(w, data, esc, btn) : '<label class="field" style="margin-top:12px">全片场景与道具<textarea rows="3" maxlength="240" class="autogrow" data-bind="setting" placeholder="例如：家中客厅的浅色木桌，桌上有白色药箱、一盒浅蓝色药盒和米色记录本">' +
@@ -4038,9 +4038,8 @@ async function poll(w, owner = w) {
           } else {
             save();
           }
-          updateJobView(w, owner, true);
-          if (job.stageAutoImages && data.works.includes(w)) {
-            StageStudio.autoGenerateImages(w, job.stageAutoImages);
+          if (!(job.target === "svg-speech" && job.stageSpeechIndex !== undefined && StageStudio.finishSpeechUi?.(w, job.stageSpeechIndex))) {
+            updateJobView(w, owner, true);
           }
           for (const block of ready) sendJob(w, block);
           return;
@@ -4629,6 +4628,16 @@ function render(preserveScroll = false) {
   if (stopSvgPlayback) stopSvgPlayback();
   if (!config) return;
   const prevScroll = window.scrollY;
+  const prevInspector = app.querySelector(".vstudio-inspector-body, .vstudio-inspector-card > .vstudio-panel");
+  const prevInspectorScroll = prevInspector ? prevInspector.scrollTop : 0;
+  const prevInspectorKey = prevInspector ? prevInspector.dataset.inspectorKey : null;
+  function restoreScroll() {
+    window.scrollTo(0, prevScroll);
+    const nextInspector = app.querySelector(".vstudio-inspector-body, .vstudio-inspector-card > .vstudio-panel");
+    if (nextInspector && prevInspectorKey && nextInspector.dataset.inspectorKey === prevInspectorKey) {
+      nextInspector.scrollTop = prevInspectorScroll;
+    }
+  }
   if (route()[0] === "library") {
     updateTopbar();
     StudioAssets.page();
@@ -4648,7 +4657,8 @@ function render(preserveScroll = false) {
     else jobView(w);
     if (!w.job.error) poll(w);
     else if (w.job.target === "compose" || w.job.target === "write-draft" || StageStudio.hasProductionJob(w)) recoverFinishedJob(w);
-    if (!preserveScroll) window.scrollTo(0, 0);
+    if (preserveScroll) restoreScroll();
+    else window.scrollTo(0, 0);
     return;
   }
   if (w.stage === "setup" || w.viewingSetup) setup(w);
@@ -4664,7 +4674,7 @@ function render(preserveScroll = false) {
     TemplateStudio.resumeSlideJobs(w, templateHooks());
   }
   revealSelectedScene();
-  if (preserveScroll) window.scrollTo(0, prevScroll);
+  if (preserveScroll) restoreScroll();
   else window.scrollTo(0, 0);
 }
 
@@ -5241,7 +5251,10 @@ document.addEventListener("change", (e) => {
   if (w && s === w.settings) changed(w);
   if (inside) {
     prefs(modalScope === "global" ? null : w);
-    if (w && modalScope !== "global") render(true);
+    if (w && modalScope !== "global") {
+      if (k === "voice" && StageStudio.isActive(w) && $("#stage-preview")) StageStudio.syncVoiceUi(w);
+      else render(true);
+    }
   } else if (w) {
     render(true);
   }
@@ -6273,9 +6286,8 @@ document.addEventListener("click", async (e) => {
           break;
         }
         if (j.target === "write-draft") {
-          if (["produce", "replan", "stickers", "clip-prompt"].includes(j.stageDraft)) {
+          if (["produce", "replan", "clip-prompt"].includes(j.stageDraft)) {
             const detail = j.stageDraft === "produce" ? `继续制作第 ${j.stageShotIndex + 1} 幕画面。`
-              : j.stageDraft === "stickers" ? "继续自动匹配贴纸。"
               : j.stageDraft === "clip-prompt" ? `继续生成第 ${j.stageShotIndex + 1} 幕视频描述。`
               : "继续编排分镜画面。";
             authorize({ ...w, settings:j.payload.settings }, 1, "draft", () => sendJob(w), 1, {detail});
@@ -6287,6 +6299,11 @@ document.addEventListener("click", async (e) => {
             break;
           }
           authorize(w, w.type === "article" && !j.partial ? 2 : 1, "draft", () => sendJob(w));
+          break;
+        }
+        if (j.stageSpeechIndex !== undefined) {
+          if (!config.speechKeyPresent) { openApiKeys("speech"); break; }
+          await sendJob(w, owner);
           break;
         }
         if (j.stageClipShot !== undefined) {
@@ -6323,7 +6340,7 @@ document.addEventListener("click", async (e) => {
       }
       case "abort-job": {
         const owner = v === "" || v == null ? w : w.blocks[Number(v)];
-        if (owner.job?.target === "write-draft" && !["produce","replan","stickers","clip-prompt"].includes(owner.job.stageDraft)) w.viewingSetup = true;
+        if (owner.job?.target === "write-draft" && !["produce","replan","clip-prompt"].includes(owner.job.stageDraft)) w.viewingSetup = true;
         if (owner === w && portraitRejected(owner.job)) rememberRejectedFrame(w);
         const leaderId = owner.job?.referenceLeader ? owner.job.payload.id : "";
         if (leaderId) {

@@ -761,9 +761,11 @@
         ? opts.subtitleText
         : (cues[0] ? cues[0].text : slide.line || ""),
     );
-    const hlWords = Array.isArray(opts.highlightWords) && opts.highlightWords.length
-      ? opts.highlightWords
-      : (slide.highlightWords || []);
+    const hlWords = opts.highlightCustom
+      ? (Array.isArray(opts.highlightWords) ? opts.highlightWords : [])
+      : (Array.isArray(opts.highlightWords) && opts.highlightWords.length
+          ? opts.highlightWords
+          : (slide.highlightWords || []));
     const subtitleHtml = highlightText(subtitleRaw, hlWords, "pt-sub-hl");
 
     const mapSrc = (src) => (opts.imgMap && src && opts.imgMap.get(src)) ? opts.imgMap.get(src) : (src || "");

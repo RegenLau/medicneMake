@@ -321,9 +321,9 @@
         ? '<p class="footmeta">主讲人显示静态头像</p>'
         : presenter !== "none"
         ? '<div class="chips" style="margin-top:8px">' +
+          '<button type="button" class="chip' + (avatarMode === "static" ? " selected" : "") + '" data-action="tpl-avatar-mode" data-val="static" aria-pressed="' + (avatarMode === "static") + '">静态肖像</button>' +
           '<button type="button" class="chip' + (avatarMode === "videoretalk" ? " selected" : "") + '" data-action="tpl-avatar-mode" data-val="videoretalk" aria-pressed="' + (avatarMode === "videoretalk") + '">声动人像（整片省钱）</button>' +
           '<button type="button" class="chip' + (avatarMode === "wan2.2-s2v" ? " selected" : "") + '" data-action="tpl-avatar-mode" data-val="wan2.2-s2v" aria-pressed="' + (avatarMode === "wan2.2-s2v") + '">万相数字人（表情生动）</button>' +
-          '<button type="button" class="chip' + (avatarMode === "static" ? " selected" : "") + '" data-action="tpl-avatar-mode" data-val="static" aria-pressed="' + (avatarMode === "static") + '">静态肖像</button>' +
           (avatarMode !== "static" && cfg && !cfg.dashscopeKeyPresent
             ? btnFn("配置阿里云百炼 Key", "connect-dashscope", "textbtn")
             : "") +
@@ -783,7 +783,7 @@
       : "";
 
     const slidePanelHtml =
-      '<div class="vstudio-panel">' +
+      '<div class="vstudio-panel" data-inspector-key="' + escFn(w.id) + ':slide:' + idx + '">' +
       '<section class="vstudio-section">' +
       '<div class="field-head"><label class="label" for="tpl-line-' + idx + '">本页口播台词</label>' +
       '<span class="pace" id="tpl-pace-' + idx + '">' + escFn(pace.label) + "</span></div>" +
@@ -869,7 +869,7 @@
       "</section></div>";
 
     const globalPanelHtml =
-      '<div class="vstudio-panel">' +
+      '<div class="vstudio-panel" data-inspector-key="' + escFn(w.id) + ':global">' +
       '<section class="vstudio-section">' +
       '<span class="label">模板视觉风格</span>' +
       '<div class="tpl-theme-grid">' +
@@ -896,9 +896,9 @@
       (deck.presenter !== "none"
         ? '<span class="label" style="margin-top:12px">人物口型动效（阿里云百炼）</span>' +
           '<div class="chips">' +
+          '<button type="button" class="chip' + (avatarMode === "static" ? " selected" : "") + '" data-action="tpl-avatar-mode" data-val="static" aria-pressed="' + (avatarMode === "static") + '">静态肖像</button>' +
           '<button type="button" class="chip' + (avatarMode === "videoretalk" ? " selected" : "") + '" data-action="tpl-avatar-mode" data-val="videoretalk" aria-pressed="' + (avatarMode === "videoretalk") + '">声动人像（整片）</button>' +
           '<button type="button" class="chip' + (avatarMode === "wan2.2-s2v" ? " selected" : "") + '" data-action="tpl-avatar-mode" data-val="wan2.2-s2v" aria-pressed="' + (avatarMode === "wan2.2-s2v") + '">万相数字人（生动）</button>' +
-          '<button type="button" class="chip' + (avatarMode === "static" ? " selected" : "") + '" data-action="tpl-avatar-mode" data-val="static" aria-pressed="' + (avatarMode === "static") + '">静态肖像</button>' +
           "</div>" +
           (deck.presenter === "cartoon" && avatarMode === "videoretalk"
             ? '<p class="footmeta" style="margin-top:6px">卡通形象如遇人脸检测不通过，可切换「万相数字人」（原生支持卡通）。</p>'

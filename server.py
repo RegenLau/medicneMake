@@ -1165,6 +1165,26 @@ def setting_valid(p):
             validate_template_avatar(avatar, True, check_key=not p.get("previousVideo"))
         validate_video_music_settings(settings)
         return
+    if p["kind"] == "svg-speech" and p.get("stage") is True:
+        settings = p.get("settings")
+        if not isinstance(settings, dict) or settings.get("voice") not in SPEAKERS:
+            raise ValueError("逐幕试听需要有效的配音音色。")
+        try:
+            uuid.UUID(p.get("workId", ""))
+        except (AttributeError, TypeError, ValueError):
+            raise ValueError("作品 ID 无效") from None
+        items = p.get("items")
+        if not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], dict):
+            raise ValueError("逐幕试听需要一幕分镜。")
+        item = items[0]
+        index = item.get("index")
+        if type(index) is not int or not 0 <= index < 12:
+            raise ValueError("逐幕试听的分镜序号无效。")
+        line = draft_content.string_field(item, "line", 450)
+        cached = svg_speech_cache_path(p, line, SPEAKERS[settings["voice"]]).is_file()
+        if not current_speech_key() and not cached:
+            raise ValueError("请先配置火山语音，再试听本幕口播。")
+        return
     if p["kind"] == "svg-speech" or (p["kind"] == "video" and p.get("svg") is True):
         settings = p.get("settings")
         if not isinstance(settings, dict) or settings.get("voice") not in (*SPEAKERS, "无配音"):
@@ -1581,9 +1601,23 @@ def cached_template_speech(p):
 
 def has_template_speech(p):
     cached = cached_template_speech(p)
-    return all(not name or name in cached for name in (
-        speech_cache_name(p["settings"], item.get("line", "").strip()) for item in p["items"]
-    ))
+    speaker = SPEAKERS.get(p["settings"].get("voice"))
+    has_work_id = False
+    if speaker and p.get("workId"):
+        try:
+            uuid.UUID(str(p["workId"]))
+            has_work_id = True
+        except ValueError:
+            has_work_id = False
+    for item in p["items"]:
+        line = item.get("line", "").strip()
+        name = speech_cache_name(p["settings"], line)
+        if not name or name in cached:
+            continue
+        if has_work_id and svg_speech_cache_path(p, line, speaker).is_file():
+            continue
+        return False
+    return True
 
 
 def template_shot_audio(settings, line, folder, speech_key, index, record, cached):
@@ -2897,8 +2931,10 @@ def preview_svg_speech(p, save, job, speech_key, record):
     job["progress"] = "生成本幕口播试听"
     save()
     audio, spoken = svg_shot_audio(p, item, item["index"], speech_key, record)
-    job["output"] = {"url": f"/media/{audio.name}", "seconds": spoken,
-                     "subtitles": svg_caption_progress(item["line"].strip(), spoken, item.get("beats"))}
+    output = {"url": f"/media/{audio.name}", "seconds": spoken}
+    if not p.get("stage"):
+        output["subtitles"] = svg_caption_progress(item["line"].strip(), spoken, item.get("beats"))
+    job["output"] = output
 
 
 def render_code_motion(p, job, save, speech_key, record, dashscope_key=""):
@@ -3108,7 +3144,7 @@ def build_timeline(p, shots, folder, speech_key, record=None, progress=None):
         audio_dir.mkdir(parents=True, exist_ok=True)
         line = shot["line"]
         speaker = SPEAKERS.get(p["settings"]["voice"])
-        prior = svg_speech_cache_path(p, line, speaker) if speaker and p.get("workId") and shot["kind"] == "svg" else None
+        prior = svg_speech_cache_path(p, line.strip(), speaker) if speaker and p.get("workId") else None
         if prior and prior.is_file():
             with wave.open(str(prior)) as wav:
                 audio, spoken = prior, wav.getnframes() / wav.getframerate()
@@ -3449,8 +3485,16 @@ def write_draft(p, job, save, record=None):
                 save()
                 job["output"] = mix_plan.write_clip_prompt(tracked_deepseek("AI 视频描述"), model, item, ASSETS)
                 return
+            if "produceSceneBatch" in item:
+                def on_scene_progress(done, total, name):
+                    job["progress"] = f"生成代码动画（{done + 1}/{total} · {name}）"
+                    save()
+                job["output"] = mix_plan.produce_scene_batch(
+                    tracked_deepseek("代码动画生成"), model, item, ASSETS, on_progress=on_scene_progress,
+                )
+                return
             if "produceShot" in item:
-                job["progress"] = "按所选方式制作本幕画面"
+                job["progress"] = "生成本幕代码动画" if item.get("presentation") == "scene" else "按所选方式制作本幕画面"
                 save()
                 job["output"] = {"content": mix_plan.produce_shot(tracked_deepseek("单幕画面制作"), model, item, ASSETS)}
                 return
@@ -3883,8 +3927,10 @@ class Handler(SimpleHTTPRequestHandler):
                         "article-draft": default_prompt_template({"kind": "article-draft"})["prompt"],
                         "article-images": default_prompt_template({"kind": "article-images"})["prompt"],
                         "stage-arrange:mix": default_prompt_template({"kind": "stage-arrange", "presentation": "mix"})["prompt"],
-                        "stage-produce:card": default_prompt_template({"kind": "stage-produce", "presentation": "card"})["prompt"],
+                        "stage-arrange:svg": default_prompt_template({"kind": "stage-arrange", "presentation": "svg"})["prompt"],
+                        "stage-produce:svg": default_prompt_template({"kind": "stage-produce", "presentation": "svg"})["prompt"],
                         "stage-produce:scene": default_prompt_template({"kind": "stage-produce", "presentation": "scene"})["prompt"],
+                        "stage-produce:card": default_prompt_template({"kind": "stage-produce", "presentation": "card"})["prompt"],
                     },
                     **speech_connection(),
                     "keyStorage": KEY_STORAGE,

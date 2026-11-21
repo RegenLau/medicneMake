@@ -50,24 +50,22 @@ class MixPlanningTests(unittest.TestCase):
             client = Mock(return_value=model_response({"shots": rows}))
         return mix_plan.arrange(client, "deepseek-flash", self.item, self.script, self.library), client
 
-    def test_unsupported_kind_and_invalid_form_use_fallback(self):
-        choices = [choice(self.script, 0, "svg", "card"),
-                   choice(self.script, 1, "scene", params={"form": "nonexistent-form"}),
-                   choice(self.script, 2, "card", params={"form": "check-list", "formData": {"items": [{"title": "记录时间"}, {"title": "核对时间"}]}})]
+    def test_unsupported_kind_and_invalid_params_use_fallback(self):
+        choices = [choice(self.script, 0, "card", "scene"),
+                   choice(self.script, 1, "scene", params={"unknownField": "x"}),
+                   choice(self.script, 2, "svg", params={"beats": [{"action": "log", "line": "记下每次用药时间。", "label": "记录时间"}]})]
         result, client = self.arrange(choices)
         contents = [row["content"] for row in result["shots"]]
-        self.assertEqual(["card", "scene", "card"], [entry["kind"] for entry in contents])
+        self.assertEqual(["scene", "scene", "svg"], [entry["kind"] for entry in contents])
         self.assertIn("布局", contents[0]["adjusted"])
         self.assertIn("参数", contents[1]["adjusted"])
-        self.assertEqual("check-list", contents[2]["form"])
-        self.assertIn(contents[2]["variant"], ("solid", "outline", "split"))
+        self.assertEqual("log", contents[2]["beats"][0]["action"])
         payload = json.loads(client.call_args.args[1]["messages"][1]["content"])
-        self.assertEqual(["image", "card", "scene"], payload["supports"])
-        self.assertEqual({"image", "card", "scene"}, set(payload["presenters"]))
+        self.assertEqual(["image", "scene", "svg"], payload["supports"])
+        self.assertEqual({"image", "scene", "svg"}, set(payload["presenters"]))
         self.assertNotIn("imageBudget", payload)
         self.assertNotIn("remainingImageBudget", payload)
         self.assertEqual([shot["line"] for shot in self.script["shots"]], [shot["line"] for shot in payload["shots"]])
-        self.assertTrue(len(payload["formCatalog"]) >= 20)
         for details in payload["presenters"].values():
             self.assertEqual({"strengths", "avoid", "cost", "options"}, set(details))
 
@@ -100,14 +98,14 @@ class MixPlanningTests(unittest.TestCase):
             with self.subTest(client=client):
                 result, _ = self.arrange(client=client)
                 self.assertEqual(mix_plan.FAILURE_NOTICE, result["notice"])
-                self.assertEqual(["card", "scene", "card"], [row["content"]["kind"] for row in result["shots"]])
+                self.assertEqual(["scene", "svg", "svg"], [row["content"]["kind"] for row in result["shots"]])
                 self.assertTrue(all(row["content"]["adjusted"] for row in result["shots"]))
                 self.assertEqual([shot["line"] for shot in self.script["shots"]], [shot["line"] for shot in result["shots"]])
 
     def test_replan_preserves_user_rows_and_allows_unbounded_images(self):
         self.script["shots"][0]["content"] = {"kind": "image", "image": "/existing.jpg", "decidedBy": "user"}
         self.script["shots"][1]["content"] = {"kind": "scene", "decidedBy": "mix"}
-        self.script["shots"][2]["content"] = {"kind": "card", "decidedBy": "mix"}
+        self.script["shots"][2]["content"] = {"kind": "svg", "decidedBy": "mix"}
         self.item["script"] = self.script
         rows = [choice(self.script, 1, "image"), choice(self.script, 2, "image")]
         result, client = self.arrange(rows)
@@ -116,11 +114,11 @@ class MixPlanningTests(unittest.TestCase):
         self.assertEqual(["image", "image", "image"], [row["content"]["kind"] for row in result["shots"]])
         payload = json.loads(client.call_args.args[1]["messages"][1]["content"])
         self.assertNotIn("remainingImageBudget", payload)
-        self.assertEqual(["image", "scene", "card"], [row["currentKind"] for row in payload["shots"]])
+        self.assertEqual(["image", "scene", "svg"], [row["currentKind"] for row in payload["shots"]])
         self.item["targetIndex"] = 0
-        result, _ = self.arrange([choice(self.script, 0, "card")])
+        result, _ = self.arrange([choice(self.script, 0, "svg")])
         self.assertEqual([0], result["plannedIndices"])
-        self.assertEqual("card", result["shots"][0]["content"]["kind"])
+        self.assertEqual("svg", result["shots"][0]["content"]["kind"])
         self.assertEqual(self.script["shots"][1:], result["shots"][1:])
 
     def test_single_replan_accepts_unfinished_neighbors_without_changing_them(self):
@@ -143,7 +141,6 @@ class MixPlanningTests(unittest.TestCase):
         shot = self.script["shots"][1]
         examples = [
             ("card", {"motionStyle": "auto"}, {"motionStyle": "spotlight"}),
-            ("scene", {"visual": "steps"}, {"visual": "mechanism", "motif": "pill"}),
             ("svg", {"beats": [{"action": "carton", "line": "原包装药盒", "label": "药盒"}]},
              {"beats": [{"action": "travel", "line": "放进随身包", "label": "放进随身包"}]}),
         ]
@@ -167,55 +164,66 @@ class MixPlanningTests(unittest.TestCase):
                 self.assertEqual("突出手边要核对的对象", payload["revision"])
                 self.assertEqual(original, shot)
 
-    def test_produce_scene_skips_color_only_and_uses_content_based_plan_in_one_request(self):
+    def test_produce_scene_generates_pure_code_and_auto_repairs_invalid_output(self):
         shot = self.script["shots"][1]
-        item = {**self.item, "presentation": "scene", "produceShot": {"shot": shot, "previousParams": {"visual": "steps"}}}
-        plans = [
-            {"params": {"visual": "steps", "tone": "warm"}, "reason": "使用暖色强调药盒。"},
-            {"params": {"visual": "compare"}, "reason": "并排比较两个对象。"},
-            {"params": {"visual": "mechanism", "motif": "bottle"}, "reason": "用药盒图形连接随身收纳要点。"},
-        ]
-        client = Mock(return_value=model_response({"plans": plans}))
-        content = mix_plan.produce_shot(client, "deepseek-flash", item, self.library)
-        self.assertEqual(("mechanism", "bottle"), (content["visual"], content["motif"]))
-        self.assertEqual(plans[2]["reason"], content["reason"])
-        client.assert_called_once()
-        request = json.loads(client.call_args.args[1]["messages"][1]["content"])
-        self.assertEqual("flow", request["currentPlan"]["motion"])
-        client.return_value = model_response({"plans": plans[:2]})
-        with self.assertRaisesRegex(ValueError, "保留原画面"):
-            mix_plan.produce_shot(client, "deepseek-flash", item, self.library)
-
-    def test_produce_card_and_scene_carry_illustration_prompt(self):
-        for kind in ("card", "scene"):
-            self.assertIn("artPrompt", CATALOG["presenters"][kind]["options"])
-        shot = self.script["shots"][1]
-        art = "一只手把原包装药盒放进敞开的随身包内层。"
+        valid_reply = {
+            "reason": "用纯 SVG 药包与渐进要点呈现随身收纳步骤。",
+            "code": {
+                "html": '<div class="sc-stage"><svg viewBox="0 0 200 120"><rect x="20" y="20" width="160" height="80" rx="12" fill="var(--v-primary-soft)"/></svg><h3 class="t">打包随身药</h3></div>',
+                "css": ".sc-stage{display:flex;align-items:center;justify-content:center;width:100%;height:100%;}",
+                "js": "const el = root.querySelector('.t'); if (el) el.style.opacity = String(api.ease.outCubic(api.progress));",
+            },
+        }
+        bad_reply = {
+            "reason": "包含禁用 img 标签。",
+            "code": {"html": '<div><img src="https://example.com/a.png"/></div>', "css": "", "js": ""},
+        }
+        client = Mock(side_effect=[model_response(bad_reply), model_response(valid_reply)])
         item = {**self.item, "presentation": "scene", "produceShot": {
-            "shot": shot, "previousParams": {"visual": "steps", "motion": "flow"},
+            "shot": shot,
+            "codePrompt": "左侧画随身药包矢量图，右侧展示原包装要点",
+            "revision": "节奏更紧凑",
         }}
-        client = Mock(return_value=model_response({"plans": [
-            {"params": {"visual": "steps", "motion": "flow", "artPrompt": "  " + art + " "}, "reason": "插画展示收纳动作。"},
-        ]}))
         content = mix_plan.produce_shot(client, "deepseek-flash", item, self.library)
-        self.assertEqual(art, content["artPrompt"])
-        instruction = client.call_args.args[1]["messages"][0]["content"]
-        self.assertIn("artPrompt", instruction)
-        item["produceShot"]["previousParams"] = {"visual": "steps", "motion": "flow", "artPrompt": art}
-        for params in ({"visual": "steps", "motion": "flow", "artPrompt": art},
-                       {"visual": "steps", "motion": "flow", "artPrompt": "长" * 301}):
-            with self.subTest(params=params), self.assertRaisesRegex(ValueError, "保留原画面"):
-                client = Mock(return_value=model_response({"plans": [{"params": params, "reason": "重新呈现本幕。"}]}))
-                mix_plan.produce_shot(client, "deepseek-flash", item, self.library)
+        self.assertEqual("scene", content["kind"])
+        self.assertEqual("user", content["decidedBy"])
+        self.assertEqual(valid_reply["reason"], content["reason"])
+        self.assertEqual("左侧画随身药包矢量图，右侧展示原包装要点", content["codePrompt"])
+        self.assertIn("sc-stage", content["code"]["html"])
+        self.assertEqual(2, client.call_count)
+        retry_payload = json.loads(client.call_args.args[1]["messages"][1]["content"])
+        self.assertIn("validationFeedback", retry_payload)
+        self.assertIn("img", retry_payload["validationFeedback"])
 
-    def test_mix_keeps_illustration_prompt_for_card(self):
-        rows = [choice(self.script, 0, "card", params={"motionStyle": "reveal", "artPrompt": "药盒侧面的标签被放大镜照亮。"}),
-                choice(self.script, 1, "scene"), choice(self.script, 2, "card")]
-        result, client = self.arrange(rows)
-        contents = [row["content"] for row in result["shots"]]
-        self.assertEqual("药盒侧面的标签被放大镜照亮。", contents[0]["artPrompt"])
-        self.assertNotIn("artPrompt", contents[2])
-        self.assertIn("artPrompt", client.call_args.args[1]["messages"][0]["content"])
+    def test_produce_scene_batch_generates_multiple_shots(self):
+        valid = lambda label: model_response({
+            "reason": f"纯代码渲染{label}。",
+            "code": {"html": f"<div>{label}</div>", "css": "div{color:var(--v-ink);}", "js": "const p = api.progress;"},
+        })
+        client = Mock(side_effect=[valid("第一幕"), valid("第二幕")])
+        item = {
+            **self.item,
+            "presentation": "scene",
+            "produceSceneBatch": [
+                {"index": 0, "shot": self.script["shots"][0], "codePrompt": "展示药盒有效期"},
+                {"index": 2, "shot": self.script["shots"][2], "codePrompt": "展示服药时间轴"},
+            ],
+        }
+        out = mix_plan.produce_scene_batch(client, "deepseek-flash", item, self.library)
+        self.assertEqual({"0", "2"}, set(out["contents"]))
+        self.assertEqual({}, out["errors"])
+        self.assertEqual("scene", out["contents"]["0"]["kind"])
+        self.assertIn("第一幕", out["contents"]["0"]["code"]["html"])
+
+    def test_scene_and_card_do_not_expose_illustration_art_prompt(self):
+        for kind in ("card", "scene"):
+            self.assertNotIn("artPrompt", CATALOG["presenters"][kind]["options"])
+        self.assertIn("code", CATALOG["presenters"]["scene"]["options"])
+        self.assertIn("codePrompt", CATALOG["presenters"]["scene"]["options"])
+        scene_prompt = mix_plan.build_produce_shot_prompt(self.item, self.library, kind="scene")
+        self.assertNotIn("artPrompt", scene_prompt)
+        self.assertIn("纯代码", scene_prompt)
+        self.assertIn("严禁使用任何外部图片", scene_prompt)
 
     def test_produce_rejects_cosmetic_or_equivalent_changes(self):
         self.supports.append("mg")
@@ -224,7 +232,6 @@ class MixPlanningTests(unittest.TestCase):
         shot = self.script["shots"][1]
         for kind, old, new in (
             ("card", {"motionStyle": "auto"}, {"motionStyle": "flow"}),
-            ("scene", {"visual": "steps"}, {"visual": "steps", "motif": "pill"}),
             ("svg", {"beats": [{"action": "travel", "line": shot["line"], "label": "装药"}]},
              {"beats": [{"action": "travel", "line": shot["line"], "label": "随身装药"}]}),
             ("mg", {"assetId": asset["id"]}, {"assetId": asset["id"], "fit": "hold", "overlay": "off"}),
@@ -236,12 +243,12 @@ class MixPlanningTests(unittest.TestCase):
 
     def test_produce_shot_rejects_same_or_invalid_parameters(self):
         shot = self.script["shots"][1]
-        item = {**self.item, "presentation": "scene", "produceShot": {
-            "shot": shot, "previousParams": {"visual": "steps"},
+        item = {**self.item, "presentation": "svg", "produceShot": {
+            "shot": shot, "previousParams": {"beats": [{"action": "travel", "line": shot["line"], "label": "装药"}]},
         }}
-        reason = "用流程解释本幕。"
-        for params, error in [({"visual": "steps"}, "相同"), ({"visual": []}, "无效"),
-                              ({"kind": "image"}, "无效"), ({}, "无效")]:
+        reason = "用道具演示本幕。"
+        for params, error in [({"beats": [{"action": "travel", "line": shot["line"], "label": "装药"}]}, "相同"),
+                              ({"beats": "invalid"}, "无效"), ({"kind": "image"}, "无效"), ({}, "无效")]:
             with self.subTest(params=params), self.assertRaisesRegex(ValueError, error):
                 client = Mock(return_value=model_response({"params": params, "reason": reason}))
                 mix_plan.produce_shot(client, "deepseek-flash", item, self.library)
@@ -307,25 +314,22 @@ class MixPlanningTests(unittest.TestCase):
         self.assertEqual([row["line"] for row in self.script["shots"]], [row["line"] for row in result["shots"]])
 
     def test_fixed_modes_force_kind_and_reject_retired_draft_modes(self):
-        for retired in ("svg", "mg", "asset"):
+        for retired in ("card", "mg", "asset"):
             with self.subTest(retired=retired), self.assertRaises(ValueError):
                 mix_plan.validate_setup({**self.item, "presentation": retired}, self.library)
-        for mode in ("image", "card", "scene"):
+        for mode in ("image", "scene"):
             with self.subTest(mode=mode):
                 self.item["presentation"] = mode
                 result, client = self.arrange([])
                 self.assertEqual([mode] * 3, [row["content"]["kind"] for row in result["shots"]])
                 self.assertEqual(0, client.call_count)
-                if mode in ("card", "scene"):
-                    forms = [row["content"]["form"] for row in result["shots"]]
-                    self.assertTrue(all(forms))
-                    self.assertNotEqual(forms[0], forms[1])
-                    self.assertNotEqual(forms[1], forms[2])
-        # Legacy svg arrange still works when explicitly enabled for old callers.
+                if mode == "scene":
+                    self.assertTrue(all("form" not in row["content"] for row in result["shots"]))
+        # SVG animation is a first-class fixed draft mode without needing allow_legacy.
         self.item["presentation"] = "svg"
         beats = [[{"action": "carton", "line": row["line"], "label": row["name"]}] for row in self.script["shots"]]
         svg_client = Mock(return_value=model_response({"shots": [{"index": i, "beats": b} for i, b in enumerate(beats)]}))
-        svg_result = mix_plan.arrange(svg_client, "deepseek-flash", self.item, self.script, self.library, allow_legacy=True)
+        svg_result = mix_plan.arrange(svg_client, "deepseek-flash", self.item, self.script, self.library)
         self.assertEqual(["svg"] * 3, [row["content"]["kind"] for row in svg_result["shots"]])
         self.assertEqual(beats[0], svg_result["shots"][0]["content"]["beats"])
 
@@ -352,7 +356,7 @@ class MixPlanningTests(unittest.TestCase):
     def test_invalid_non_image_fallback_uses_point_default(self):
         rows = [choice(self.script, i, "unavailable", fallback="image") for i in range(3)]
         result, _ = self.arrange(rows)
-        self.assertEqual(["card", "scene", "card"], [row["content"]["kind"] for row in result["shots"]])
+        self.assertEqual(["scene", "svg", "svg"], [row["content"]["kind"] for row in result["shots"]])
         self.assertTrue(all(row["content"]["adjusted"] for row in result["shots"]))
 
     def test_write_script_prompt_adds_qa_requirements_only_for_qa_layout(self):
@@ -448,8 +452,8 @@ class MixPlanningTests(unittest.TestCase):
                 self.assertIn(expected_size, arrange_sys)
                 self.assertEqual(expected_shape, arrange_payload["layoutMedia"]["shape"])
                 if lid == "builtin:layout/headline":
-                    self.assertEqual("top", arrange_payload["layoutMedia"]["art"]["placement"])
-                    self.assertIn("顶部横向插画区", arrange_sys)
+                    self.assertEqual("narrow", arrange_payload["layoutMedia"]["shape"])
+                    self.assertNotIn("artPrompt", arrange_sys)
 
     def test_write_script_auto_tightens_overlong_script(self):
         overlong = copy.deepcopy(self.script)

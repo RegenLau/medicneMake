@@ -131,21 +131,125 @@
     },
   };
 
+  const CUSTOM_CODE_BASE_CSS = `
+    :host { display: block; width: 100%; height: 100%; overflow: hidden; box-sizing: border-box; font-family: inherit; color: var(--v-ink, #122d4c); }
+    *, *::before, *::after { box-sizing: border-box; }
+  `;
+
+  function customEaseApi(localTime, duration) {
+    const clampVal = (v, min = 0, max = 1) => Math.max(min, Math.min(max, Number(v) || 0));
+    return {
+      clamp: clampVal,
+      smooth: (start, end) => (end <= start ? (localTime >= start ? 1 : 0) : clampVal((localTime - start) / (end - start))),
+      ease: {
+        outCubic: (p) => 1 - Math.pow(1 - clampVal(p), 3),
+        outExpo: (p) => { const x = clampVal(p); return x >= 1 ? 1 : 1 - Math.pow(2, -10 * x); },
+        inOutCubic: (p) => { const x = clampVal(p); return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2; },
+        outBack: (p) => { const x = clampVal(p); const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); },
+      },
+      progress: clampVal(localTime / Math.max(0.1, duration)),
+    };
+  }
+
+  function mountCustomCode(slot, shot) {
+    const code = shot.code || {};
+    slot.innerHTML = "";
+    const host = slot.ownerDocument.createElement("div");
+    host.className = "stage-custom-code-host";
+    host.setAttribute("data-custom-code-host", "1");
+    host.style.cssText = "position:relative;width:100%;height:100%;overflow:hidden;";
+    slot.append(host);
+    const shadow = host.attachShadow({ mode: "open" });
+    const baseStyle = slot.ownerDocument.createElement("style");
+    baseStyle.textContent = CUSTOM_CODE_BASE_CSS;
+    shadow.append(baseStyle);
+    if (code.css) {
+      const userStyle = slot.ownerDocument.createElement("style");
+      userStyle.textContent = String(code.css);
+      shadow.append(userStyle);
+    }
+    const wrapper = slot.ownerDocument.createElement("div");
+    wrapper.className = "stage-custom-code-inner";
+    wrapper.style.cssText = "position:relative;width:100%;height:100%;overflow:hidden;";
+    wrapper.innerHTML = String(code.html || "");
+    shadow.append(wrapper);
+    let fn = null;
+    let compileError = null;
+    const js = String(code.js || "").trim();
+    if (js) {
+      try {
+        fn = new Function("root", "t", "duration", "api", js);
+      } catch (err) {
+        compileError = String(err?.message || err);
+      }
+    }
+    return { slot, customCode: true, host, shadow, wrapper, fn, compileError, runtimeError: null };
+  }
+
+  function drawCustomCode(dom, shot, time, ctx) {
+    if (dom.compileError || dom.runtimeError) {
+      if (!dom.errorShown) {
+        dom.errorShown = true;
+        const msg = attr(dom.compileError || dom.runtimeError);
+        dom.wrapper.innerHTML = `<div style="display:flex;flex-direction:column;justify-content:center;align-items:center;height:100%;padding:24px;text-align:center;color:var(--v-muted,#475569);font-size:16px;gap:8px;"><strong style="color:var(--v-red,#dc2626);">代码动效运行出错</strong><span style="max-width:85%;word-break:break-word;">${msg}</span><span style="font-size:13px;">可调整提示词后点击「重新生成代码动画」或直接编辑代码</span></div>`;
+      }
+      return;
+    }
+    const duration = Math.max(0.1, (shot.end ?? 5) - (shot.start ?? 0));
+    const cues = (shot.captions || []).map((c) => ({
+      start: Math.max(0, (c.start ?? 0) - (shot.start ?? 0)),
+      end: Math.max(0, (c.end ?? duration) - (shot.start ?? 0)),
+      text: c.text || "",
+    }));
+    let cueIndex = cues.findIndex((c) => time < c.end);
+    if (cueIndex < 0) cueIndex = Math.max(0, cues.length - 1);
+    const helpers = customEaseApi(time, duration);
+    const api = {
+      ...helpers,
+      width: ctx?.size?.w || 960,
+      height: ctx?.size?.h || 540,
+      cueIndex,
+      cues,
+      theme: ctx?.theme || "medical",
+    };
+    if (dom.fn) {
+      try {
+        dom.fn(dom.shadow, time, duration, api);
+      } catch (err) {
+        dom.runtimeError = String(err?.message || err);
+        drawCustomCode(dom, shot, time, ctx);
+        return;
+      }
+    }
+    if (typeof dom.shadow.getAnimations === "function") {
+      for (const anim of dom.shadow.getAnimations()) {
+        try {
+          anim.pause();
+          anim.currentTime = time * 1000;
+        } catch {}
+      }
+    }
+  }
+
   const scene = {
     mount(slot, shot, ctx) {
-      const form = resolveForm(shot);
+      if (shot?.code && typeof shot.code.html === "string" && shot.code.html.trim()) {
+        return mountCustomCode(slot, shot, ctx);
+      }
+      const noArtShot = { ...shot, artUrl: "", libraryArtUrl: "" };
+      const form = resolveForm(noArtShot);
       if (form) {
-        const fctx = formContext(shot, ctx);
-        const data = formDataFor(form, shot);
+        const fctx = formContext(noArtShot, ctx);
+        const data = formDataFor(form, noArtShot);
         slot.innerHTML = form.html(data, fctx);
         return { slot, form, data, fctx };
       }
       const { index, total } = ctx;
-      slot.innerHTML = StageSceneContent.buildDynamicSceneHtml(shot, index, total);
+      slot.innerHTML = StageSceneContent.buildDynamicSceneHtml(noArtShot, index, total);
       const one = (name) => slot.querySelector(`[data-cm-${name}]`);
       const all = (name) => [...slot.querySelectorAll(`[data-cm-${name}]`)];
       return {
-        meta: StageSceneContent.resolveSceneMeta(shot, index, total),
+        meta: StageSceneContent.resolveSceneMeta(noArtShot, index, total),
         scene: one("scene"), heading: one("heading"), motif: one("motif"), answer: one("answer"),
         art: one("art"), artImage: slot.querySelector(".cm-art-img"),
         takeaway: one("takeaway"), divider: one("divider"), progressRail: one("progress-rail"),
@@ -154,6 +258,10 @@
       };
     },
     draw(dom, shot, time, ctx) {
+      if (dom.customCode) {
+        drawCustomCode(dom, shot, time, ctx);
+        return;
+      }
       if (dom.form) {
         dom.form.animate(dom.slot, dom.data, time, { ...dom.fctx, ...ctx, shot });
         return;
@@ -161,6 +269,7 @@
       StageSceneContent.animateDynamicScene(dom, shot, dom.meta, time);
     },
     events(shot, ctx) {
+      if (shot?.code && typeof shot.code.html === "string" && shot.code.html.trim()) return [];
       const form = resolveForm(shot);
       if (form) return form.events(formDataFor(form, shot), formContext(shot, ctx));
       return StageSceneContent.sceneEvents(shot, ctx.index, ctx.total);

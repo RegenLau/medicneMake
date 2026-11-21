@@ -1084,14 +1084,14 @@
         "slide": "推移"
       },
       "pointDefaults": {
-        "cover": "card",
+        "cover": "scene",
         "explain": "scene",
         "compare": "scene",
-        "steps": "scene",
-        "warning": "scene",
-        "summary": "card",
+        "steps": "svg",
+        "warning": "svg",
+        "summary": "svg",
         "timeline": "scene",
-        "checklist": "card"
+        "checklist": "svg"
       },
       "assetKinds": {
         "asset": [
@@ -1169,7 +1169,6 @@
               "pulse",
               "focus-zoom"
             ],
-            "artPrompt": "本幕插画描述，最多 120 字：只写口播里出现的对象、动作和场景，画面无文字。",
             "form": "从 formCatalog 中选版式 ID",
             "variant": [
               "solid",
@@ -1180,10 +1179,13 @@
           }
         },
         "scene": {
-          "strengths": "机制解释、前后时间判断、条件决策、对比、结构化警示，也可用图标串联抽象步骤。",
-          "avoid": "道具能直接显示的手部操作与动作细节。",
+          "strengths": "通过提示词驱动模型生成纯 HTML + CSS + 内联 SVG + JS 代码动效，适合药理机制、流程步骤、数据对比、时间轴与医学图解可视化，不使用任何插图。",
+          "avoid": "已有内置道具可直接演示的简单动作。",
           "cost": 0,
           "options": {
+            "codePrompt": "中文画面与动效描述，最多 600 字，描述用纯代码与矢量图形呈现的画面与节奏。",
+            "customCodePrompt": "自定义本幕完整代码生成提示词，最多 4000 字。",
+            "code": "纯代码动效对象 {html, css, js}，不含外部链接、位图或定时器。",
             "visual": [
               "hook",
               "mechanism",
@@ -1221,15 +1223,7 @@
               "warm",
               "caution",
               "safe"
-            ],
-            "artPrompt": "本幕插画描述，最多 120 字：只写口播里出现的对象、动作和场景，画面无文字。",
-            "form": "从 formCatalog 中选版式 ID",
-            "variant": [
-              "solid",
-              "outline",
-              "split"
-            ],
-            "formData": "按所选版式 schema 填写的结构化数据，所有数字和药名必须来自本幕口播或要点"
+            ]
           }
         },
         "svg": {

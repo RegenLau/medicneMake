@@ -1837,7 +1837,7 @@
     const raw = String(text || "");
     const list = (Array.isArray(words) ? words : [words])
       .map((w) => String(w || "").trim())
-      .filter((w) => w.length >= 2)
+      .filter((w) => w.length >= 1)
       .sort((a, b) => b.length - a.length);
     if (!list.length) return xmlEsc(raw);
     const escapedTokens = list.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));

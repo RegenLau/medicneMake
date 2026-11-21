@@ -1,6 +1,9 @@
 """Validated workbench input for the shared video stage."""
 
 import math
+import re
+import shutil
+import subprocess
 from urllib.parse import unquote
 
 import asset_library
@@ -279,10 +282,96 @@ def validate_shot_common(item, *, allow_incomplete_text=False):
         weight = cue.get("weight", 1)
         if type(weight) not in (int, float) or not 0 < weight <= 500:
             raise ValueError("字幕节拍权重无效。")
+        hl_words = cue.get("highlightWords")
+        if hl_words is not None:
+            if not isinstance(hl_words, list) or len(hl_words) > 24 or not all(
+                isinstance(word, str) and len(word) <= 120 for word in hl_words
+            ):
+                raise ValueError("字幕高亮词格式无效。")
+        if "highlightCustom" in cue and type(cue["highlightCustom"]) is not bool:
+            raise ValueError("字幕高亮标记格式无效。")
     items = points.get("items", [])
     if not isinstance(items, list) or len(items) > 12 or not all(isinstance(item, dict) for item in items):
         raise ValueError("分镜要点条目格式无效。")
     return {"name": name, "line": line, "chapterIndex": chapter, "seconds": seconds, "cues": cue_list}
+
+
+_CODE_FORBIDDEN_HTML_RE = re.compile(
+    r"<\s*(?:script|iframe|object|embed|link|meta|base|img|video|audio|source|picture|portal|frame|frameset)\b",
+    re.IGNORECASE,
+)
+_CODE_EVENT_HANDLER_RE = re.compile(r"\bon[a-z]{2,24}\s*=", re.IGNORECASE)
+_CODE_ALLOWED_NS_RE = re.compile(r"https?://www\.w3\.org/(?:2000/svg|1999/xlink)\b", re.IGNORECASE)
+_CODE_EXTERNAL_URL_RE = re.compile(r"(?:https?://|data\s*:\s*image/)", re.IGNORECASE)
+_CODE_FORBIDDEN_JS_RE = re.compile(
+    r"(?:"
+    r"\bfetch\s*\("
+    r"|\bXMLHttpRequest\b"
+    r"|\bWebSocket\b"
+    r"|\bEventSource\b"
+    r"|\bimportScripts\b"
+    r"|\beval\s*\("
+    r"|\bFunction\s*\("
+    r"|\bimport\s*\("
+    r"|\bdocument\s*\.\s*(?:cookie|write|writeln)\b"
+    r"|\b(?:localStorage|sessionStorage|indexedDB)\b"
+    r"|\bwindow\s*\.\s*(?:parent|top|open|location)\b"
+    r"|\bpostMessage\s*\("
+    r"|\brequestAnimationFrame\b"
+    r"|\bsetInterval\b"
+    r"|\bsetTimeout\b"
+    r")"
+)
+
+
+def validate_scene_code(code, *, check_syntax=True):
+    """Validate pure HTML+CSS+SVG+JS animation code for a scene shot."""
+    code = mapping(code, "代码动效数据格式无效。")
+    if code.keys() - {"html", "css", "js"}:
+        raise ValueError("代码动效只支持 html、css、js 字段。")
+    html = code.get("html")
+    css = code.get("css", "")
+    js = code.get("js", "")
+    if not isinstance(html, str) or not html.strip():
+        raise ValueError("代码动效缺少 HTML 结构。")
+    if len(html) > 24000:
+        raise ValueError("代码动效 HTML 超过长度上限（24000 字符）。")
+    if not isinstance(css, str) or len(css) > 16000:
+        raise ValueError("代码动效 CSS 格式无效或超过长度上限（16000 字符）。")
+    if not isinstance(js, str) or len(js) > 24000:
+        raise ValueError("代码动效 JS 格式无效或超过长度上限（24000 字符）。")
+    if _CODE_FORBIDDEN_HTML_RE.search(html):
+        raise ValueError("代码动效须使用纯 HTML/CSS/SVG 实现，禁止包含 img、script、iframe 等标签。")
+    if _CODE_EVENT_HANDLER_RE.search(html):
+        raise ValueError("代码动效 HTML 禁止包含内联事件属性。")
+    for label, text in (("HTML", html), ("CSS", css), ("JS", js)):
+        cleaned = _CODE_ALLOWED_NS_RE.sub("", text)
+        if _CODE_EXTERNAL_URL_RE.search(cleaned):
+            raise ValueError(f"代码动效 {label} 禁止引用外部链接或内嵌位图，请使用纯代码与内联 SVG。")
+    if js.strip():
+        bad = _CODE_FORBIDDEN_JS_RE.search(js)
+        if bad:
+            token = bad.group(0)
+            if token in ("requestAnimationFrame", "setInterval", "setTimeout"):
+                raise ValueError("代码动效 JS 须由 t / api.progress 逐帧驱动，禁止使用 requestAnimationFrame 或定时器。")
+            raise ValueError(f"代码动效 JS 包含受限调用：{token}")
+        if check_syntax:
+            node = shutil.which("node")
+            if node:
+                try:
+                    proc = subprocess.run(
+                        [node, "-e", 'const fs=require("fs"); new Function("root","t","duration","api", fs.readFileSync(0,"utf8"));'],
+                        input=js.encode("utf-8"),
+                        capture_output=True,
+                        timeout=3,
+                    )
+                except subprocess.TimeoutExpired:
+                    raise ValueError("代码动效 JS 语法校验超时。") from None
+                if proc.returncode:
+                    err = proc.stderr.decode("utf-8", "replace").strip().splitlines()
+                    detail = err[-1] if err else "语法无效"
+                    raise ValueError(f"代码动效 JS 语法错误：{detail[:180]}")
+    return {"html": html.strip(), "css": css.strip(), "js": js.strip()}
 
 
 def illustration(value, library, media_path, used):
@@ -320,9 +409,9 @@ def validate_shot(item, layout, compatible, library, media_path, pictures, used)
         base["sfxId"] = item["sfxId"]
     if item.get("stickers"):
         base["stickers"] = validate_stickers(item["stickers"], len(base["cues"]), library, used)
-    if kind in ("card", "scene") and content.get("art"):
+    if kind == "card" and content.get("art"):
         base["artUrl"] = illustration(content["art"], library, media_path, used)
-    if kind in ("card", "scene") and content.get("form"):
+    if kind in ("card", "scene") and content.get("form") and not (kind == "scene" and content.get("code")):
         form_id = content["form"]
         reg = stage_forms.load_registry()
         if not isinstance(form_id, str) or form_id not in reg["byId"]:
@@ -356,6 +445,8 @@ def validate_shot(item, layout, compatible, library, media_path, pictures, used)
         if "artUrl" in base or "form" in base:
             base.update(items=items, takeaway=points.get("takeaway", ""), listTitle=points.get("listTitle", ""))
     elif kind == "scene":
+        if content.get("code"):
+            base["code"] = validate_scene_code(content["code"])
         for field, valid in (("visual", draft_content.CODE_MOTION_VISUALS), ("motion", draft_content.CODE_MOTION_MOTIONS),
                              ("motif", draft_content.CODE_MOTION_MOTIFS), ("tone", draft_content.CODE_MOTION_TONES)):
             value = content.get(field)
@@ -367,10 +458,6 @@ def validate_shot(item, layout, compatible, library, media_path, pictures, used)
                     listTitle=points.get("listTitle", ""), beats=item.get("beats", []))
         base["labels"] = [entry.get("title", "") for entry in base["items"] if isinstance(entry, dict)]
         slide.update(type="explain", layoutMode="explain", highlightWords=base["labels"])
-        if content.get("libraryArtId"):
-            asset = library.resolve(content["libraryArtId"], ("image", "svg"))
-            base["libraryArtUrl"] = asset[0].as_uri()
-            used.append(asset)
     elif kind == "svg":
         beats = content.get("beats")
         action = beats[0].get("action") if isinstance(beats, list) and beats and isinstance(beats[0], dict) else content.get("action")

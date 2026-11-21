@@ -128,7 +128,7 @@ class StageFormsTests(unittest.TestCase):
         seen = {stage_forms.pick_variant("dose-card", f"w-{i}", 0, r) for i in range(5) for r in range(3)}
         self.assertEqual({"solid", "outline", "split"}, seen)
 
-    def test_mix_arrange_rejects_ungrounded_form_and_produces_varied_runs(self):
+    def test_card_arrange_produces_varied_forms_without_adjacent_repeats(self):
         script = {
             "title": "儿童退烧药怎么量",
             "shortTitle": "儿童退烧药",
@@ -138,46 +138,18 @@ class StageFormsTests(unittest.TestCase):
                 for i in range(5)
             ],
         }
-        # Model tries an invented number (999) on shot 0 and repeats flow-h across all shots
-        bad_and_repeated = [
-            {
-                "index": 0, "kind": "card", "fallback": "card",
-                "reason": "「第1幕退烧要点」展示剂量数值。",
-                "params": {"form": "dose-card", "formData": {"value": "999", "unit": "ml", "condition": "每次喝"}},
-            },
-            *[
-                {
-                    "index": i, "kind": "scene", "fallback": "scene",
-                    "reason": f"「第{i + 1}幕退烧要点」演示操作步骤。",
-                    "params": {"form": "flow-h", "formData": stage_forms.derive_form_data("flow-h", script["shots"][i])},
-                }
-                for i in range(1, 5)
-            ],
-        ]
         results = []
         for run in range(3):
             item = {
                 "topic": "儿童退烧药怎么量",
                 "drug": "布洛芬混悬液",
                 "layoutId": stage_video.CLASSIC_LAYOUT,
-                "presentation": "mix",
-                "imageBudget": 0,
+                "presentation": "card",
                 "workId": f"run-{run}",
             }
-            # Simulate slightly different form choices across 3 fake DeepSeek runs
-            run_choices = copy.deepcopy(bad_and_repeated)
-            alt_form = ["steps-v", "art-steps", "timeline-h"][run]
-            run_choices[2]["params"] = {
-                "form": alt_form,
-                "formData": stage_forms.derive_form_data(alt_form, script["shots"][2]),
-            }
-            client = Mock(return_value=model_response({"shots": run_choices}))
-            out = mix_plan.arrange(client, "deepseek-flash", item, script, server.ASSETS)
-            # Shot 0 with invented 999 must have been adjusted & fallen back safely
-            self.assertIn("adjusted", out["shots"][0]["content"])
-            self.assertNotEqual("999", str(out["shots"][0]["content"].get("formData", {}).get("value", "")))
+            client = Mock()
+            out = mix_plan.arrange(client, "deepseek-flash", item, script, server.ASSETS, allow_legacy=True)
             seq = tuple((s["content"]["form"], s["content"]["variant"]) for s in out["shots"])
-            # No adjacent form repeats
             fseq = [s["content"]["form"] for s in out["shots"]]
             for a, b in zip(fseq, fseq[1:]):
                 self.assertNotEqual(a, b)

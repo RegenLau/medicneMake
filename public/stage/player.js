@@ -125,8 +125,11 @@
     const totalDuration = Number(plan.shots.at(-1)?.end) || 0;
     const progress = totalDuration > 0 ? Math.max(0, Math.min(1, time / totalDuration)) : 0;
     const chapterProgress = computeChapterProgress(time, current);
-    const highlightWords = cue?.highlightWords?.length ? cue.highlightWords
-      : code ? (shot.labels || shot.items?.map((item) => item.title) || []) : slide.highlightWords;
+    const hasCustomHighlight = Boolean(cue?.highlightCustom);
+    const highlightWords = hasCustomHighlight
+      ? (Array.isArray(cue.highlightWords) ? cue.highlightWords : [])
+      : (cue?.highlightWords?.length ? cue.highlightWords
+          : code ? (shot.labels || shot.items?.map((item) => item.title) || []) : slide.highlightWords);
     const subtitle = cue?.text ?? slide.line;
     const slotDesc = LayoutEngine.describeMediaSlot ? LayoutEngine.describeMediaSlot(plan.layout, stage) : null;
     const context = {
@@ -145,7 +148,7 @@
         focus: layoutFocus, cueFocus, stage, progress: keepMounted ? 1 : progress,
         chapterProgress, currentTime: time, totalDuration: plan.hideClock ? 0 : totalDuration,
         imgMap,
-        subtitleText: subtitle || (keepMounted ? " " : ""), highlightWords,
+        subtitleText: subtitle || (keepMounted ? " " : ""), highlightWords, highlightCustom: hasCustomHighlight,
         contentTitle: context.layoutTitle ? slide.name : "",
         renderMedia: () => "",
       });
@@ -164,7 +167,8 @@
     const fade = legacyImageFade(current, time, cue);
     if (fade) {
       const previous = LayoutEngine.render(plan.layout, deck, fade.index, {
-        imgMap, progress, focus: fade.cue.focus || "all", subtitleText: fade.cue.text, highlightWords: fade.cue.highlightWords,
+        imgMap, progress, focus: fade.cue.focus || "all", subtitleText: fade.cue.text,
+        highlightWords: fade.cue.highlightWords, highlightCustom: Boolean(fade.cue.highlightCustom),
       });
       if (fade.alpha === 1) {
         root.innerHTML = previous;

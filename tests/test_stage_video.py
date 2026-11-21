@@ -71,24 +71,40 @@ class StageVideoTests(unittest.TestCase):
         _, _, shots, _, _ = stage_video.stage_input(p, server.ASSETS, server.media_path)
         self.assertEqual(shots[0]["line"], long_line)
 
-    def test_card_and_scene_illustration_resolves_local_file(self):
-        for kind in ("card", "scene"):
-            with self.subTest(kind=kind):
-                p = self.payload(kind)
-                p["items"][0]["points"]["items"] = [{"title": "找到栏目", "detail": "", "tag": ""}]
-                p["items"][0]["points"]["takeaway"] = "拿不准问药师"
-                p["items"][0]["content"].update(art="/assets/template-info-tablet.jpg", artPrompt="说明书")
-                _, _, shots, _, _ = stage_video.stage_input(p, server.ASSETS, server.media_path)
-                self.assertTrue(shots[0]["artUrl"].startswith("file:"))
-                self.assertEqual("找到栏目", shots[0]["items"][0]["title"])
-                self.assertEqual("拿不准问药师", shots[0]["takeaway"])
-                for bad in ("https://example.invalid/art.png", "/media/captions.vtt"):
-                    p["items"][0]["content"]["art"] = bad
-                    with self.assertRaises(ValueError):
-                        stage_video.stage_input(p, server.ASSETS, server.media_path)
-        p = self.payload("card")
+    def test_scene_pure_code_validation_and_no_illustration(self):
+        p = self.payload("scene")
+        p["items"][0]["content"].update(
+            art="/assets/template-info-tablet.jpg",
+            code={
+                "html": '<div class="sc"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="30" fill="var(--v-primary)"/></svg></div>',
+                "css": ".sc{width:100%;height:100%;}",
+                "js": "const c = root.querySelector('circle'); if (c) c.setAttribute('r', String(20 + 10 * api.progress));",
+            },
+        )
         _, _, shots, _, _ = stage_video.stage_input(p, server.ASSETS, server.media_path)
         self.assertNotIn("artUrl", shots[0])
+        self.assertIn("code", shots[0])
+        self.assertIn("viewBox", shots[0]["code"]["html"])
+
+        for bad_code in (
+            {"html": ""},
+            {"html": '<img src="/a.png">'},
+            {"html": '<div onclick="alert(1)">x</div>'},
+            {"html": "<div>x</div>", "css": "div{background:url(https://evil.example/a.png);}"},
+            {"html": "<div>x</div>", "js": "requestAnimationFrame(() => {});"},
+            {"html": "<div>x</div>", "js": "fetch('/api/config');"},
+            {"html": "<div>x</div>", "js": "const broken = (;"},
+        ):
+            with self.subTest(bad_code=bad_code), self.assertRaises(ValueError):
+                stage_video.validate_scene_code(bad_code)
+
+        # Legacy card shots still resolve local art if present.
+        legacy = self.payload("card")
+        legacy["items"][0]["points"]["items"] = [{"title": "找到栏目", "detail": "", "tag": ""}]
+        legacy["items"][0]["points"]["takeaway"] = "拿不准问药师"
+        legacy["items"][0]["content"].update(art="/assets/template-info-tablet.jpg")
+        _, _, legacy_shots, _, _ = stage_video.stage_input(legacy, server.ASSETS, server.media_path)
+        self.assertTrue(legacy_shots[0]["artUrl"].startswith("file:"))
 
     def test_transition_field_is_optional_and_validated(self):
         p = self.payload()
@@ -200,6 +216,88 @@ class StageVideoTests(unittest.TestCase):
             server.speech_cache_name({"voice": "医生音色"}, "测试"),
             server.speech_cache_name({"voice": "刘飞 2.0"}, "测试"),
         )
+
+    def test_stage_speech_preview_validation_and_cache_reuse(self):
+        import tempfile
+        import uuid
+        import wave
+
+        work_id = str(uuid.uuid4())
+        long_line = "腿抽筋，先别急着补钙。\n" + ("多数抽筋和缺钙没直接关系，先排查受凉疲劳和电解质。" * 5)
+        payload = {
+            "id": str(uuid.uuid4()),
+            "mode": "ark",
+            "kind": "svg-speech",
+            "stage": True,
+            "workId": work_id,
+            "settings": {"voice": "刘飞 2.0"},
+            "items": [{"line": long_line, "index": 0}],
+        }
+        with patch.object(server, "current_speech_key", return_value="k"):
+            server.setting_valid(payload)
+        with patch.object(server, "current_speech_key", return_value="k"), self.assertRaises(ValueError):
+            server.setting_valid({**payload, "settings": {"voice": "无配音"}})
+        with patch.object(server, "current_speech_key", return_value="k"), self.assertRaises(ValueError):
+            server.setting_valid({**payload, "items": [{"line": "字" * 451, "index": 0}]})
+
+        # Verify build_timeline reuses cached stage preview speech for non-svg (e.g. image) shots without calling narrate.
+        with tempfile.TemporaryDirectory() as tmp:
+            media_dir = Path(tmp) / "media"
+            jobs_dir = Path(tmp) / "jobs"
+            media_dir.mkdir()
+            jobs_dir.mkdir()
+            with patch.object(server, "MEDIA", media_dir), patch.object(server, "JOBS", jobs_dir):
+                speaker = server.SPEAKERS["刘飞 2.0"]
+                cached_wav = server.svg_speech_cache_path({"workId": work_id}, long_line.strip(), speaker)
+                with wave.open(str(cached_wav), "wb") as wav:
+                    wav.setnchannels(1)
+                    wav.setsampwidth(2)
+                    wav.setframerate(24000)
+                    wav.writeframes(b"\x00\x00" * 24000 * 3)
+                compose_payload = {
+                    "workId": work_id,
+                    "settings": {"voice": "刘飞 2.0"},
+                    "items": [{"line": long_line}],
+                }
+                self.assertTrue(server.has_template_speech(compose_payload))
+                shots = [{
+                    "kind": "image",
+                    "name": "开头",
+                    "line": long_line,
+                    "seconds": 5,
+                    "cues": [{"text": "腿抽筋，先别急着补钙", "weight": 10, "focus": "all"}],
+                    "tailPause": 0.55,
+                }]
+                with patch.object(server, "template_shot_audio", side_effect=AssertionError("should reuse cached wav")):
+                    timeline = server.build_timeline(compose_payload, shots, jobs_dir, "")
+                self.assertEqual(timeline["entries"][0][0], cached_wav)
+                self.assertGreaterEqual(timeline["entries"][0][1], 3.0)
+
+    def test_cue_custom_highlight_words_validated_and_preserved_in_timeline(self):
+        p = self.payload("card")
+        p["items"][0]["points"]["highlightWords"] = ["说明书"]
+        p["items"][0]["cues"] = [
+            {"text": "腿抽筋，先别急着补钙", "weight": 10, "focus": "all", "highlightWords": [], "highlightCustom": True},
+            {"text": "多数抽筋和缺钙没直接关系", "weight": 12, "focus": "all", "highlightWords": ["缺钙", "没直接关系"], "highlightCustom": True},
+        ]
+        _, _, shots, _, _ = stage_video.stage_input(p, server.ASSETS, server.media_path)
+        with tempfile.TemporaryDirectory() as temp:
+            timeline = server.build_timeline(p, shots, Path(temp), "")
+        captions = timeline["shots"][0]["captions"]
+        self.assertEqual(captions[0]["highlightWords"], [])
+        self.assertTrue(captions[0]["highlightCustom"])
+        self.assertEqual(captions[1]["highlightWords"], ["缺钙", "没直接关系"])
+        self.assertTrue(captions[1]["highlightCustom"])
+
+        bad = self.payload("card")
+        bad["items"][0]["cues"][0]["highlightWords"] = "不是数组"
+        with self.assertRaisesRegex(ValueError, "字幕高亮词"):
+            stage_video.stage_input(bad, server.ASSETS, server.media_path)
+
+        bad_flag = self.payload("card")
+        bad_flag["items"][0]["cues"][0]["highlightCustom"] = "yes"
+        with self.assertRaisesRegex(ValueError, "字幕高亮标记"):
+            stage_video.stage_input(bad_flag, server.ASSETS, server.media_path)
 
 
 if __name__ == "__main__":

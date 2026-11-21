@@ -106,11 +106,15 @@ class ArticlePromptTests(unittest.TestCase):
 
         arrange = server.default_prompt_template({"kind": "stage-arrange", "layoutId": "builtin:layout/qa-chat", "presentation": "mix"})
         self.assertIn("JSON", arrange["prompt"])
-        self.assertIn("formCatalog", arrange["prompt"])
+        self.assertIn("image/svg/scene", arrange["prompt"])
 
-        produce = server.default_prompt_template({"kind": "stage-produce", "layoutId": "builtin:layout/info-classic", "presentation": "card"})
-        self.assertIn("JSON", produce["prompt"])
-        self.assertIn("plans", produce["prompt"])
+        produce_svg = server.default_prompt_template({"kind": "stage-produce", "layoutId": "builtin:layout/info-classic", "presentation": "svg"})
+        self.assertIn("JSON", produce_svg["prompt"])
+        self.assertIn("plans", produce_svg["prompt"])
+
+        produce_scene = server.default_prompt_template({"kind": "stage-produce", "layoutId": "builtin:layout/info-classic", "presentation": "scene"})
+        self.assertIn("JSON", produce_scene["prompt"])
+        self.assertIn("纯代码", produce_scene["prompt"])
 
         with self.assertRaisesRegex(ValueError, "提示词类型"):
             server.default_prompt_template({"kind": "unknown"})

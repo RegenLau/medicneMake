@@ -34,10 +34,12 @@ try {
         if (!image.naturalWidth) throw Error("分镜素材未加载。");
       }));
       // Stage styles have no time-driven CSS animation. Identical markup and
-      // media after drawFrame produce the same pixels even in a moving scene.
-      const markup = document.querySelector("#stage-frame").innerHTML;
-      const reused = markup === globalThis.stageCaptureMarkup;
-      globalThis.stageCaptureMarkup = markup;
+      // media after drawFrame produce the same pixels even in a moving scene,
+      // except when custom Shadow DOM code or <canvas> draws dynamically.
+      const hasDynamicHost = Boolean(document.querySelector("#stage-frame [data-custom-code-host], #stage-frame canvas"));
+      const markup = hasDynamicHost ? "" : document.querySelector("#stage-frame").innerHTML;
+      const reused = !hasDynamicHost && markup === globalThis.stageCaptureMarkup;
+      globalThis.stageCaptureMarkup = hasDynamicHost ? null : markup;
       return { key, reused };
     }, { time: frame / fps, avatar, signature });
     signature = next.key;
