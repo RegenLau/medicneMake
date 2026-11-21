@@ -183,6 +183,11 @@ let data = loadState(),
   filter = "全部",
   toastTimer,
   selectedTags = [],
+  customTagDraft = "",
+  customTagSuggestions = [],
+  customTagHint = "",
+  customTagReqId = 0,
+  publishAfterTags = false,
   modalScope = null,
   modalType = null,
   regenModal = null,
@@ -4535,17 +4540,167 @@ function openDrugModal(w) {
   }
 }
 
-function tagsModal(w) {
+function workTagContentExcerpt(w) {
+  const parts = [];
+  if (w.lead?.trim()) parts.push(w.lead.trim());
+  const rows = w.stagePlan?.shots?.length ? w.stagePlan.shots : w.blocks || [];
+  for (const row of rows) {
+    const line = String(row?.line || "").trim();
+    if (line) parts.push(line);
+  }
+  return parts.join("\n").slice(0, 1500);
+}
+
+function workTagSuggestionSig(w) {
+  return JSON.stringify([
+    (w.title || "").trim(),
+    (w.topic || "").trim(),
+    (w.drug || "").trim(),
+    workTagContentExcerpt(w).slice(0, 400),
+  ]);
+}
+
+function parseCustomTagsInput(raw) {
+  return String(raw || "")
+    .split(/[、,，;；\s]+/)
+    .map((s) =>
+      s.replace(/[#＃「」『』《》【】\[\]()（）"'“”‘’。！？：:]+/g, "").trim().slice(0, 8),
+    )
+    .filter(Boolean);
+}
+
+function addCustomTagsFromInput(raw) {
+  const incoming = parseCustomTagsInput(raw);
+  let added = 0;
+  for (const t of incoming) {
+    if (!selectedTags.includes(t)) {
+      selectedTags.push(t);
+      added++;
+    }
+  }
+  return added;
+}
+
+function normalizeSuggestedTags(list) {
+  const seen = new Set();
+  const out = [];
+  for (const raw of Array.isArray(list) ? list : []) {
+    const clean = String(raw || "").trim().slice(0, 8);
+    if (clean.length < 2 || categories.includes(clean) || seen.has(clean)) continue;
+    seen.add(clean);
+    out.push(clean);
+    if (out.length >= 5) break;
+  }
+  return out;
+}
+
+function renderCustomTagSuggestionsHtml() {
+  if (!customTagSuggestions.length) return "";
+  const hasUnselected = customTagSuggestions.some((t) => !selectedTags.includes(t));
+  return (
+    '<div class="tag-ai-bar"><span class="small tag-ai-label">AI 默认推荐标签（点击多选）</span>' +
+    (hasUnselected ? btn("全部添加", "add-all-ai-tags", "textbtn tag-ai-all") : "") +
+    '</div><div class="flexwrap tag-ai-chips">' +
+    customTagSuggestions
+      .map((t) => {
+        const picked = selectedTags.includes(t);
+        return btn(
+          (picked ? "✓ " : "+ ") + esc(t),
+          "toggle-tag",
+          "chip tag-ai-chip" + (picked ? " selected" : ""),
+          t,
+          'aria-pressed="' + picked + '"',
+        );
+      })
+      .join("") +
+    "</div>"
+  );
+}
+
+async function fetchCustomTagSuggestion(w, sig) {
+  const reqId = ++customTagReqId;
+  try {
+    const res = await jsonRequest("/api/suggest-custom-tag", {
+      method: "POST",
+      body: JSON.stringify({
+        workId: w.id,
+        title: (w.title || "").trim(),
+        topic: (w.topic || "").trim(),
+        drug: (w.drug || "").trim(),
+        content: workTagContentExcerpt(w),
+        categories,
+        existingTags: selectedTags,
+        textModel: resolveTextModel(w.settings),
+      }),
+    });
+    const rawTags = Array.isArray(res?.tags) ? res.tags : res?.tag ? [res.tag] : [];
+    const tags = normalizeSuggestedTags(rawTags);
+    if (tags.length) {
+      w.aiCustomTags = tags;
+      w.aiCustomTag = tags[0];
+      w.aiCustomTagSig = sig;
+      save();
+    }
+    if (reqId !== customTagReqId || !dialog.open || modalType !== "tags" || current() !== w) return;
+    customTagSuggestions = tags;
+    customTagHint = tags.length ? "" : "未能解析到合适的默认标签，可手动输入";
+    const box = $("#newtag-suggestions", dialogBody);
+    const hint = $("#newtag-hint", dialogBody);
+    if (box) {
+      box.innerHTML = renderCustomTagSuggestionsHtml();
+      box.hidden = !customTagSuggestions.length;
+    }
+    if (hint) {
+      hint.textContent = customTagHint;
+      hint.hidden = !customTagHint;
+    }
+  } catch {
+    if (reqId !== customTagReqId || !dialog.open || modalType !== "tags" || current() !== w) return;
+    customTagHint = "未能自动解析默认标签，可手动输入";
+    const hint = $("#newtag-hint", dialogBody);
+    if (hint) {
+      hint.textContent = customTagHint;
+      hint.hidden = false;
+    }
+  }
+}
+
+function tagsModal(w, { publishAfter = false } = {}) {
   selectedTags = [...w.tags];
-  showTags();
+  customTagDraft = "";
+  publishAfterTags = Boolean(publishAfter);
+  const sig = workTagSuggestionSig(w);
+  const hasSource = Boolean((w.title || w.topic || w.drug || "").trim() || workTagContentExcerpt(w));
+  const cached = w.aiCustomTagSig === sig ? normalizeSuggestedTags(w.aiCustomTags) : [];
+  if (cached.length >= 3) {
+    customTagSuggestions = cached;
+    customTagHint = "";
+    showTags();
+    return;
+  }
+  customTagSuggestions = [];
+  if (config?.deepseekKeyPresent && hasSource) {
+    customTagHint = "AI 正在使用文本模型解析默认自定义标签…";
+    showTags();
+    fetchCustomTagSuggestion(w, sig);
+  } else {
+    customTagHint = "";
+    showTags();
+  }
 }
 
 function showTags() {
-  const all = [...new Set([...categories, ...selectedTags])];
+  const extraSelected = selectedTags.filter(
+    (t) => !categories.includes(t) && !customTagSuggestions.includes(t),
+  );
+  const topChips = [...categories, ...extraSelected];
+  const saveLabel = publishAfterTags
+    ? "确定并发布（已选 " + selectedTags.length + " 个）"
+    : "确定（已选 " + selectedTags.length + " 个）";
   openModal(
     "选择作品分类",
     '<div class="flexwrap">' +
-      all
+      topChips
         .map((t) =>
           btn(
             esc(t),
@@ -4556,12 +4711,22 @@ function showTags() {
           ),
         )
         .join("") +
-      '</div><div class="dividerline"></div><label class="field" for="newtag">自定义分类标签（最多 8 字）</label>' +
-      '<div class="tag-input-row"><input maxlength="8" id="newtag" placeholder="输入标签后按回车或点添加">' +
+      '</div><div class="dividerline"></div><label class="field" for="newtag">自定义分类标签（每个最多 8 字，可添加多个）</label>' +
+      '<div id="newtag-suggestions" class="tag-ai-box"' +
+      (customTagSuggestions.length ? "" : " hidden") +
+      ">" +
+      renderCustomTagSuggestionsHtml() +
+      '</div><p class="small tag-ai-hint" id="newtag-hint"' +
+      (customTagHint ? "" : " hidden") +
+      ">" +
+      esc(customTagHint) +
+      '</p><div class="tag-input-row"><input maxlength="60" id="newtag" value="' +
+      esc(customTagDraft) +
+      '" placeholder="输入自定义标签（顿号、逗号或空格分隔可一次加多个）">' +
       btn("添加", "customtag", "secondary") +
       '</div><div style="margin-top:16px">' +
       btn(
-        "确定（已选 " + selectedTags.length + " 个）",
+        saveLabel,
         "save-tags",
         "primary widebtn",
       ) +
@@ -4754,6 +4919,10 @@ document.addEventListener("input", (e) => {
   if (el.id === "drugquery") {
     const list = $("#druglist", dialogBody);
     if (list) list.innerHTML = renderDrugList(el.value);
+    return;
+  }
+  if (el.id === "newtag") {
+    customTagDraft = el.value.slice(0, 60);
     return;
   }
   if (el.id === "imageprompt" && regenModal) {
@@ -5058,8 +5227,8 @@ document.addEventListener("keydown", (e) => {
     }
   } else if (el.id === "newtag") {
     e.preventDefault();
-    const t = el.value.trim();
-    if (t && !selectedTags.includes(t)) selectedTags.push(t);
+    addCustomTagsFromInput(el.value);
+    customTagDraft = "";
     showTags();
     $("#newtag", dialogBody)?.focus();
   }
@@ -6384,39 +6553,73 @@ document.addEventListener("click", async (e) => {
         tagsModal(w);
         break;
       case "toggle-tag":
+        customTagDraft = ($("#newtag", dialogBody)?.value || "").slice(0, 60);
         selectedTags = selectedTags.includes(v)
           ? selectedTags.filter((x) => x !== v)
           : [...selectedTags, v];
         showTags();
         break;
-      case "customtag": {
-        const t = ($("#newtag", dialogBody)?.value || "").trim();
-        if (t && !selectedTags.includes(t)) selectedTags.push(t);
+      case "add-all-ai-tags":
+        customTagDraft = ($("#newtag", dialogBody)?.value || "").slice(0, 60);
+        for (const t of customTagSuggestions) {
+          if (!selectedTags.includes(t)) selectedTags.push(t);
+        }
         showTags();
         break;
-      }
-      case "save-tags":
-        w.tags = selectedTags;
-        changed(w);
-        dialog.close();
-        render(true);
+      case "customtag": {
+        addCustomTagsFromInput($("#newtag", dialogBody)?.value || "");
+        customTagDraft = "";
+        showTags();
+        $("#newtag", dialogBody)?.focus();
         break;
+      }
+      case "save-tags": {
+        addCustomTagsFromInput($("#newtag", dialogBody)?.value || "");
+        customTagDraft = "";
+        if (publishAfterTags && !selectedTags.length) {
+          notify("请先选择至少一个作品分类", "warn");
+          showTags();
+          break;
+        }
+        w.tags = selectedTags;
+        const shouldPublish = publishAfterTags;
+        publishAfterTags = false;
+        dialog.close();
+        if (shouldPublish && activeChecks(w).filter(Boolean).length >= reviewChecks.length) {
+          w.stage = "review";
+          w.editing = false;
+          w.viewingSetup = false;
+          changed(w);
+          render();
+          notify("作品已确认发布", "ok");
+        } else {
+          changed(w);
+          render(true);
+          if (shouldPublish) {
+            const box = $("#checklist");
+            box?.classList.add("attention");
+            box?.scrollIntoView({ block: "center", behavior: "smooth" });
+            notify("作品分类已保存，请先完成发布前药师自查", "warn");
+          }
+        }
+        break;
+      }
       case "remove-tag":
         w.tags = w.tags.filter((t) => t !== v);
         changed(w);
         render(true);
         break;
       case "submit":
-        if (!w.tags.length) {
-          tagsModal(w);
-          notify("请先选择至少一个作品分类", "warn");
-          break;
-        }
         if (activeChecks(w).filter(Boolean).length < reviewChecks.length) {
           const box = $("#checklist");
           box?.classList.add("attention");
           box?.scrollIntoView({ block: "center", behavior: "smooth" });
           notify("请先完成发布前药师自查", "warn");
+          break;
+        }
+        if (!w.tags.length) {
+          tagsModal(w, { publishAfter: true });
+          notify("请选择作品分类后即可直接发布", "info");
           break;
         }
         w.stage = "review";

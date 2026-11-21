@@ -1890,6 +1890,88 @@ def generate_music_request(p):
     return {**generated, "library": music_gen.list_music_library(GENERATED_MUSIC_DIR, include_archived=True)}
 
 
+def suggest_custom_tag_request(p):
+    ds_key = current_deepseek_key()
+    if not ds_key:
+        raise ValueError("请先配置 DeepSeek API Key。")
+    work_id = p.get("workId")
+    if work_id is not None:
+        if not isinstance(work_id, str) or str(uuid.UUID(work_id)) != work_id:
+            raise ValueError("作品 ID 无效")
+    title = str(p.get("title") or "").strip()[:120]
+    topic = str(p.get("topic") or "").strip()[:200]
+    drug = str(p.get("drug") or "").strip()[:80]
+    content = str(p.get("content") or "").strip()[:1600]
+    if not any((title, topic, drug, content)):
+        raise ValueError("缺少可供解析的作品内容。")
+    raw_cats = p.get("categories") if isinstance(p.get("categories"), list) else []
+    raw_existing = p.get("existingTags") if isinstance(p.get("existingTags"), list) else []
+    preset_cats = [str(x).strip()[:20] for x in raw_cats if isinstance(x, str) and x.strip()][:20]
+    existing_tags = [str(x).strip()[:20] for x in raw_existing if isinstance(x, str) and x.strip()][:30]
+    model = p.get("textModel") or default_text_model()
+    if model not in text_models():
+        model = default_text_model()
+
+    costs = {}
+
+    def record_cost(k, row):
+        costs[k] = row
+
+    client = _make_tracked_deepseek(ds_key, record=record_cost, label="自定义分类标签解析")
+    instruction = (
+        "你是医院用药科普编辑助手。根据作品的标题、主题、关联药品和正文/口播摘要，"
+        "提炼 3–5 个最贴切、患者易懂的中文「自定义分类标签」。\n"
+        "- 只返回 JSON：{\"tags\":[\"标签1\",\"标签2\",\"标签3\"]}，至少返回 3 个互不重复的标签。\n"
+        "- 每个标签须为 2–8 个汉字（绝不超过 8 字），不带标点、空格、书名号或井号。\n"
+        "- 不要与已有预设分类（categories）或已选标签（existingTags）完全重复，"
+        "应比大类更具体，概括本篇核心知识点、适用人群或用药场景（如「成分重叠」「复方感冒药」「退烧用药」「缓释片用药」「漏服补服」等）。"
+    )
+    payload = {
+        "title": title,
+        "topic": topic,
+        "drug": drug,
+        "content": content,
+        "categories": preset_cats,
+        "existingTags": existing_tags,
+    }
+    reply = draft_content.ask_json(client, model, instruction, payload, 240)
+    raw_list = reply.get("tags")
+    if not isinstance(raw_list, list):
+        raw_single = reply.get("tag")
+        raw_list = [raw_single] if isinstance(raw_single, str) else []
+    blocked = set(preset_cats) | set(existing_tags)
+    tags = []
+    seen = set()
+    for item in raw_list:
+        if not isinstance(item, str):
+            continue
+        cleaned = re.sub(r"[#＃「」『』《》【】\[\]()（）\"'“”‘’、，。！？：:;\s]+", "", item.strip())[:8]
+        if len(cleaned) < 2 or cleaned in blocked or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        tags.append(cleaned)
+        if len(tags) >= 5:
+            break
+    tag = tags[0] if tags else ""
+
+    if work_id and costs:
+        job_id = str(uuid.uuid4())
+        with CACHE_LOCK:
+            write_json(
+                JOBS / (job_id + ".json"),
+                {
+                    "id": job_id,
+                    "request": {"kind": "custom-tag", "workId": work_id, "settings": {"textModel": model}},
+                    "status": "done",
+                    "progress": "已解析自定义分类标签",
+                    "error": "",
+                    "costs": costs,
+                    "output": {"tags": tags, "tag": tag, "model": model},
+                },
+            )
+    return {"tags": tags, "tag": tag, "model": model}
+
+
 def music_mix(duration, voiced, music_index=2, is_generated=False, voice_index=0):
     if is_generated:
         # AI-generated studio tracks are mastered louder (~-13 LUFS) than built-in quiet beds (-21 dB).
@@ -4053,7 +4135,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_error(403)
         try:
             n = int(self.headers.get("Content-Length", "0"))
-            max_bytes = 8_000_000 if self.path == "/api/upload-frame" else (200_000 if self.path == "/api/jobs" else (100000 if self.path in ("/api/costs", "/api/generate-music") else (16_000 if self.path in ("/api/script-prompt", "/api/prompt-template") else 4096)))
+            max_bytes = 8_000_000 if self.path == "/api/upload-frame" else (200_000 if self.path == "/api/jobs" else (100000 if self.path in ("/api/costs", "/api/generate-music") else (16_000 if self.path in ("/api/script-prompt", "/api/prompt-template", "/api/suggest-custom-tag") else 4096)))
             if self.path == "/api/library/upload":
                 max_bytes = 11_200_000
             elif self.path in ("/api/library/collect-image", "/api/library/collect-video", "/api/library/copy-layout", "/api/library/copy-theme", "/api/library/motion-palette"):
@@ -4067,6 +4149,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(200, default_video_script_prompt(p))
             if self.path == "/api/prompt-template":
                 return self.send_json(200, default_prompt_template(p))
+            if self.path == "/api/suggest-custom-tag":
+                return self.send_json(200, suggest_custom_tag_request(p))
             if self.path == "/api/upload-frame":
                 return self.send_json(200, save_uploaded_frame(p))
             if self.path == "/api/library/upload":
