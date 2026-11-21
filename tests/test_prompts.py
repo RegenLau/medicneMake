@@ -110,7 +110,7 @@ class ArticlePromptTests(unittest.TestCase):
 
         produce_svg = server.default_prompt_template({"kind": "stage-produce", "layoutId": "builtin:layout/info-classic", "presentation": "svg"})
         self.assertIn("JSON", produce_svg["prompt"])
-        self.assertIn("plans", produce_svg["prompt"])
+        self.assertIn("svgCode", produce_svg["prompt"])
 
         produce_scene = server.default_prompt_template({"kind": "stage-produce", "layoutId": "builtin:layout/info-classic", "presentation": "scene"})
         self.assertIn("JSON", produce_scene["prompt"])

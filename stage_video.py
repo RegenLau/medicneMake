@@ -324,6 +324,44 @@ _CODE_FORBIDDEN_JS_RE = re.compile(
 )
 
 
+_SVG_FORBIDDEN_TAG_RE = re.compile(
+    r"<\s*(?:script|iframe|object|embed|link|meta|base|img|video|audio|source|picture|portal|frame|frameset|foreignObject)\b",
+    re.IGNORECASE,
+)
+
+
+def _validate_motion_js(js, label="代码动效", *, check_syntax=True):
+    if not isinstance(js, str) or len(js) > 24000:
+        raise ValueError(f"{label} JS 格式无效或超过长度上限（24000 字符）。")
+    cleaned = _CODE_ALLOWED_NS_RE.sub("", js)
+    if _CODE_EXTERNAL_URL_RE.search(cleaned):
+        raise ValueError(f"{label} JS 禁止引用外部链接或内嵌位图，请使用纯代码与内联 SVG。")
+    if js.strip():
+        bad = _CODE_FORBIDDEN_JS_RE.search(js)
+        if bad:
+            token = bad.group(0)
+            if token in ("requestAnimationFrame", "setInterval", "setTimeout"):
+                raise ValueError(f"{label} JS 须由 t / api.progress 逐帧驱动，禁止使用 requestAnimationFrame 或定时器。")
+            raise ValueError(f"{label} JS 包含受限调用：{token}")
+        if check_syntax:
+            node = shutil.which("node")
+            if node:
+                try:
+                    proc = subprocess.run(
+                        [node, "-e", 'const fs=require("fs"); new Function("root","t","duration","api", fs.readFileSync(0,"utf8"));'],
+                        input=js.encode("utf-8"),
+                        capture_output=True,
+                        timeout=3,
+                    )
+                except subprocess.TimeoutExpired:
+                    raise ValueError(f"{label} JS 语法校验超时。") from None
+                if proc.returncode:
+                    err = proc.stderr.decode("utf-8", "replace").strip().splitlines()
+                    detail = err[-1] if err else "语法无效"
+                    raise ValueError(f"{label} JS 语法错误：{detail[:180]}")
+    return js.strip()
+
+
 def validate_scene_code(code, *, check_syntax=True):
     """Validate pure HTML+CSS+SVG+JS animation code for a scene shot."""
     code = mapping(code, "代码动效数据格式无效。")
@@ -338,40 +376,45 @@ def validate_scene_code(code, *, check_syntax=True):
         raise ValueError("代码动效 HTML 超过长度上限（24000 字符）。")
     if not isinstance(css, str) or len(css) > 16000:
         raise ValueError("代码动效 CSS 格式无效或超过长度上限（16000 字符）。")
-    if not isinstance(js, str) or len(js) > 24000:
-        raise ValueError("代码动效 JS 格式无效或超过长度上限（24000 字符）。")
     if _CODE_FORBIDDEN_HTML_RE.search(html):
         raise ValueError("代码动效须使用纯 HTML/CSS/SVG 实现，禁止包含 img、script、iframe 等标签。")
     if _CODE_EVENT_HANDLER_RE.search(html):
         raise ValueError("代码动效 HTML 禁止包含内联事件属性。")
-    for label, text in (("HTML", html), ("CSS", css), ("JS", js)):
+    for label, text in (("HTML", html), ("CSS", css)):
         cleaned = _CODE_ALLOWED_NS_RE.sub("", text)
         if _CODE_EXTERNAL_URL_RE.search(cleaned):
             raise ValueError(f"代码动效 {label} 禁止引用外部链接或内嵌位图，请使用纯代码与内联 SVG。")
-    if js.strip():
-        bad = _CODE_FORBIDDEN_JS_RE.search(js)
-        if bad:
-            token = bad.group(0)
-            if token in ("requestAnimationFrame", "setInterval", "setTimeout"):
-                raise ValueError("代码动效 JS 须由 t / api.progress 逐帧驱动，禁止使用 requestAnimationFrame 或定时器。")
-            raise ValueError(f"代码动效 JS 包含受限调用：{token}")
-        if check_syntax:
-            node = shutil.which("node")
-            if node:
-                try:
-                    proc = subprocess.run(
-                        [node, "-e", 'const fs=require("fs"); new Function("root","t","duration","api", fs.readFileSync(0,"utf8"));'],
-                        input=js.encode("utf-8"),
-                        capture_output=True,
-                        timeout=3,
-                    )
-                except subprocess.TimeoutExpired:
-                    raise ValueError("代码动效 JS 语法校验超时。") from None
-                if proc.returncode:
-                    err = proc.stderr.decode("utf-8", "replace").strip().splitlines()
-                    detail = err[-1] if err else "语法无效"
-                    raise ValueError(f"代码动效 JS 语法错误：{detail[:180]}")
-    return {"html": html.strip(), "css": css.strip(), "js": js.strip()}
+    clean_js = _validate_motion_js(js, "代码动效", check_syntax=check_syntax)
+    return {"html": html.strip(), "css": css.strip(), "js": clean_js}
+
+
+def validate_svg_code(svg_code, *, check_syntax=True):
+    """Validate prompt-driven pure SVG animation code ({svg, css, js})."""
+    svg_code = mapping(svg_code, "SVG 动画数据格式无效。")
+    if svg_code.keys() - {"svg", "css", "js"}:
+        raise ValueError("SVG 动画只支持 svg、css、js 字段。")
+    svg = svg_code.get("svg")
+    css = svg_code.get("css", "")
+    js = svg_code.get("js", "")
+    if not isinstance(svg, str) or not svg.strip():
+        raise ValueError("SVG 动画缺少 <svg> 矢量代码。")
+    if len(svg) > 24000:
+        raise ValueError("SVG 动画代码超过长度上限（24000 字符）。")
+    trimmed = re.sub(r"^\s*(?:<!--[\s\S]*?-->\s*)*", "", svg)
+    if not re.match(r"^<\s*svg\b", trimmed, re.IGNORECASE) or not re.search(r"</\s*svg\s*>\s*$", svg, re.IGNORECASE):
+        raise ValueError("SVG 动画根节点必须是完整的 <svg>...</svg>。")
+    if not isinstance(css, str) or len(css) > 12000:
+        raise ValueError("SVG 动画 CSS 格式无效或超过长度上限（12000 字符）。")
+    if _SVG_FORBIDDEN_TAG_RE.search(svg):
+        raise ValueError("SVG 动画须为纯矢量图形，禁止包含 foreignObject、img、script、iframe 等标签。")
+    if _CODE_EVENT_HANDLER_RE.search(svg):
+        raise ValueError("SVG 动画禁止包含内联事件属性。")
+    for label, text in (("SVG", svg), ("CSS", css)):
+        cleaned = _CODE_ALLOWED_NS_RE.sub("", text)
+        if _CODE_EXTERNAL_URL_RE.search(cleaned):
+            raise ValueError(f"SVG 动画 {label} 禁止引用外部链接或内嵌位图，请使用纯矢量图形。")
+    clean_js = _validate_motion_js(js, "SVG 动画", check_syntax=check_syntax)
+    return {"svg": svg.strip(), "css": css.strip(), "js": clean_js}
 
 
 def illustration(value, library, media_path, used):
@@ -459,19 +502,24 @@ def validate_shot(item, layout, compatible, library, media_path, pictures, used)
         base["labels"] = [entry.get("title", "") for entry in base["items"] if isinstance(entry, dict)]
         slide.update(type="explain", layoutMode="explain", highlightWords=base["labels"])
     elif kind == "svg":
-        beats = content.get("beats")
-        action = beats[0].get("action") if isinstance(beats, list) and beats and isinstance(beats[0], dict) else content.get("action")
-        if compatible == "svg" and content.get("singleAction") is True:
-            beats = None
-        svg = {"action": action, **({"beats": beats} if beats is not None else {})}
-        if compatible == "svg":
-            svg_motion.validate_shot({**base, **svg})
-        elif beats is not None:
-            svg_motion.validate_beats(beats)
-        elif not isinstance(action, str) or action not in svg_motion.ACTIONS:
-            raise ValueError("请选择有效的 SVG 道具动作。")
-        base.update(svg)
-        slide.update(type="explain", layoutMode="explain", action=action, svgBeats=beats)
+        if content.get("svgCode"):
+            base["svgCode"] = validate_svg_code(content["svgCode"])
+            base.update(items=items, takeaway=points.get("takeaway", ""), listTitle=points.get("listTitle", ""))
+            slide.update(type="explain", layoutMode="explain")
+        else:
+            beats = content.get("beats")
+            action = beats[0].get("action") if isinstance(beats, list) and beats and isinstance(beats[0], dict) else content.get("action")
+            if compatible == "svg" and content.get("singleAction") is True:
+                beats = None
+            svg = {"action": action, **({"beats": beats} if beats is not None else {})}
+            if compatible == "svg":
+                svg_motion.validate_shot({**base, **svg})
+            elif beats is not None:
+                svg_motion.validate_beats(beats)
+            elif not isinstance(action, str) or action not in svg_motion.ACTIONS:
+                raise ValueError("请选择有效的 SVG 道具动作。")
+            base.update(svg)
+            slide.update(type="explain", layoutMode="explain", action=action, svgBeats=beats)
     elif kind == "mg":
         fit = content.get("fit", "auto")
         overlay = content.get("overlay", "points")

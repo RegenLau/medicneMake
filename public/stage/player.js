@@ -116,7 +116,8 @@
     const cue = Contents.activeCue(shot, localTime);
     const focus = cue?.focus || "all";
     const renderer = Contents[shot.kind];
-    const code = shot.kind === "card" || shot.kind === "scene";
+    const isPromptSvg = shot.kind === "svg" && Boolean(shot.svgCode && typeof shot.svgCode.svg === "string" && shot.svgCode.svg.trim());
+    const code = shot.kind === "card" || shot.kind === "scene" || isPromptSvg;
     const keepMounted = code || shot.kind === "clip";
     const layoutFocus = plan.previewStage === "outro" ? "outro" : keepMounted ? "all" : focus;
     const cueFocus = plan.previewStage === "outro" ? "outro" : focus;
@@ -140,7 +141,7 @@
       theme: deck.theme,
       compatibility: plan.compatibility,
       focus, slide, imgMap, mapSrc, deck, index: current, total: plan.shots.length,
-      layoutTitle: shot.kind === "svg" && !plan.compatibility,
+      layoutTitle: shot.kind === "svg" && !isPromptSvg && !plan.compatibility,
     };
     const mountKey = `${current}/${stage}/${keepMounted ? "keep" : progress}`;
     if (mounted !== mountKey) {

@@ -3485,6 +3485,14 @@ def write_draft(p, job, save, record=None):
                 save()
                 job["output"] = mix_plan.write_clip_prompt(tracked_deepseek("AI 视频描述"), model, item, ASSETS)
                 return
+            if "produceSvgBatch" in item:
+                def on_svg_progress(done, total, name):
+                    job["progress"] = f"生成 SVG 动画（{done + 1}/{total} · {name}）"
+                    save()
+                job["output"] = mix_plan.produce_svg_batch(
+                    tracked_deepseek("SVG 动画生成"), model, item, ASSETS, on_progress=on_svg_progress,
+                )
+                return
             if "produceSceneBatch" in item:
                 def on_scene_progress(done, total, name):
                     job["progress"] = f"生成代码动画（{done + 1}/{total} · {name}）"
@@ -3494,7 +3502,8 @@ def write_draft(p, job, save, record=None):
                 )
                 return
             if "produceShot" in item:
-                job["progress"] = "生成本幕代码动画" if item.get("presentation") == "scene" else "按所选方式制作本幕画面"
+                pres = item.get("presentation")
+                job["progress"] = "生成本幕 SVG 动画" if pres == "svg" else "生成本幕代码动画" if pres == "scene" else "按所选方式制作本幕画面"
                 save()
                 job["output"] = {"content": mix_plan.produce_shot(tracked_deepseek("单幕画面制作"), model, item, ASSETS)}
                 return

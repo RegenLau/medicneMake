@@ -278,17 +278,26 @@
 
   const svg = {
     html(shot, progress, theme, includeHeading = true, deck = null, size = null) { return StageSvgContent.content(shot, clamp(progress), theme, includeHeading, deck, size); },
-    mount(slot, shot, { layoutTitle }) {
+    mount(slot, shot, ctx) {
+      if (shot?.svgCode && typeof shot.svgCode.svg === "string" && shot.svgCode.svg.trim()) {
+        const css = `svg { display: block; width: 100%; height: 100%; }\n${shot.svgCode.css || ""}`;
+        return mountCustomCode(slot, { code: { html: shot.svgCode.svg, css, js: shot.svgCode.js || "" } }, ctx);
+      }
       const drawing = slot.ownerDocument.createElement("div");
       drawing.className = "stage-svg-drawing";
       slot.append(drawing);
-      return { slot: drawing, includeHeading: !layoutTitle };
+      return { slot: drawing, includeHeading: !ctx?.layoutTitle };
     },
-    draw(dom, shot, time, { slide, theme, deck, size }) {
+    draw(dom, shot, time, ctx) {
+      if (dom.customCode) {
+        drawCustomCode(dom, shot, time, ctx);
+        return;
+      }
+      const { slide, theme, deck, size } = ctx;
       const duration = shot.motionSeconds ?? shot.end - shot.start;
       dom.slot.innerHTML = svg.html(slide, duration > 0 ? time / duration : 1, theme, dom.includeHeading, deck, size);
     },
-    events: shot => StageSvgContent.events(shot),
+    events: shot => (shot?.svgCode && typeof shot.svgCode.svg === "string" && shot.svgCode.svg.trim() ? [] : StageSvgContent.events(shot)),
   };
 
   const asset = {

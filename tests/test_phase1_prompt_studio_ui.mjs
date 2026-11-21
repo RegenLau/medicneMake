@@ -180,15 +180,13 @@ try {
   // Clear mock job error
   await page.locator('#stage-production-job [data-action="abort-job"]').click();
 
-  // 2b. Select shot 2 (scene) -> test per-shot full code prompt + produceShot system prompt (no illustration)
+  // 2b. Select shot 2 (scene) -> verify single unified prompt box (no illustration, no separate codePrompt box)
   await page.locator('.stage-rail [data-action="stage-select"][data-val="1"]').click();
   assert.equal(await page.locator("#stage-shot-art-full-prompt").count(), 0, "Scene shot should not show illustration prompt");
-  await page.locator("#stage-shot-code-full-prompt").evaluate((el) => {
-    el.closest("details").open = true;
-  });
+  assert.equal(await page.locator('[data-stage-field="codePrompt"]').count(), 0, "Scene shot should merge description into the single prompt box");
   const shot2ManualCode = "【单幕手改代码提示词】左右双栏纯 SVG 对比两盒复方感冒药成分表，高亮相同退烧成分。";
-  await page.locator("#stage-shot-code-full-prompt").fill(shot2ManualCode);
-  assert.equal(await page.locator("#stage-shot-code-prompt-badge").innerText(), "已手改");
+  await page.locator("#stage-shot-prompt").fill(shot2ManualCode);
+  assert.equal(await page.locator("#stage-shot-prompt-badge").innerText(), "已手改");
 
   // 2c. Open produceShot modal -> edit produceShotPrompt -> verify both customCodePrompt & produceShotPrompt sent
   await page.locator('[data-action="stage-produce"]').click();
@@ -201,6 +199,7 @@ try {
   await dialog.locator('[data-action="confirm-paid"]').click();
   await page.waitForFunction(() => document.querySelector("#stage-production-job:not([hidden])") !== null);
   assert.equal(submitted.length, 3);
+  assert.equal(submitted[2].draft.produceShot.prompt, shot2ManualCode);
   assert.equal(submitted[2].draft.produceShot.customCodePrompt, shot2ManualCode);
   assert.equal(submitted[2].draft.produceShotPrompt, customProduce.trim());
 

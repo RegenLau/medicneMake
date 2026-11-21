@@ -664,7 +664,7 @@ const StageStudio = (() => {
     const presentation = fixedKinds.includes(w.stagePlan.mode) ? w.stagePlan.mode : "image";
     const effectivePresentation = draft.presentation || presentation;
     const usesArrange = effectivePresentation === "mix" || effectivePresentation === "svg" || effectivePresentation === "mg";
-    const arrangeMeta = usesArrange && !draft.produceShot && !draft.planStickers && !draft.clipPrompt && typeof resolveExtraPromptForSubmit === "function"
+    const arrangeMeta = usesArrange && !draft.produceShot && !draft.produceSvgBatch && !draft.produceSceneBatch && !draft.planStickers && !draft.clipPrompt && typeof resolveExtraPromptForSubmit === "function"
       ? resolveExtraPromptForSubmit(w, "stage-arrange")
       : null;
     job.payload.draft = {type:"video", videoMode:"stage", presentation, layoutId:w.stagePlan.layout.id,
@@ -723,12 +723,16 @@ const StageStudio = (() => {
     if (!config.deepseekKeyPresent) return openApiKeys("deepseek");
     const kind = shot.content.kind;
     if (kind === "image" || kind === "clip") return;
+    const isPromptSvg = kind === "svg";
     const isCodeScene = kind === "scene";
+    const isPromptDriven = isPromptSvg || isCodeScene;
     const options = config.stageCatalog.presenters[kind].options;
-    const previousParams = isCodeScene
-      ? (shot.content.code ? { code: shot.content.code } : {})
-      : Object.fromEntries(Object.keys(options).filter(key => shot.content[key] !== undefined)
-          .map(key => [key, shot.content[key]]));
+    const previousParams = isPromptSvg
+      ? (shot.content.svgCode ? { svgCode: shot.content.svgCode } : {})
+      : isCodeScene
+        ? (shot.content.code ? { code: shot.content.code } : {})
+        : Object.fromEntries(Object.keys(options).filter(key => shot.content[key] !== undefined)
+            .map(key => [key, shot.content[key]]));
     const title = productionTitle(shot.content);
     const revisionCount = (shot.content._revCount || 0) + 1;
     if (typeof syncExtraSystemPrompt === "function") syncExtraSystemPrompt(w, "stage-produce");
@@ -740,6 +744,11 @@ const StageStudio = (() => {
         if (typeof validateExtraPrompt === "function" && !validateExtraPrompt(w, "stage-produce")) return;
         producePromptMeta = resolveExtraPromptForSubmit(w, "stage-produce");
       }
+      const shotPrompt = isPromptSvg
+        ? renderSvgPromptForShot(w, shot, currentLayoutDef(w), currentThemeDef(w))
+        : isCodeScene
+          ? renderCodePromptForShot(w, shot, currentLayoutDef(w), currentThemeDef(w))
+          : "";
       const res = submitDraft(w, {
         presentation:kind,
         produceShot:{
@@ -747,9 +756,10 @@ const StageStudio = (() => {
           previousParams,
           revisionCount,
           revision:$("#stage-production-revision").value.trim(),
-          ...(isCodeScene ? {
-            codePrompt: (shot.content.codePrompt || "").trim(),
-            ...(shot.content.customCodePrompt?.trim() ? { customCodePrompt: shot.content.customCodePrompt.trim() } : {}),
+          ...(isPromptDriven ? {
+            prompt: shotPrompt,
+            ...(isPromptSvg && shot.content.customSvgPrompt?.trim() ? { customSvgPrompt: shot.content.customSvgPrompt.trim() } : {}),
+            ...(isCodeScene && shot.content.customCodePrompt?.trim() ? { customCodePrompt: shot.content.customCodePrompt.trim() } : {}),
           } : {}),
         },
         ...(producePromptMeta?.customPrompt ? { produceShotPrompt: producePromptMeta.customPrompt } : {}),
@@ -760,7 +770,7 @@ const StageStudio = (() => {
       return res;
     };
     const promptBoxHtml = prodState
-      ? `<details class="shot-options stage-full-prompt-box"><summary>调试${isCodeScene ? "代码动效" : "单幕制作"}系统提示词（高级）<span id="stage-produce-prompt-badge" class="prompt-badge ${prodState.badgeClass}">${esc(prodState.badgeLabel)}</span></summary>
+      ? `<details class="shot-options stage-full-prompt-box"><summary>调试${isPromptSvg ? "SVG 动画" : isCodeScene ? "代码动效" : "单幕制作"}系统提示词（高级）<span id="stage-produce-prompt-badge" class="prompt-badge ${prodState.badgeClass}">${esc(prodState.badgeLabel)}</span></summary>
           <textarea id="stage-produce-prompt" data-extra-prompt="stage-produce" rows="7" maxlength="20000" aria-label="单幕画面制作系统提示词">${esc(prodState.value)}</textarea>
           <div class="asset-inline" style="margin-top:6px">
             ${btn("放大对比与历史", "prompt-studio-open", "outline", "stage-produce")}
@@ -769,47 +779,59 @@ const StageStudio = (() => {
           </div>
         </details>`
       : "";
-    const descHtml = isCodeScene
-      ? `<p>用 DeepSeek 按第 ${index + 1} 幕的提示词、口播和要点，生成纯代码动效（HTML + CSS + 内联 SVG + JS，不含插图）。保留口播、要点和其他幕。</p>`
-      : `<p>用 DeepSeek 按第 ${index + 1} 幕的口播和要点，用「${kinds[kind]}」设计新画面。保留口播、要点和其他幕。</p>`;
-    const placeholder = isCodeScene
-      ? "可选补充微调要求，例如：节奏再紧凑一点、把核心数字做得更醒目、增加胶囊溶解曲线…"
-      : "想先展示哪个要点，或想演示哪个动作？";
+    const descHtml = isPromptSvg
+      ? `<p>用 DeepSeek 按第 ${index + 1} 幕的提示词、口播和要点，直接生成纯矢量 SVG 动画（不含插图）。保留口播、要点和其他幕。</p>`
+      : isCodeScene
+        ? `<p>用 DeepSeek 按第 ${index + 1} 幕的提示词、口播和要点，生成纯代码动效（HTML + CSS + 内联 SVG + JS，不含插图）。保留口播、要点和其他幕。</p>`
+        : `<p>用 DeepSeek 按第 ${index + 1} 幕的口播和要点，用「${kinds[kind]}」设计新画面。保留口播、要点和其他幕。</p>`;
+    const placeholder = isPromptSvg
+      ? "可选补充微调要求，例如：放大药盒与箭头路径、节奏更轻快、重点处加描边高亮…"
+      : isCodeScene
+        ? "可选补充微调要求，例如：节奏再紧凑一点、把核心数字做得更醒目、增加胶囊溶解曲线…"
+        : "想先展示哪个要点，或想演示哪个动作？";
     openModal(title, `${descHtml}
-      <label class="field">${isCodeScene ? "补充微调要求（选填）" : "画面要求（选填）"}<textarea id="stage-production-revision" maxlength="200" rows="3" placeholder="${placeholder}"></textarea></label>
+      <label class="field">${isPromptDriven ? "补充微调要求（选填）" : "画面要求（选填）"}<textarea id="stage-production-revision" maxlength="200" rows="3" placeholder="${placeholder}"></textarea></label>
       ${promptBoxHtml}
       <p class="small">提交 1 次文本请求，按 Token 计费。</p>
       <div class="actions dialog-actions">${btn("取消","close","secondary")}${btn("确认提交并计费","confirm-paid","primary")}</div>`, "confirm");
   }
 
-  function prepareSceneCodes(w) {
+  function preparePromptBatch(w, kind) {
     if (!config.stageShotProduction || w.job) return;
-    const indices = missingSceneCodes(w);
+    const isSvg = kind === "svg";
+    const indices = isSvg ? missingSvgCodes(w) : missingSceneCodes(w);
     if (!indices.length) return;
     if (!checkShotText(w, indices)) return;
     if (!config.deepseekKeyPresent) return openApiKeys("deepseek");
+    const label = isSvg ? "SVG 动画" : "代码动画";
     const prodState = typeof getExtraPromptState === "function" ? getExtraPromptState(w, "stage-produce") : null;
     retryPayload = () => {
       const producePromptMeta = typeof resolveExtraPromptForSubmit === "function"
         ? resolveExtraPromptForSubmit(w, "stage-produce") : null;
+      const layout = currentLayoutDef(w);
+      const themeDef = currentThemeDef(w);
       const batch = indices.map(idx => {
         const s = w.stagePlan.shots[idx];
+        const prompt = isSvg
+          ? renderSvgPromptForShot(w, s, layout, themeDef)
+          : renderCodePromptForShot(w, s, layout, themeDef);
         return {
           index: idx,
           shot: shotScript(s),
-          codePrompt: (s.content.codePrompt || "").trim(),
-          ...(s.content.customCodePrompt?.trim() ? { customCodePrompt: s.content.customCodePrompt.trim() } : {}),
+          prompt,
+          ...(isSvg && s.content.customSvgPrompt?.trim() ? { customSvgPrompt: s.content.customSvgPrompt.trim() } : {}),
+          ...(!isSvg && s.content.customCodePrompt?.trim() ? { customCodePrompt: s.content.customCodePrompt.trim() } : {}),
         };
       });
       return submitDraft(w, {
-        presentation: "scene",
-        produceSceneBatch: batch,
+        presentation: kind,
+        ...(isSvg ? { produceSvgBatch: batch } : { produceSceneBatch: batch }),
         ...(producePromptMeta?.customPrompt ? { produceShotPrompt: producePromptMeta.customPrompt } : {}),
-      }, "scene-batch");
+      }, isSvg ? "svg-batch" : "scene-batch");
     };
-    openModal(`生成缺失代码动画（${indices.length} 幕）`,
-      `<p>将依次调用 DeepSeek，按每幕的提示词、口播和要点生成纯代码动效（HTML + CSS + 内联 SVG + JS，不含插图）。</p>` +
-      `<p class="small">共提交 ${indices.length} 次文本请求，按实际 Token 计费${prodState?.isCustom ? "（已应用自定义单幕代码系统提示词）" : ""}。</p>` +
+    openModal(`生成缺失${label}（${indices.length} 幕）`,
+      `<p>将依次调用 DeepSeek，按每幕的提示词、口播和要点生成${isSvg ? "纯矢量 SVG 动画" : "纯代码动效（HTML + CSS + 内联 SVG + JS）"}，不含插图。</p>` +
+      `<p class="small">共提交 ${indices.length} 次文本请求，按实际 Token 计费${prodState?.isCustom ? "（已应用自定义系统提示词）" : ""}。</p>` +
       `<div class="actions dialog-actions">${btn("取消","close","secondary")}${btn("确认生成并计费","confirm-paid","primary")}</div>`, "confirm");
   }
 
@@ -830,7 +852,9 @@ const StageStudio = (() => {
     const saved = shot.content.kind === content.kind ? shot.content : shot.variants[content.kind] || {};
     const fields = content.kind === "scene"
       ? ["codePrompt", "customCodePrompt", "visual", "motion", "motif", "tone"]
-      : ["image","outroImage","focusRegions"];
+      : content.kind === "svg"
+        ? ["customSvgPrompt", "beats", "action"]
+        : ["image","outroImage","focusRegions"];
     if (content.kind === "mg" && content.mgRequest && !content.assetId) fields.push("assetId","assetName","fit","overlay");
     const preserved = Object.fromEntries(fields
       .filter(field => saved[field] !== undefined && content[field] === undefined).map(field => [field,saved[field]]));
@@ -842,14 +866,18 @@ const StageStudio = (() => {
   }
 
   function installDraft(w, mode, output, job) {
-    if (mode === "scene-batch") {
+    if (mode === "scene-batch" || mode === "svg-batch") {
+      const isSvg = mode === "svg-batch";
+      const targetKind = isSvg ? "svg" : "scene";
+      const label = isSvg ? "SVG 动画" : "代码动画";
       const contents = output?.contents || {};
       const errCount = Object.keys(output?.errors || {}).length;
       let okCount = 0;
       for (const [rawIdx, content] of Object.entries(contents)) {
         const idx = Number(rawIdx);
         const shot = w.stagePlan.shots[idx];
-        if (shot && shot.content.kind === "scene" && content?.code) {
+        const hasPayload = isSvg ? Boolean(content?.svgCode?.svg) : Boolean(content?.code?.html);
+        if (shot && shot.content.kind === targetKind && hasPayload) {
           content._revCount = (shot.content._revCount || 0) + 1;
           usePlan(shot, content);
           okCount++;
@@ -857,7 +885,7 @@ const StageStudio = (() => {
       }
       if (okCount) touch(w, true);
       if (current() === w) {
-        notify(errCount ? `已生成 ${okCount} 幕代码动画，${errCount} 幕生成失败可单独重试` : `已生成 ${okCount} 幕代码动画`, errCount ? "warn" : "ok");
+        notify(errCount ? `已生成 ${okCount} 幕${label}，${errCount} 幕生成失败可单独重试` : `已生成 ${okCount} 幕${label}`, errCount ? "warn" : "ok");
       }
       return;
     }
@@ -1073,21 +1101,40 @@ const StageStudio = (() => {
       select("文字叠加", "overlay", [["points","标题和要点"],["title","只显示标题"],["off","关闭"]], c.overlay || "points") +
       select("时长适配", "fit", [["auto","自动适配"],["hold","原速并定格"]], c.fit || "auto");
     if (c.kind === "card") return formPickerFields(shot, slot) + (c.form ? "" : select("动效方式", "motionStyle", window.CODE_MOTION_MOTION_CHOICES, c.motionStyle));
-    if (c.kind === "scene") return sceneCodeFields(w, shot, slot);
-    return c.beats.map((beat, index) => `<fieldset class="svg-beat-fields"><legend>动作 ${index + 1}</legend>` +
-      select("道具动作", "beat-action:" + index, Object.entries(config.svgMotion.actions), beat.action) +
-      text("画面标签", "beat-label:" + index, beat.label, 10) + text("对应口播片段", "beat-line:" + index, beat.line, 55) +
-      (c.beats.length > 1 ? btn("移除动作", "stage-beat-remove", "textbtn", index) : "") + '</fieldset>').join("") +
-      (c.beats.length < 3 ? btn("添加动作", "stage-beat-add", "outline") : "");
+    if (c.kind === "scene") return promptDrivenCodeFields(w, shot, slot, "scene");
+    return promptDrivenCodeFields(w, shot, slot, "svg");
   }
 
   const productionTitle = content => content.kind === "scene"
     ? (content.code ? "重新生成代码动画" : "生成代码动画")
-    : (content.reason || content.assetId ? "重新制作本幕" : "制作本幕");
+    : content.kind === "svg"
+      ? (content.svgCode ? "重新生成 SVG 动画" : "生成 SVG 动画")
+      : (content.reason || content.assetId ? "重新制作本幕" : "制作本幕");
   const artKinds = new Set();
   const missingArt = () => [];
   const missingSceneCodes = w => w.stagePlan.shots.flatMap((shot, i) =>
     shot.content.kind === "scene" && !shot.content.code ? [i] : []);
+  const missingSvgCodes = w => w.stagePlan.shots.flatMap((shot, i) =>
+    shot.content.kind === "svg" && !shot.content.svgCode ? [i] : []);
+
+  function renderSvgPromptForShot(w, shot, layout, themeDef, { ignoreOverride = false } = {}) {
+    if (!ignoreOverride && shot?.content?.customSvgPrompt?.trim()) {
+      return shot.content.customSvgPrompt.trim().slice(0, 4000);
+    }
+    const slot = LayoutEngine.describeMediaSlot(layout || currentLayoutDef(w));
+    const theme = themeDef || currentThemeDef(w);
+    const items = (shot?.points?.items || []).map(it => [it.title, it.detail].filter(Boolean).join("：")).filter(Boolean);
+    return [
+      `内容区尺寸：${slot.w}×${slot.h}（${slot.ratioLabel}，形态 ${slot.shape}），视觉主题：${theme?.name || themeName(w)}。`,
+      `本幕标题：${shot?.name || ""}`,
+      shot?.line ? `本幕口播：${shot.line.trim()}` : "",
+      items.length ? `本幕要点：\n${items.map((row, i) => `${i + 1}. ${row}`).join("\n")}` : "",
+      shot?.points?.takeaway ? `画面结语：${shot.points.takeaway}` : "",
+      w.drug ? `关联药品：${w.drug}` : "",
+      "画面与动效要求：用扁平医学科普纯矢量 <svg> 绘制核心主体与关键动作（含路径描边、部件位移或状态变化），按口播节拍与时间 t 逐帧演进，少而精的简短标注。",
+      "硬性要求：纯矢量 SVG + JS 逐帧实现，禁止使用位图/插图/外部链接，配色继承主题 CSS 变量。",
+    ].filter(Boolean).join("\n").slice(0, 4000);
+  }
 
   function renderCodePromptForShot(w, shot, layout, themeDef, { ignoreOverride = false } = {}) {
     if (!ignoreOverride && shot?.content?.customCodePrompt?.trim()) {
@@ -1109,29 +1156,44 @@ const StageStudio = (() => {
     ].filter(Boolean).join("\n").slice(0, 4000);
   }
 
-  function sceneCodeFields(w, shot, slot) {
+  function promptDrivenCodeFields(w, shot, slot, kind) {
+    const isSvg = kind === "svg";
     const c = shot.content;
-    const autoFull = renderCodePromptForShot(w, shot, currentLayoutDef(w), currentThemeDef(w), { ignoreOverride: true });
-    const hasCustom = Boolean(c.customCodePrompt && c.customCodePrompt.trim());
-    const fullPromptBox = `<details class="shot-options stage-full-prompt-box"><summary>查看并编辑本幕完整代码提示词` +
-      `<span id="stage-shot-code-prompt-badge" class="prompt-badge ${hasCustom ? "is-custom" : "is-default"}">${hasCustom ? "已手改" : "自动拼装"}</span></summary>` +
-      `<textarea id="stage-shot-code-full-prompt" data-stage-field="customCodePrompt" rows="7" maxlength="4000" aria-label="本幕完整代码提示词">${esc(hasCustom ? c.customCodePrompt : autoFull)}</textarea>` +
+    const autoFull = isSvg
+      ? renderSvgPromptForShot(w, shot, currentLayoutDef(w), currentThemeDef(w), { ignoreOverride: true })
+      : renderCodePromptForShot(w, shot, currentLayoutDef(w), currentThemeDef(w), { ignoreOverride: true });
+    const customVal = isSvg ? c.customSvgPrompt : c.customCodePrompt;
+    const hasCustom = Boolean(customVal && customVal.trim());
+    const promptBox = `<div class="stage-prompt-card">` +
+      `<div class="stage-prompt-head"><label class="label" for="stage-shot-prompt">本幕提示词</label>` +
+      `<span id="stage-shot-prompt-badge" class="prompt-badge ${hasCustom ? "is-custom" : "is-default"}">${hasCustom ? "已手改" : "自动拼装"}</span></div>` +
+      `<textarea id="stage-shot-prompt" data-stage-field="shotPrompt" rows="7" maxlength="4000" aria-label="本幕提示词">${esc(hasCustom ? customVal : autoFull)}</textarea>` +
       `<div class="asset-inline" style="margin-top:6px">` +
-      btn("编辑单幕代码系统提示词", "prompt-studio-open", "outline", "stage-produce") +
-      btn("恢复自动拼装", "stage-reset-shot-prompt", "textbtn", "code", hasCustom ? "" : "disabled") +
-      `</div></details>`;
-    const codeEditorBox = c.code
-      ? `<details class="shot-options stage-code-source-box"><summary>查看并编辑生成的纯代码（HTML / CSS / JS）</summary>` +
-        `<label class="field">HTML（支持内联 SVG，禁止 img/script）<textarea data-stage-field="code:html" rows="5" maxlength="24000">${esc(c.code.html || "")}</textarea></label>` +
-        `<label class="field">CSS（自动隔离在内容区，可使用 --v-* 主题变量）<textarea data-stage-field="code:css" rows="4" maxlength="16000">${esc(c.code.css || "")}</textarea></label>` +
-        `<label class="field">JS 逐帧驱动（function(root, t, duration, api) 函数体）<textarea data-stage-field="code:js" rows="5" maxlength="24000">${esc(c.code.js || "")}</textarea></label>` +
-        `</details>`
+      btn("编辑系统提示词", "prompt-studio-open", "outline", "stage-produce") +
+      btn("恢复自动拼装", "stage-reset-shot-prompt", "textbtn", "shot", hasCustom ? "" : "disabled") +
+      `</div></div>`;
+    const hasGenerated = isSvg ? Boolean(c.svgCode?.svg) : Boolean(c.code?.html);
+    const codeEditorBox = hasGenerated
+      ? isSvg
+        ? `<details class="shot-options stage-code-source-box"><summary>查看并编辑生成的 SVG 代码（SVG / CSS / JS）</summary>` +
+          `<label class="field">SVG 矢量代码（根节点须为 &lt;svg&gt;，禁止 img/foreignObject/script）<textarea data-stage-field="svgCode:svg" rows="5" maxlength="24000">${esc(c.svgCode.svg || "")}</textarea></label>` +
+          `<label class="field">CSS（可选，自动隔离在内容区）<textarea data-stage-field="svgCode:css" rows="3" maxlength="12000">${esc(c.svgCode.css || "")}</textarea></label>` +
+          `<label class="field">JS 逐帧驱动（function(root, t, duration, api) 函数体）<textarea data-stage-field="svgCode:js" rows="5" maxlength="24000">${esc(c.svgCode.js || "")}</textarea></label>` +
+          `</details>`
+        : `<details class="shot-options stage-code-source-box"><summary>查看并编辑生成的纯代码（HTML / CSS / JS）</summary>` +
+          `<label class="field">HTML（支持内联 SVG，禁止 img/script）<textarea data-stage-field="code:html" rows="5" maxlength="24000">${esc(c.code.html || "")}</textarea></label>` +
+          `<label class="field">CSS（自动隔离在内容区，可使用 --v-* 主题变量）<textarea data-stage-field="code:css" rows="4" maxlength="16000">${esc(c.code.css || "")}</textarea></label>` +
+          `<label class="field">JS 逐帧驱动（function(root, t, duration, api) 函数体）<textarea data-stage-field="code:js" rows="5" maxlength="24000">${esc(c.code.js || "")}</textarea></label>` +
+          `</details>`
       : "";
-    const statusText = c.code
-      ? `已生成纯代码动效（适配 ${slot ? `${slot.w}×${slot.h}` : "内容区"}，无插图，自动继承视觉主题）。`
-      : `当前为默认占位预览。填写画面与动效描述后点上方「生成代码动画」，由 DeepSeek 生成纯 HTML + CSS + SVG + JS 代码实现（不含插图，按文本 Token 计费）。`;
-    return `<label class="field">画面与动效描述（驱动模型用纯代码绘制）<textarea data-stage-field="codePrompt" maxlength="600" rows="3" placeholder="例如：用扁平矢量画出胶囊释放蓝色微粒进入胃部，右侧随口播逐条浮现 3 个要点（留空则按本幕标题和口播自动构思）">${esc(c.codePrompt || "")}</textarea></label>` +
-      fullPromptBox + codeEditorBox + `<p class="small">${statusText}</p>`;
+    const statusText = hasGenerated
+      ? (isSvg
+          ? `已生成纯矢量 SVG 动画（适配 ${slot ? `${slot.w}×${slot.h}` : "内容区"}，无插图，自动继承视觉主题）。`
+          : `已生成纯代码动效（适配 ${slot ? `${slot.w}×${slot.h}` : "内容区"}，无插图，自动继承视觉主题）。`)
+      : (isSvg
+          ? `可直接修改上方本幕提示词，再点「生成 SVG 动画」，由 DeepSeek 生成纯矢量 SVG 动画（不含插图，按文本 Token 计费）。`
+          : `可直接修改上方本幕提示词，再点「生成代码动画」，由 DeepSeek 生成纯 HTML + CSS + SVG + JS 动效（不含插图，按文本 Token 计费）。`);
+    return promptBox + codeEditorBox + `<p class="small">${statusText}</p>`;
   }
 
   function artFields(w, shot, c, slot) {
@@ -1276,7 +1338,7 @@ const StageStudio = (() => {
   }
 
   function hasProductionJob(w) {
-    return isActive(w) && Boolean(w.job?.stageImageSlots || w.job?.stageClipShot !== undefined || w.job?.stageSpeechIndex !== undefined || ["produce", "scene-batch", "clip-prompt"].includes(w.job?.stageDraft));
+    return isActive(w) && Boolean(w.job?.stageImageSlots || w.job?.stageClipShot !== undefined || w.job?.stageSpeechIndex !== undefined || ["produce", "scene-batch", "svg-batch", "clip-prompt"].includes(w.job?.stageDraft));
   }
 
   function updateProductionJob(w) {
@@ -1286,6 +1348,7 @@ const StageStudio = (() => {
     const picture = job.stageClipFrame ? "首帧" : job.stageArt ? "插画" : "配图";
     const subject = job.stageSpeechIndex !== undefined ? `第 ${job.stageSpeechIndex + 1} 幕口播配音`
       : job.stageClipShot !== undefined ? `第 ${job.stageClipShot + 1} 幕 AI 视频`
+      : job.stageDraft === "svg-batch" ? "缺失 SVG 动画"
       : job.stageDraft === "scene-batch" ? "缺失代码动画"
       : job.stageDraft === "clip-prompt" ? `第 ${job.stageShotIndex + 1} 幕视频描述`
       : job.stageShotIndex === undefined ? "缺失" + picture : `第 ${job.stageShotIndex + 1} 幕${job.stageImageSlots ? picture : "画面"}`;
@@ -1311,6 +1374,9 @@ const StageStudio = (() => {
     }
     if (!["image", "clip"].includes(kind) && config.stageShotProduction) {
       actions += btn(productionTitle(content), "stage-produce", actions ? "outline" : "primary");
+    }
+    if (kind === "svg" && content.svgCode) {
+      actions += btn("清空代码", "stage-clear", "textbtn", "svg-code");
     }
     if (kind === "scene" && content.code) {
       actions += btn("清空代码", "stage-clear", "textbtn", "code");
@@ -1433,15 +1499,18 @@ const StageStudio = (() => {
     const speechBtnHtml = `<button type="button" id="stage-speech-btn" class="stage-speech-btn${hasCachedSpeech ? " is-cached" : ""}" data-action="stage-speech" title="${currentVoice === "无配音" ? "当前为无配音，请先选择右侧音色" : "试听本幕配音并同步预览，合成时自动复用不重复计费"}">${PLAY_ICON}<span>试听口播</span>${hasCachedSpeech ? '<em class="stage-speech-tag">已缓存</em>' : ""}</button>`;
 
     const missingImages = shots.filter(s => s.content.kind === "image" && !s.content.image).length;
+    const missingSvgs = missingSvgCodes(w).length;
     const missingCodes = missingSceneCodes(w).length;
     const actions = btn("提示词调试", "prompt-studio-open", "outline", shot.content.kind === "image" ? "stage-image" : ["svg", "scene"].includes(shot.content.kind) ? "stage-produce" : "stage-arrange") +
       btn("全片模型与配音", "work-settings", "outline") +
       (missingImages ? btn(`生成缺失配图（${missingImages} 张）`, "stage-images", "primary", "missing") : "") +
-      (missingCodes ? btn(`生成缺失代码动画（${missingCodes} 幕）`, "stage-scene-batch", missingImages ? "outline" : "primary") : "") +
-      btn("合成视频", "stage-compose", (missingImages || missingCodes) ? "outline" : "primary");
+      (missingSvgs ? btn(`生成缺失 SVG 动画（${missingSvgs} 幕）`, "stage-svg-batch", missingImages ? "outline" : "primary") : "") +
+      (missingCodes ? btn(`生成缺失代码动画（${missingCodes} 幕）`, "stage-scene-batch", (missingImages || missingSvgs) ? "outline" : "primary") : "") +
+      btn("合成视频", "stage-compose", (missingImages || missingSvgs || missingCodes) ? "outline" : "primary");
 
     const shotReadyState = s => s.content.kind === "image" ? (s.content.image ? "ok" : "pending")
       : s.content.kind === "clip" ? (s.content.clip ? "ok" : "pending")
+      : s.content.kind === "svg" ? (s.content.svgCode ? "ok" : "pending")
       : s.content.kind === "scene" ? (s.content.code ? "ok" : "pending") : "ok";
     const strip = shots.map((s, i) => `<button type="button" class="scene-choice" data-action="stage-select" data-val="${i}" aria-pressed="${i === index}"${s.content.reason ? ` title="${esc(s.content.reason)}"` : ""}>
       <span class="scene-choice-head"><span class="scene-choice-num">${i + 1}</span><span class="scene-choice-title">${esc(s.name)}</span><span class="scene-dot is-${shotReadyState(s)}" title="${shotReadyState(s) === "ok" ? "画面就绪" : "待生成画面"}"></span></span>
@@ -1918,15 +1987,22 @@ const StageStudio = (() => {
       if (badge) { badge.textContent = hasCustom ? "已手改" : "自动拼装"; badge.className = "prompt-badge " + (hasCustom ? "is-custom" : "is-default"); }
       const resetBtn = app.querySelector('[data-action="stage-reset-shot-prompt"][data-val="image"]');
       if (resetBtn) resetBtn.disabled = !hasCustom;
-    } else if (key === "customCodePrompt") {
-      const autoVal = renderCodePromptForShot(w, shot, currentLayoutDef(w), currentThemeDef(w), { ignoreOverride: true });
-      if (value.trim() && value.trim() !== autoVal.trim()) shot.content.customCodePrompt = value;
-      else delete shot.content.customCodePrompt;
-      const hasCustom = Boolean(shot.content.customCodePrompt);
-      const badge = $("#stage-shot-code-prompt-badge");
+    } else if (key === "shotPrompt") {
+      const isSvg = shot.content.kind === "svg";
+      const autoVal = isSvg
+        ? renderSvgPromptForShot(w, shot, currentLayoutDef(w), currentThemeDef(w), { ignoreOverride: true })
+        : renderCodePromptForShot(w, shot, currentLayoutDef(w), currentThemeDef(w), { ignoreOverride: true });
+      const fieldName = isSvg ? "customSvgPrompt" : "customCodePrompt";
+      if (value.trim() && value.trim() !== autoVal.trim()) shot.content[fieldName] = value;
+      else delete shot.content[fieldName];
+      const hasCustom = Boolean(shot.content[fieldName]);
+      const badge = $("#stage-shot-prompt-badge");
       if (badge) { badge.textContent = hasCustom ? "已手改" : "自动拼装"; badge.className = "prompt-badge " + (hasCustom ? "is-custom" : "is-default"); }
-      const resetBtn = app.querySelector('[data-action="stage-reset-shot-prompt"][data-val="code"]');
+      const resetBtn = app.querySelector('[data-action="stage-reset-shot-prompt"][data-val="shot"]');
       if (resetBtn) resetBtn.disabled = !hasCustom;
+    } else if (key === "svgCode" && rawIndex && ["svg", "css", "js"].includes(rawIndex)) {
+      shot.content.svgCode = { svg: "", css: "", js: "", ...(shot.content.svgCode || {}), [rawIndex]: value };
+      shot.variants[shot.content.kind] = shot.content;
     } else if (key === "code" && rawIndex && ["html", "css", "js"].includes(rawIndex)) {
       shot.content.code = { html: "", css: "", js: "", ...(shot.content.code || {}), [rawIndex]: value };
       shot.variants[shot.content.kind] = shot.content;
@@ -1948,10 +2024,16 @@ const StageStudio = (() => {
         imgTa.value = renderImagePromptForShot(w, selected.get(w) || 0, currentLayoutDef(w), currentThemeDef(w), { ignoreOverride: true });
       }
     }
-    if (key === "codePrompt" || key === "name" || key === "line" || key.startsWith("point-")) {
-      const codeTa = $("#stage-shot-code-full-prompt");
-      if (codeTa && !shot.content.customCodePrompt) {
-        codeTa.value = renderCodePromptForShot(w, shot, currentLayoutDef(w), currentThemeDef(w), { ignoreOverride: true });
+    if (key === "name" || key === "line" || key.startsWith("point-")) {
+      const shotTa = $("#stage-shot-prompt");
+      if (shotTa) {
+        const isSvg = shot.content.kind === "svg";
+        const hasCustom = Boolean(isSvg ? shot.content.customSvgPrompt : shot.content.customCodePrompt);
+        if (!hasCustom) {
+          shotTa.value = isSvg
+            ? renderSvgPromptForShot(w, shot, currentLayoutDef(w), currentThemeDef(w), { ignoreOverride: true })
+            : renderCodePromptForShot(w, shot, currentLayoutDef(w), currentThemeDef(w), { ignoreOverride: true });
+        }
       }
     }
     if (key === "artPrompt" || key === "name" || key === "line" || key.startsWith("point-")) {
@@ -2280,7 +2362,8 @@ const StageStudio = (() => {
     } else if (action === "stage-inspector") inspector.set(w, normalizeModule(value));
     else if (action === "stage-select") { selected.set(w, Number(value)); }
     else if (action === "stage-produce" && shot) { produceShot(w, shot, index); return true; }
-    else if (action === "stage-scene-batch") { prepareSceneCodes(w); return true; }
+    else if (action === "stage-svg-batch") { preparePromptBatch(w, "svg"); return true; }
+    else if (action === "stage-scene-batch") { preparePromptBatch(w, "scene"); return true; }
     else if (action === "stage-create-mg" && shot && (shot.content.kind === "mg" || shot.content.mgRequest)) {
       if (!config.deepseekKeyPresent) { openApiKeys("deepseek"); return true; }
       const existing = mgPanels.get(shot);
@@ -2400,7 +2483,7 @@ const StageStudio = (() => {
       }, hints);
       return true;
     } else if (action === "stage-clear" && shot) {
-      for (const key of ({image:["image","imageMediaSize"],code:["code","reason"],asset:["assetId","assetName"],mg:["assetId","assetName"],art:["libraryArtId","libraryArtName"],"art-image":["art","artName","artMediaSize"],clip:["clip","clipPoster","clipDuration","clipCost"]}[value] || [])) delete shot.content[key];
+      for (const key of ({image:["image","imageMediaSize"],code:["code","reason"],"svg-code":["svgCode","reason"],asset:["assetId","assetName"],mg:["assetId","assetName"],art:["libraryArtId","libraryArtName"],"art-image":["art","artName","artMediaSize"],clip:["clip","clipPoster","clipDuration","clipCost"]}[value] || [])) delete shot.content[key];
       touch(w,true);
     } else if (action === "stage-collect" && value === "clip" && shot?.content.clip) {
       const slot = LayoutEngine.describeMediaSlot(currentLayoutDef(w));
@@ -2420,6 +2503,10 @@ const StageStudio = (() => {
       shot.content.beats.splice(Number(value),1); touch(w,true);
     } else if (action === "stage-reset-shot-prompt" && shot) {
       if (value === "image") delete shot.content.customFullImagePrompt;
+      else if (value === "shot") {
+        if (shot.content.kind === "svg") delete shot.content.customSvgPrompt;
+        else { delete shot.content.customCodePrompt; delete shot.content.codePrompt; }
+      }
       else if (value === "code") delete shot.content.customCodePrompt;
       else if (value === "art") delete shot.content.customArtPrompt;
       touch(w);
@@ -2461,5 +2548,5 @@ const StageStudio = (() => {
     return true;
   }
 
-  return {applies,isActive,normalizeWork,initWork,setupControls,themeName,samplePlan,requestDraft,installDraft,installImages,installClip,installSpeech,syncVoiceUi,finishSpeechUi,editor,hasProductionJob,updateProductionJob,handleInput,handleAction,defaultImagePromptTemplate,defaultArtPromptTemplate,renderImagePromptForShot,renderArtPromptForShot,renderCodePromptForShot,currentProduceKind};
+  return {applies,isActive,normalizeWork,initWork,setupControls,themeName,samplePlan,requestDraft,installDraft,installImages,installClip,installSpeech,syncVoiceUi,finishSpeechUi,editor,hasProductionJob,updateProductionJob,handleInput,handleAction,defaultImagePromptTemplate,defaultArtPromptTemplate,renderImagePromptForShot,renderArtPromptForShot,renderSvgPromptForShot,renderCodePromptForShot,currentProduceKind};
 })();

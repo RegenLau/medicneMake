@@ -98,6 +98,24 @@ class StageVideoTests(unittest.TestCase):
             with self.subTest(bad_code=bad_code), self.assertRaises(ValueError):
                 stage_video.validate_scene_code(bad_code)
 
+        # Prompt-driven pure SVG animation validates cleanly and rejects non-SVG / foreignObject / timers.
+        svg_p = self.payload("svg")
+        svg_p["items"][0]["content"]["svgCode"] = {
+            "svg": '<svg viewBox="0 0 800 450" xmlns="http://www.w3.org/2000/svg"><circle cx="400" cy="225" r="50" fill="var(--v-primary)"/></svg>',
+            "css": "",
+            "js": "const c = root.querySelector('circle'); if (c) c.setAttribute('r', String(40 + 20 * api.progress));",
+        }
+        _, _, svg_shots, _, _ = stage_video.stage_input(svg_p, server.ASSETS, server.media_path)
+        self.assertIn("svgCode", svg_shots[0])
+        for bad_svg in (
+            {"svg": "<div>not svg</div>"},
+            {"svg": '<svg viewBox="0 0 100 100"><foreignObject>x</foreignObject></svg>'},
+            {"svg": '<svg viewBox="0 0 100 100"><img src="/a.png"/></svg>'},
+            {"svg": '<svg viewBox="0 0 100 100"></svg>', "js": "setInterval(() => {}, 10);"},
+        ):
+            with self.subTest(bad_svg=bad_svg), self.assertRaises(ValueError):
+                stage_video.validate_svg_code(bad_svg)
+
         # Legacy card shots still resolve local art if present.
         legacy = self.payload("card")
         legacy["items"][0]["points"]["items"] = [{"title": "找到栏目", "detail": "", "tag": ""}]

@@ -139,30 +139,75 @@ class MixPlanningTests(unittest.TestCase):
 
     def test_produce_shot_uses_selected_kind_and_only_passes_target_script(self):
         shot = self.script["shots"][1]
-        examples = [
-            ("card", {"motionStyle": "auto"}, {"motionStyle": "spotlight"}),
-            ("svg", {"beats": [{"action": "carton", "line": "原包装药盒", "label": "药盒"}]},
-             {"beats": [{"action": "travel", "line": "放进随身包", "label": "放进随身包"}]}),
-        ]
         original = copy.deepcopy(shot)
-        for kind, previous, params in examples:
-            with self.subTest(kind=kind):
-                reason = "把动作拆成观众容易看懂的画面。"
-                client = Mock(return_value=model_response({"plans": [{"params": params, "reason": reason}]}))
-                item = {**self.item, "presentation": kind, "produceShot": {
-                    "shot": shot, "previousParams": previous, "revision": "突出手边要核对的对象",
-                }}
-                result = mix_plan.produce_shot(client, "deepseek-flash", item, self.library)
-                self.assertEqual(kind, result["kind"])
-                self.assertEqual("user", result["decidedBy"])
-                self.assertEqual(reason, result["reason"])
-                self.assertEqual(params, {key: result[key] for key in params})
-                client.assert_called_once()
-                payload = json.loads(client.call_args.args[1]["messages"][1]["content"])
-                self.assertEqual(shot, payload["shot"])
-                self.assertEqual(previous, payload["previousParams"])
-                self.assertEqual("突出手边要核对的对象", payload["revision"])
-                self.assertEqual(original, shot)
+        reason = "把动作拆成观众容易看懂的画面。"
+        params = {"motionStyle": "spotlight"}
+        client = Mock(return_value=model_response({"plans": [{"params": params, "reason": reason}]}))
+        item = {**self.item, "presentation": "card", "produceShot": {
+            "shot": shot, "previousParams": {"motionStyle": "auto"}, "revision": "突出手边要核对的对象",
+        }}
+        result = mix_plan.produce_shot(client, "deepseek-flash", item, self.library)
+        self.assertEqual("card", result["kind"])
+        self.assertEqual("user", result["decidedBy"])
+        self.assertEqual(reason, result["reason"])
+        self.assertEqual(params, {key: result[key] for key in params})
+        client.assert_called_once()
+        payload = json.loads(client.call_args.args[1]["messages"][1]["content"])
+        self.assertEqual(shot, payload["shot"])
+        self.assertEqual({"motionStyle": "auto"}, payload["previousParams"])
+        self.assertEqual("突出手边要核对的对象", payload["revision"])
+        self.assertEqual(original, shot)
+
+    def test_produce_svg_generates_pure_svg_and_auto_repairs_invalid_output(self):
+        shot = self.script["shots"][1]
+        bad_reply = {
+            "reason": "非法包含 foreignObject。",
+            "svgCode": {"svg": '<svg viewBox="0 0 800 450"><foreignObject>x</foreignObject></svg>', "css": "", "js": ""},
+        }
+        valid_reply = {
+            "reason": "用扁平矢量药盒与随身药包演示原包装收纳。",
+            "svgCode": {
+                "svg": '<svg viewBox="0 0 800 450" xmlns="http://www.w3.org/2000/svg"><rect id="box" x="120" y="140" width="160" height="120" rx="16" fill="var(--v-primary)"/></svg>',
+                "css": "",
+                "js": "const b = root.querySelector('#box'); if (b) b.setAttribute('x', String(120 + 180 * api.progress));",
+            },
+        }
+        client = Mock(side_effect=[model_response(bad_reply), model_response(valid_reply)])
+        item = {**self.item, "presentation": "svg", "produceShot": {
+            "shot": shot,
+            "prompt": "画一只扁平矢量药盒滑进随身药包，不要位图插画",
+            "revision": "放大药盒",
+        }}
+        content = mix_plan.produce_shot(client, "deepseek-flash", item, self.library)
+        self.assertEqual("svg", content["kind"])
+        self.assertEqual("user", content["decidedBy"])
+        self.assertEqual(valid_reply["reason"], content["reason"])
+        self.assertEqual("画一只扁平矢量药盒滑进随身药包，不要位图插画", content["customSvgPrompt"])
+        self.assertIn("<svg", content["svgCode"]["svg"])
+        self.assertEqual(2, client.call_count)
+        retry_payload = json.loads(client.call_args.args[1]["messages"][1]["content"])
+        self.assertIn("validationFeedback", retry_payload)
+        self.assertIn("foreignObject", retry_payload["validationFeedback"])
+
+    def test_produce_svg_batch_generates_multiple_shots(self):
+        valid = lambda label: model_response({
+            "reason": f"纯矢量 SVG：{label}",
+            "svgCode": {"svg": f'<svg viewBox="0 0 800 450"><text x="40" y="80">{label}</text></svg>', "css": "", "js": "const p = api.progress;"},
+        })
+        client = Mock(side_effect=[valid("核对药盒"), valid("记录时间")])
+        item = {
+            **self.item,
+            "presentation": "svg",
+            "produceSvgBatch": [
+                {"index": 0, "shot": self.script["shots"][0], "prompt": "矢量药盒标注有效期"},
+                {"index": 2, "shot": self.script["shots"][2], "prompt": "矢量时钟记录服药时间"},
+            ],
+        }
+        out = mix_plan.produce_svg_batch(client, "deepseek-flash", item, self.library)
+        self.assertEqual({"0", "2"}, set(out["contents"]))
+        self.assertEqual({}, out["errors"])
+        self.assertEqual("svg", out["contents"]["0"]["kind"])
+        self.assertIn("核对药盒", out["contents"]["0"]["svgCode"]["svg"])
 
     def test_produce_scene_generates_pure_code_and_auto_repairs_invalid_output(self):
         shot = self.script["shots"][1]
@@ -232,8 +277,6 @@ class MixPlanningTests(unittest.TestCase):
         shot = self.script["shots"][1]
         for kind, old, new in (
             ("card", {"motionStyle": "auto"}, {"motionStyle": "flow"}),
-            ("svg", {"beats": [{"action": "travel", "line": shot["line"], "label": "装药"}]},
-             {"beats": [{"action": "travel", "line": shot["line"], "label": "随身装药"}]}),
             ("mg", {"assetId": asset["id"]}, {"assetId": asset["id"], "fit": "hold", "overlay": "off"}),
         ):
             with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, "相同的画面结构"):
@@ -243,12 +286,12 @@ class MixPlanningTests(unittest.TestCase):
 
     def test_produce_shot_rejects_same_or_invalid_parameters(self):
         shot = self.script["shots"][1]
-        item = {**self.item, "presentation": "svg", "produceShot": {
-            "shot": shot, "previousParams": {"beats": [{"action": "travel", "line": shot["line"], "label": "装药"}]},
+        item = {**self.item, "presentation": "card", "produceShot": {
+            "shot": shot, "previousParams": {"motionStyle": "flow"},
         }}
-        reason = "用道具演示本幕。"
-        for params, error in [({"beats": [{"action": "travel", "line": shot["line"], "label": "装药"}]}, "相同"),
-                              ({"beats": "invalid"}, "无效"), ({"kind": "image"}, "无效"), ({}, "无效")]:
+        reason = "用卡片解释本幕。"
+        for params, error in [({"motionStyle": "flow"}, "相同"), ({"motionStyle": []}, "无效"),
+                              ({"kind": "image"}, "无效"), ({}, "无效")]:
             with self.subTest(params=params), self.assertRaisesRegex(ValueError, error):
                 client = Mock(return_value=model_response({"params": params, "reason": reason}))
                 mix_plan.produce_shot(client, "deepseek-flash", item, self.library)

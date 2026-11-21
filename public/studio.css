@@ -5008,12 +5008,33 @@ dialog.prompt-modal {
   gap: 8px;
 }
 
+.stage-prompt-card {
+  margin-top: 10px;
+}
+
+.stage-prompt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.stage-prompt-head .label {
+  margin: 0;
+}
+
+.stage-prompt-card textarea,
 .stage-full-prompt-box textarea,
 .stage-code-source-box textarea {
   margin-top: 8px;
   font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 12px;
   line-height: 1.6;
+}
+
+.stage-prompt-card textarea {
+  margin-top: 0;
 }
 
 .stage-code-source-box {
