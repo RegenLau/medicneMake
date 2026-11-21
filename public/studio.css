@@ -812,7 +812,7 @@ main {
 }
 
 .cover .tag.st-review::before {
-  background: var(--amber-dot);
+  background: var(--ok);
 }
 
 .cover .tag.st-job::before {

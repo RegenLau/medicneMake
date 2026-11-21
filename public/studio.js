@@ -1119,7 +1119,7 @@ function stageName(w) {
         setup: "待配置",
         script: "分镜草稿",
         draft: "成品草稿",
-        review: "审核中",
+        review: "已发布",
       }[w.stage] || "草稿";
 }
 
@@ -1230,19 +1230,19 @@ function worksList() {
   const counts = {
     全部: data.works.length,
     草稿: data.works.filter((w) => w.stage !== "review").length,
-    审核中: data.works.filter((w) => w.stage === "review").length,
+    已发布: data.works.filter((w) => w.stage === "review").length,
   };
   const list = data.works
     .filter(
       (w) =>
         filter === "全部" ||
-        (filter === "审核中" ? w.stage === "review" : w.stage !== "review"),
+        (filter === "已发布" ? w.stage === "review" : w.stage !== "review"),
     )
     .sort((a, b) => b.updated - a.updated);
 
   return (
     '<div class="flexwrap workFilters">' +
-    ["全部", "草稿", "审核中"]
+    ["全部", "草稿", "已发布"]
       .map((x) =>
         btn(
           x + " · " + counts[x],
@@ -1303,8 +1303,8 @@ function worksList() {
       : '<div class="empty"><h3>暂无' +
         (filter === "全部"
           ? "作品"
-          : filter === "审核中"
-            ? "审核中的作品"
+          : filter === "已发布"
+            ? "已发布的作品"
             : "草稿") +
         '</h3><p>选择创作类型，立即开始一份用药科普。</p><div class="buttons" style="justify-content:center">' +
         btn(ico("book") + " 新建图文科普", "new", "primary", "article") +
@@ -1324,7 +1324,7 @@ function steps(w, activeIdx) {
           ok: w.blocks.length > 0 && !w.job && w.stage !== "review",
         },
         {
-          label: w.stage === "review" ? "作品审核中" : "成品与送审",
+          label: w.stage === "review" ? "已发布" : "成品与发布",
           key: "detail",
           ok: !!w.video && !w.job,
         },
@@ -1337,7 +1337,7 @@ function steps(w, activeIdx) {
           ok: w.blocks.length > 0 && !w.job && w.stage !== "review",
         },
         {
-          label: w.stage === "review" ? "作品审核中" : "成品与送审",
+          label: w.stage === "review" ? "已发布" : "成品与发布",
           key: "detail",
           ok: w.blocks.length > 0 && !!w.title?.trim() && !w.job,
         },
@@ -3760,14 +3760,14 @@ function detail(w) {
         )
         .join("") +
       "</div>"
-    : '<p class="small" style="margin-bottom:12px">尚未选择作品分类（提交审核前必选）</p>';
+    : '<p class="small" style="margin-bottom:12px">尚未选择作品分类（发布前必选）</p>';
 
   const safeDownloadName =
     (w.title || "科普视频").replace(/[\\/:*?"<>|]/g, "_").slice(0, 60) + ".mp4";
 
   const panel =
     '<div class="sheet"><div class="card-head"><h2>' +
-    (reviewing ? "送审状态" : "发布准备") +
+    (reviewing ? "发布状态" : "发布准备") +
     '</h2><span class="status-pill">' +
     stageName(w) +
     '</span></div><div class="formrow"><span class="label">作品分类</span>' +
@@ -3783,10 +3783,10 @@ function detail(w) {
     (reviewing ? "" : '<div class="dividerline"></div>' + checklist(w)) +
     '<div class="dividerline"></div><div class="stack-actions">' +
     (reviewing
-      ? '<p class="footmeta" style="margin-top:0">当前为本地模拟送审状态，作品已保存在「我的作品」。</p>' +
+      ? '<p class="footmeta" style="margin-top:0">作品已确认发布，并保存在「我的作品」。</p>' +
         btn("查看我的作品", "works", "primary widebtn") +
         btn("撤回至草稿继续修改", "withdraw", "secondary widebtn")
-      : btn("提交审核", "submit", "primary widebtn") +
+      : btn("确认并发布", "submit", "primary widebtn") +
         btn(
           vid ? (isTpl && !StageStudio.isActive(w) ? "返回模板编辑" : "返回分镜编辑") : "编辑正文与配图",
           "edit",
@@ -3807,7 +3807,7 @@ function detail(w) {
 
   shell(
     w,
-    reviewing ? "作品审核中" : vid ? "视频成品草稿" : "图文成品草稿",
+    reviewing ? "作品已发布" : vid ? "视频成品草稿" : "图文成品草稿",
     2,
     '<div class="layout"><div>' +
       (vid ? '<div class="sheet"><h2 class="articleTitle">' + esc(w.title) +
@@ -6424,7 +6424,7 @@ document.addEventListener("click", async (e) => {
         w.viewingSetup = false;
         changed(w);
         render();
-        notify("已提交本地模拟审核", "ok");
+        notify("作品已确认发布", "ok");
         break;
       case "withdraw":
         w.stage = "draft";
