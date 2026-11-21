@@ -74,12 +74,17 @@ try {
   const confirm = () => page.getByRole("dialog").locator('[data-action="confirm-paid"]').click();
   const preview = page.frameLocator("#stage-preview");
 
-  // 1. Phase 1: Verify only 4 draft modes appear on setup screen
+  // 1. Phase 1: Verify 3 draft modes appear on setup screen (AI 完整图 recommended, Mix removed)
   await page.goto(origin);
   await page.locator('[data-action="new"][data-val="video"]').click();
   await button("信息图模板").click();
   const modeButtons = await page.locator('[data-action="stage-mode"]').allTextContents();
-  assert.deepEqual(modeButtons, ["Mix 模式（推荐）", "AI 完整图", "信息图动效", "代码动效场景"]);
+  assert.deepEqual(modeButtons, ["AI 完整图（推荐）", "信息图动效", "代码动效场景"]);
+  assert.equal(
+    await page.locator('[data-action="stage-mode"][data-val="image"]').getAttribute("aria-pressed"),
+    "true",
+  );
+  assert.equal(await page.locator('[data-action="stage-mode"][data-val="mix"]').count(), 0);
 
   await page.locator("#topic").fill("出门怎么带药");
   assert.equal(await page.getByRole("spinbutton", { name: "AI 出图上限" }).count(), 0);
@@ -94,8 +99,20 @@ try {
   await confirm();
   await frame();
 
-  // 2. Phase 3: Add sticker on shot 0 appearing at cue 1 (~1.5s) and verify non-overlap + audio peak in export
+  // Verify default draft creates AI 完整图 shots, and individual shots can still switch modes in the editor
+  assert.deepEqual(
+    await page.evaluate(() => current().stagePlan.shots.map((s) => s.content.kind)),
+    ["image", "image", "image"],
+  );
   await select(0);
+  await button("信息图动效").click();
+  await frame();
+  assert.deepEqual(
+    await page.evaluate(() => current().stagePlan.shots.map((s) => s.content.kind)),
+    ["card", "image", "image"],
+  );
+
+  // 2. Phase 3: Add sticker on shot 0 appearing at cue 1 (~1.5s) and verify non-overlap + audio peak in export
   await page.evaluate(() => {
     const w = current();
     const s0 = w.stagePlan.shots[0];

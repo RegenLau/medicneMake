@@ -1287,9 +1287,9 @@ def setting_valid(p):
     for item in items:
         if (
             not isinstance(item.get("prompt"), str)
-            or not 1 <= len(item["prompt"].strip()) <= 2200
+            or not 1 <= len(item["prompt"].strip()) <= 4000
         ):
-            raise ValueError("请填写画面提示词，最多 2200 字")
+            raise ValueError("请填写画面提示词，最多 4000 字")
         if p["kind"] == "images" and p.get("styleReference") is True and "reference" in item:
             reference = media_path(item["reference"])
             if reference.suffix not in (".jpg", ".png", ".webp"):
@@ -3529,6 +3529,7 @@ def write_draft(p, job, save, record=None):
         save()
         job["output"]["images"] = draft_content.article_images(
             tracked_deepseek("规划文章配图"), model, job["output"], item["layout"],
+            custom_prompt=item.get("articleImagePrompt"),
         )
 
 
@@ -3744,6 +3745,64 @@ def preset_music_item(choice):
             "url": "/assets/music/" + choice + ".flac", "tags": [], "source": "工作台预设", "license": "待核对"}
 
 
+def default_video_script_prompt(p):
+    if not isinstance(p, dict):
+        raise ValueError("提示词请求格式无效。")
+    mode = p.get("videoMode") or ("stage" if STAGE_RENDER else "template")
+    if mode not in ("stage", "storyboard", "template", "code-motion", "svg"):
+        raise ValueError("未知的视频脚本模式。")
+    drug = draft_content.string_field(p, "drug", 60, optional=True)
+    duration = p.get("duration")
+    if duration is not None and (type(duration) is not int or duration not in draft_content.DURATIONS):
+        raise ValueError("视频参考时长无效。")
+    ratio = p.get("ratio") or ("9:16" if mode == "storyboard" else "16:9")
+    if ratio not in draft_content.RATIO_LABELS:
+        raise ValueError("视频画幅无效。")
+    layout_id = p.get("layoutId") or stage_video.CLASSIC_LAYOUT
+    if not isinstance(layout_id, str):
+        raise ValueError("布局 ID 无效。")
+    item = {
+        "drug": drug,
+        "layoutId": layout_id,
+        "pharmacist": p.get("pharmacist") is True,
+    }
+    if mode == "stage":
+        prompt = mix_plan.build_script_prompt(item, duration, library=ASSETS)
+    elif mode == "code-motion":
+        prompt = draft_content.build_code_motion_prompt(item, duration)
+    elif mode == "template":
+        prompt = draft_content.build_template_video_prompt(item, duration)
+    elif mode == "svg":
+        prompt = draft_content.build_svg_video_prompt(item, duration)
+    else:
+        prompt = draft_content.build_video_draft_prompt(item, duration, ratio)
+    return {"mode": mode, "prompt": prompt}
+
+
+def default_prompt_template(p):
+    if not isinstance(p, dict):
+        raise ValueError("提示词请求格式无效。")
+    kind = p.get("kind")
+    if kind == "article-draft":
+        layout = p.get("layout") or "通俗图解版"
+        drug = draft_content.string_field(p, "drug", 60, optional=True)
+        return {"kind": kind, "prompt": draft_content.build_article_draft_prompt({"layout": layout, "drug": drug})}
+    if kind == "article-images":
+        layout = p.get("layout") or "通俗图解版"
+        return {"kind": kind, "prompt": draft_content.build_article_images_prompt(layout)}
+    if kind == "stage-arrange":
+        layout_id = p.get("layoutId") or stage_video.CLASSIC_LAYOUT
+        pres = p.get("presentation") or "mix"
+        if pres not in ("mix", "svg", "mg"):
+            raise ValueError("未知的编排方式。")
+        return {"kind": kind, "prompt": mix_plan.build_arrange_prompt({"layoutId": layout_id, "presentation": pres}, ASSETS, mode=pres)}
+    if kind == "stage-produce":
+        layout_id = p.get("layoutId") or stage_video.CLASSIC_LAYOUT
+        pres = p.get("presentation") or "card"
+        return {"kind": kind, "prompt": mix_plan.build_produce_shot_prompt({"layoutId": layout_id, "presentation": pres}, ASSETS, kind=pres)}
+    raise ValueError("未知的提示词类型。")
+
+
 def list_assets():
     items = ASSETS.items()
     return [
@@ -3814,6 +3873,19 @@ class Handler(SimpleHTTPRequestHandler):
                     "videoRates": work_costs.VIDEO_RATES,
                     "sfxPacks": ASSETS.sound_packs(),
                     "svgMotion": {"actions": svg_motion.ACTIONS, "exportReady": svg_motion.ready(FFMPEG)},
+                    "scriptPromptEditor": True,
+                    "promptStudio": True,
+                    "defaultScriptPrompts": {
+                        mode: default_video_script_prompt({"videoMode": mode})["prompt"]
+                        for mode in ("stage", "storyboard", "template", "code-motion", "svg")
+                    },
+                    "defaultPrompts": {
+                        "article-draft": default_prompt_template({"kind": "article-draft"})["prompt"],
+                        "article-images": default_prompt_template({"kind": "article-images"})["prompt"],
+                        "stage-arrange:mix": default_prompt_template({"kind": "stage-arrange", "presentation": "mix"})["prompt"],
+                        "stage-produce:card": default_prompt_template({"kind": "stage-produce", "presentation": "card"})["prompt"],
+                        "stage-produce:scene": default_prompt_template({"kind": "stage-produce", "presentation": "scene"})["prompt"],
+                    },
                     **speech_connection(),
                     "keyStorage": KEY_STORAGE,
                 },
@@ -3917,7 +3989,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         if (
-            self.path not in ("/api/jobs", "/api/costs", "/api/ark-key", "/api/deepseek-key", "/api/speech-key", "/api/dashscope-key", "/api/mureka-key", "/api/upload-frame", "/api/generate-music", "/api/music-library/rename", "/api/music-library/delete",
+            self.path not in ("/api/jobs", "/api/costs", "/api/script-prompt", "/api/prompt-template", "/api/ark-key", "/api/deepseek-key", "/api/speech-key", "/api/dashscope-key", "/api/mureka-key", "/api/upload-frame", "/api/generate-music", "/api/music-library/rename", "/api/music-library/delete",
                               "/api/library/upload", "/api/library/collect-image", "/api/library/collect-video", "/api/library/copy-layout", "/api/library/copy-theme", "/api/library/motion-palette", "/api/library/mg-decide", "/api/library/archive")
             or not self.allowed()
             or self.headers.get("Origin") not in (ORIGIN, f"http://localhost:{PORT}")
@@ -3926,7 +3998,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_error(403)
         try:
             n = int(self.headers.get("Content-Length", "0"))
-            max_bytes = 8_000_000 if self.path == "/api/upload-frame" else (100000 if self.path in ("/api/jobs", "/api/costs", "/api/generate-music") else 4096)
+            max_bytes = 8_000_000 if self.path == "/api/upload-frame" else (200_000 if self.path == "/api/jobs" else (100000 if self.path in ("/api/costs", "/api/generate-music") else (16_000 if self.path in ("/api/script-prompt", "/api/prompt-template") else 4096)))
             if self.path == "/api/library/upload":
                 max_bytes = 11_200_000
             elif self.path in ("/api/library/collect-image", "/api/library/collect-video", "/api/library/copy-layout", "/api/library/copy-theme", "/api/library/motion-palette"):
@@ -3936,6 +4008,10 @@ class Handler(SimpleHTTPRequestHandler):
             p = json.loads(self.rfile.read(n))
             if not isinstance(p, dict):
                 raise ValueError("请求格式无效")
+            if self.path == "/api/script-prompt":
+                return self.send_json(200, default_video_script_prompt(p))
+            if self.path == "/api/prompt-template":
+                return self.send_json(200, default_prompt_template(p))
             if self.path == "/api/upload-frame":
                 return self.send_json(200, save_uploaded_frame(p))
             if self.path == "/api/library/upload":

@@ -481,6 +481,83 @@ class MixPlanningTests(unittest.TestCase):
         self.assertEqual(3, client.call_count)
         self.assertEqual(shorter_still_over["shots"][0]["line"], result["shots"][0]["line"])
 
+    def test_script_prompt_lets_model_plan_scenes_with_opening_and_closing(self):
+        for reference, scenes, chars in ((30, "3–5 幕", "不超过 112 字"), (60, "3–7 幕", "不超过 220 字")):
+            with self.subTest(reference=reference):
+                prompt = mix_plan.build_script_prompt(self.item, reference)
+                self.assertIn(scenes, prompt)
+                self.assertIn(chars, prompt)
+                self.assertIn("第一幕是开头，最后一幕是收尾", prompt)
+                self.assertIn("开头幕用 cover，收尾幕用 summary", prompt)
+                self.assertNotIn('"type":"结构"', prompt)
+                self.assertNotIn("每幕 1–2 拍", prompt)
+        open_prompt = mix_plan.build_script_prompt(self.item, None)
+        self.assertIn("未指定参考时长", open_prompt)
+        self.assertIn("3–7 幕", open_prompt)
+
+    def test_tighten_prompt_keeps_opening_and_closing(self):
+        overlong = copy.deepcopy(self.script)
+        for shot in overlong["shots"]:
+            shot["line"] = "孩子发烧时退烧药一定要按体重计算用量并且注意间隔时间不能随意叠加服用。" * 3
+            shot["cues"] = [{"text": shot["line"], "focus": "0", "weight": len(shot["line"])}]
+        client = Mock(side_effect=[model_response(overlong), model_response(copy.deepcopy(self.script))])
+        mix_plan.write_script(client, "deepseek-flash", self.item, 30, CATALOG)
+        tighten_prompt = client.call_args.args[1]["messages"][0]["content"]
+        self.assertIn("保留第一幕开头和最后一幕收尾", tighten_prompt)
+        self.assertIn("全片保留 3–5 幕", tighten_prompt)
+
+    def test_write_script_uses_custom_script_prompt_when_provided(self):
+        raw = copy.deepcopy(self.script)
+        custom_prompt = "自定义医院科普短视频提示词：第一句必须抛痛点，返回 JSON 格式。"
+        client = Mock(return_value=model_response(raw))
+        result = mix_plan.write_script(
+            client, "deepseek-flash", {**self.item, "scriptPrompt": custom_prompt}, 45, CATALOG,
+        )
+        self.assertEqual(custom_prompt, client.call_args.args[1]["messages"][0]["content"])
+        self.assertEqual(raw["title"], result["title"])
+
+        default_built = mix_plan.build_script_prompt(self.item, 45)
+        client.reset_mock()
+        mix_plan.write_script(client, "deepseek-flash", self.item, 45, CATALOG)
+        self.assertEqual(default_built, client.call_args.args[1]["messages"][0]["content"])
+
+    def test_arrange_and_produce_shot_use_custom_prompts_when_provided(self):
+        custom_arrange = '自定义编排提示词，只返回 JSON：{"shots":[{"index":0,"kind":"card","reason":"...","fallback":"card","params":{}}]}'
+        reply = {"shots": [
+            {"index": i, "kind": "card", "reason": f'「{row["name"]}」使用卡片讲解', "fallback": "card", "params": {"motionStyle": "flow"}}
+            for i, row in enumerate(self.script["shots"])
+        ]}
+        client = Mock(return_value=model_response(reply))
+        mix_plan.arrange(
+            client, "deepseek-flash",
+            {**self.item, "presentation": "mix", "arrangePrompt": custom_arrange},
+            copy.deepcopy(self.script), self.library,
+        )
+        self.assertEqual(custom_arrange, client.call_args.args[1]["messages"][0]["content"])
+
+        custom_produce = '自定义单幕制作提示词，只返回 JSON：{"plans":[{"params":{},"reason":"..."}]}'
+        prod_reply = {"plans": [{"params": {"motionStyle": "pulse"}, "reason": "突出提醒节奏"}]}
+        p_client = Mock(return_value=model_response(prod_reply))
+        mix_plan.produce_shot(
+            p_client, "deepseek-flash",
+            {
+                **self.item,
+                "presentation": "card",
+                "produceShot": {"shot": copy.deepcopy(self.script["shots"][0]), "previousParams": {"motionStyle": "flow"}},
+                "produceShotPrompt": custom_produce,
+            },
+            self.library,
+        )
+        self.assertEqual(custom_produce, p_client.call_args.args[1]["messages"][0]["content"])
+
+        with self.assertRaisesRegex(ValueError, "JSON"):
+            mix_plan.validate_setup({**self.item, "presentation": "mix", "arrangePrompt": "没有格式关键字"}, self.library)
+        with self.assertRaisesRegex(ValueError, "JSON"):
+            mix_plan.validate_setup(
+                {**self.item, "presentation": "card", "produceShot": {"shot": copy.deepcopy(self.script["shots"][0])}, "produceShotPrompt": "没有格式关键字"},
+                self.library,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2051,7 +2051,7 @@
     return "清晰分区构图：上半部 6%–42% 居中排布大字问题与结论卡片；下半部 44%–93% 放 1 组简洁医学主视觉插画与精简短词标签。";
   }
 
-  function buildCardImagePrompt(rawDeck, slideIndex, customPrompt, drug, layoutOrSlot, themeDef) {
+  function _cardImageParts(rawDeck, slideIndex, customPrompt, drug, layoutOrSlot, themeDef) {
     const deck = normalizeDeck(rawDeck);
     const slide = deck.slides[slideIndex] || deck.slides[0];
     const slot = layoutOrSlot ? resolveMediaSlot(layoutOrSlot) : null;
@@ -2091,17 +2091,73 @@
       slot?.isFlush && "顶部与底部不要画贴边深色标题栏或页脚横条",
     ].filter(Boolean).join("，");
 
-    return [
+    return {
       purposeLine,
       safeEdgeRule,
-      gridRuleForType(slide, slot),
+      gridLine: gridRuleForType(slide, slot),
       textRule,
       themeRule,
-      desc ? `画面与排版设计：${desc}` : defaultDesign,
-      visualLabels && `图内核心词条（保持精简）：${visualLabels.slice(0, 200)}`,
-      footer && slide.type !== "summary" && `底部单行提示条：${footer}`,
-      drug && `涉及药品：${drug}（通用外观，不画品牌名、商品Logo与价格）。`,
-      `禁用元素：不要画医生或主讲人头像，不要画顶部章节导航栏，不要画底部视频字幕，${extraBan ? extraBan + "，" : ""}不要在图内写「科普内容仅供参考」等免责声明，不出现英文乱码、水印或红十字标志。`,
+      designLine: desc ? `画面与排版设计：${desc}` : defaultDesign,
+      labelsLine: visualLabels ? `图内核心词条（保持精简）：${visualLabels.slice(0, 200)}` : "",
+      footerLine: footer && slide.type !== "summary" ? `底部单行提示条：${footer}` : "",
+      drugLine: drug ? `涉及药品：${drug}（通用外观，不画品牌名、商品Logo与价格）。` : "",
+      banLine: `禁用元素：不要画医生或主讲人头像，不要画顶部章节导航栏，不要画底部视频字幕，${extraBan ? extraBan + "，" : ""}不要在图内写「科普内容仅供参考」等免责声明，不出现英文乱码、水印或红十字标志。`,
+    };
+  }
+
+  function defaultCardImageTemplate(rawDeck, layoutOrSlot, themeDef) {
+    const parts = _cardImageParts(rawDeck || { slides: [{ type: "explain", headline: "" }] }, 0, "", "", layoutOrSlot, themeDef);
+    return [
+      parts.purposeLine,
+      parts.safeEdgeRule,
+      "{{本幕构图}}",
+      parts.textRule,
+      parts.themeRule,
+      "{{画面与排版设计}}",
+      "{{图内核心词条}}",
+      "{{底部单行提示条}}",
+      "{{药品说明}}",
+      parts.banLine,
+    ].join("\n");
+  }
+
+  function renderCardImageTemplate(templateText, rawDeck, slideIndex, customPrompt, drug, layoutOrSlot, themeDef) {
+    const parts = _cardImageParts(rawDeck, slideIndex, customPrompt, drug, layoutOrSlot, themeDef);
+    const map = {
+      "{{本幕构图}}": parts.gridLine,
+      "{{画面与排版设计}}": parts.designLine,
+      "{{图内核心词条}}": parts.labelsLine,
+      "{{底部单行提示条}}": parts.footerLine,
+      "{{药品说明}}": parts.drugLine,
+    };
+    const rendered = String(templateText || "")
+      .replace(/\r\n?/g, "\n")
+      .split("\n")
+      .map((line) => {
+        let next = line;
+        for (const [token, val] of Object.entries(map)) {
+          if (next.includes(token)) next = next.split(token).join(val);
+        }
+        return next.trim();
+      })
+      .filter(Boolean)
+      .join("\n");
+    return rendered.slice(0, 3800);
+  }
+
+  function buildCardImagePrompt(rawDeck, slideIndex, customPrompt, drug, layoutOrSlot, themeDef) {
+    const parts = _cardImageParts(rawDeck, slideIndex, customPrompt, drug, layoutOrSlot, themeDef);
+    return [
+      parts.purposeLine,
+      parts.safeEdgeRule,
+      parts.gridLine,
+      parts.textRule,
+      parts.themeRule,
+      parts.designLine,
+      parts.labelsLine,
+      parts.footerLine,
+      parts.drugLine,
+      parts.banLine,
     ].filter(Boolean).join("\n").slice(0, 2100);
   }
 
@@ -2588,6 +2644,8 @@
     highlightText,
     renderFallbackCard,
     buildCardImagePrompt,
+    defaultCardImageTemplate,
+    renderCardImageTemplate,
     buildOutroImagePrompt,
     renderFrameHtml,
     renderAvatarProgress,

@@ -560,7 +560,9 @@
     const s = w.settings;
     const music = s.music ?? defaults.music;
     const rawAvatarMode = s.avatarMode ?? dataStore.settings?.avatarMode ?? defaults.avatarMode;
-    const avatarMode = typeof resolveAvatarMode === "function" ? resolveAvatarMode(rawAvatarMode) : (rawAvatarMode === "static" ? "static" : "videoretalk");
+    const avatarMode = typeof resolveAvatarMode === "function"
+      ? resolveAvatarMode(rawAvatarMode)
+      : (rawAvatarMode === "videoretalk" || rawAvatarMode === "wan2.2-s2v" ? rawAvatarMode : "static");
     const cfg = typeof config !== "undefined" ? config : global.config;
     const themeObj = TemplateVideo.THEMES.find((t) => t.id === deck.theme);
     const presObj = TemplateVideo.PRESENTERS.find((pr) => pr.id === deck.presenter);
@@ -1094,10 +1096,15 @@
       '<textarea id="tpl-image-prompt" rows="3" maxlength="400" placeholder="' + (isOutro ? "例如：温暖安心的16:9结尾卡片，居中突出核心行动金句，配简洁健康盾牌与药盒插画" : "例如：左右双栏对比科普图，标题……，左栏……，右栏……，底部提示条……") + '">' +
       hooks.esc(prompt) +
       "</textarea></label>" +
-      '<details class="shot-options"><summary>查看完整生成提示词</summary>' +
-      '<textarea id="tpl-generated-prompt" rows="5" readonly aria-label="提交给方舟的提示词">' +
-      hooks.esc(fullPrompt) +
-      "</textarea></details>" +
+      '<details class="shot-options stage-full-prompt-box"><summary>查看并编辑完整生成提示词' +
+      (imageModalState.customFullPrompt ? ' <span class="prompt-badge is-custom">已手改</span>' : "") +
+      "</summary>" +
+      '<textarea id="tpl-generated-prompt" rows="6" maxlength="3800" aria-label="提交给方舟的提示词">' +
+      hooks.esc(imageModalState.customFullPrompt || fullPrompt) +
+      "</textarea>" +
+      '<div class="asset-inline" style="margin-top:6px">' +
+      hooks.btn("恢复自动拼装", "tpl-reset-full-prompt", "textbtn", "", imageModalState.customFullPrompt ? "" : "disabled") +
+      "</div></details>" +
       '<div class="fields" style="margin-top:11px">' +
       '<label class="field">生图模型<select id="tpl-picture-model">' +
       hooks.opts(models, imageModel) +
@@ -1151,12 +1158,23 @@
     if (kind === "prompt") {
       imageModalState.prompt = value;
       const preview = document.getElementById("tpl-generated-prompt");
-      if (preview && w) {
+      if (preview && w && !imageModalState.customFullPrompt) {
         const deck = buildDeckForWork(w, hooks.data);
         preview.value = imageModalState.slot === "outro"
           ? TemplateVideo.buildOutroImagePrompt(deck, imageModalState.index, value, w.drug)
           : TemplateVideo.buildCardImagePrompt(deck, imageModalState.index, value, w.drug);
       }
+      return true;
+    }
+    if (kind === "fullPrompt") {
+      imageModalState.customFullPrompt = value;
+      const resetBtn = document.querySelector('[data-action="tpl-reset-full-prompt"]');
+      if (resetBtn) resetBtn.disabled = !value.trim();
+      return true;
+    }
+    if (kind === "resetFullPrompt") {
+      delete imageModalState.customFullPrompt;
+      renderImageDialog(w, hooks);
       return true;
     }
     if (kind === "model") {
@@ -1177,12 +1195,13 @@
     imageModalState = null;
   }
 
-  function buildSlideImagePayload(w, deck, slideIndex, rawPrompt, settings, hooks, slotKind) {
+  function buildSlideImagePayload(w, deck, slideIndex, rawPrompt, settings, hooks, slotKind, customFullPrompt) {
     const isOutro = slotKind === "outro";
     const slide = deck.slides[slideIndex];
-    const fullPrompt = isOutro
+    const override = typeof customFullPrompt === "string" ? customFullPrompt.trim() : "";
+    const fullPrompt = override || (isOutro
       ? TemplateVideo.buildOutroImagePrompt(deck, slideIndex, rawPrompt, w.drug)
-      : TemplateVideo.buildCardImagePrompt(deck, slideIndex, rawPrompt, w.drug);
+      : TemplateVideo.buildCardImagePrompt(deck, slideIndex, rawPrompt, w.drug));
     const payload = {
       id: crypto.randomUUID(),
       mode: "ark",
@@ -1291,7 +1310,7 @@
     }
   }
 
-  async function startSlideImageJob(w, slideIndex, rawPrompt, settings, hooks, slotKind) {
+  async function startSlideImageJob(w, slideIndex, rawPrompt, settings, hooks, slotKind, customFullPrompt) {
     const isOutro = slotKind === "outro";
     const jobKey = isOutro ? "outroJob" : "job";
     const deck = buildDeckForWork(w, hooks.data);
@@ -1300,7 +1319,7 @@
     const promptStr = String(rawPrompt ?? (isOutro ? slide.outroImagePrompt : slide.imagePrompt) ?? "").trim();
     if (isOutro) slide.outroImagePrompt = promptStr;
     else slide.imagePrompt = promptStr;
-    const payload = buildSlideImagePayload(w, deck, slideIndex, promptStr, settings, hooks, isOutro ? "outro" : "main");
+    const payload = buildSlideImagePayload(w, deck, slideIndex, promptStr, settings, hooks, isOutro ? "outro" : "main", customFullPrompt);
     slide[jobKey] = { target: isOutro ? "tpl-outro-image" : "tpl-image", payload, rawPrompt: promptStr };
     await sendSlideJob(w, slide, hooks, isOutro ? "outro" : "main");
   }
@@ -1524,7 +1543,9 @@
 
     const usesSpeech = w.settings.voice !== "无配音";
     const rawAvatarMode = w.settings.avatarMode ?? dataStore.settings?.avatarMode ?? defaults.avatarMode;
-    const avatarMode = typeof resolveAvatarMode === "function" ? resolveAvatarMode(rawAvatarMode) : (rawAvatarMode === "static" ? "static" : "videoretalk");
+    const avatarMode = typeof resolveAvatarMode === "function"
+      ? resolveAvatarMode(rawAvatarMode)
+      : (rawAvatarMode === "videoretalk" || rawAvatarMode === "wan2.2-s2v" ? rawAvatarMode : "static");
     const avatarResolution = w.settings.avatarResolution || dataStore.settings?.avatarResolution || defaults.avatarResolution || "480P";
     const usesAvatar = usesSpeech && deck.presenter !== "none" && avatarMode !== "static";
 

@@ -105,6 +105,8 @@ const paths = {
   down: '<path d="m7 10 5 5 5-5"/>',
   download: '<path d="M12 4v11m-4-4 4 4 4-4M4 19h16"/>',
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  expand: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
+  reset: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
 };
 
 const ico = (key, cls = "icon") =>
@@ -203,7 +205,7 @@ const avatarResolutionOptions = [
 ];
 function resolveAvatarMode(raw) {
   if (raw === "static" || raw === "videoretalk" || raw === "wan2.2-s2v") return raw;
-  return "videoretalk";
+  return "static";
 }
 function avatarRatePerSecond(mode, resolution) {
   if (mode === "videoretalk") return 0.08;
@@ -223,7 +225,7 @@ const defaults = {
   watermark: true,
   voice: defaultVoice,
   music: "auto",
-  avatarMode: "videoretalk",
+  avatarMode: "static",
   avatarResolution: "480P",
 };
 
@@ -291,6 +293,12 @@ if (!data.yunzhouVoiceAutoMusicDefaultApplied) {
 if (!data.liufeiVoiceDefaultApplied) {
   data.settings.voice = defaultVoice;
   data.liufeiVoiceDefaultApplied = true;
+  save();
+}
+
+if (!data.staticAvatarDefaultApplied) {
+  data.settings.avatarMode = defaults.avatarMode;
+  data.staticAvatarDefaultApplied = true;
   save();
 }
 
@@ -701,6 +709,7 @@ function updateTopbar() {
 
 function openModal(title, body, type = "generic") {
   modalType = type;
+  dialog.classList.toggle("prompt-modal", type === "script-prompt" || type === "prompt-studio");
   dialogBody.innerHTML =
     '<div class="dialog-head"><h2>' +
     esc(title) +
@@ -1457,6 +1466,1209 @@ function layoutChoice(value) {
   );
 }
 
+const scriptPromptCache = new Map();
+const scriptPromptInflight = new Map();
+let scriptPromptModalTab = "edit";
+
+function normalizePromptText(text) {
+  return String(text ?? "").replace(/\r\n?/g, "\n");
+}
+
+function scriptPromptMode(w) {
+  if (!w || w.type !== "video") return "stage";
+  if (StageStudio.isActive(w)) return "stage";
+  if (isCodeMotion(w)) return "code-motion";
+  if (TemplateStudio.isTemplateVideo(w)) return "template";
+  if (isSvgVideo(w)) return "svg";
+  return "storyboard";
+}
+
+function scriptPromptModeLabel(mode) {
+  return {
+    stage: "信息图模板讲解",
+    storyboard: "AI 分镜动画",
+    template: "模板分镜讲解",
+    "code-motion": "代码动效分镜",
+    svg: "SVG 演示动画",
+  }[mode] || "视频脚本";
+}
+
+function scriptPromptParams(w) {
+  const mode = scriptPromptMode(w);
+  const ratio = mode === "storyboard" ? (w.settings?.ratio || "9:16") : "16:9";
+  return {
+    videoMode: mode,
+    layoutId: mode === "stage" ? (w.stagePlan?.layout?.id || "builtin:layout/info-classic") : "builtin:layout/info-classic",
+    drug: (w.drug || "").trim(),
+    duration: videoReferenceSeconds(w),
+    ratio,
+    pharmacist: mode === "storyboard" && w.avatar === pharmacistAvatar,
+  };
+}
+
+function scriptPromptSignature(params) {
+  return JSON.stringify(params);
+}
+
+function isBaselineScriptPromptParams(params) {
+  const defaultRatio = params.videoMode === "storyboard" ? "9:16" : "16:9";
+  return (
+    params.layoutId === "builtin:layout/info-classic" &&
+    !params.drug &&
+    params.duration === null &&
+    params.ratio === defaultRatio &&
+    !params.pharmacist
+  );
+}
+
+function getCachedSystemScriptPrompt(w) {
+  const params = scriptPromptParams(w);
+  const sig = scriptPromptSignature(params);
+  if (scriptPromptCache.has(sig)) return scriptPromptCache.get(sig);
+  const fallback = config?.defaultScriptPrompts?.[params.videoMode] || "";
+  if (fallback && isBaselineScriptPromptParams(params)) {
+    scriptPromptCache.set(sig, fallback);
+  }
+  return fallback;
+}
+
+function getScriptPromptState(w) {
+  const mode = scriptPromptMode(w);
+  const params = scriptPromptParams(w);
+  const sig = scriptPromptSignature(params);
+  const systemPrompt = getCachedSystemScriptPrompt(w);
+  const savedRaw = data.savedScriptPrompts?.[mode];
+  const savedDefault = typeof savedRaw === "string" && savedRaw.trim() ? normalizePromptText(savedRaw) : "";
+  const hasWorkEntry = Boolean(w.scriptPrompts && Object.prototype.hasOwnProperty.call(w.scriptPrompts, mode));
+  const workEntry = hasWorkEntry ? w.scriptPrompts[mode] : undefined;
+
+  let value = systemPrompt;
+  let source = "system";
+  if (typeof workEntry === "string") {
+    value = normalizePromptText(workEntry);
+    source = "work";
+  } else if (workEntry === null) {
+    value = systemPrompt;
+    source = "system";
+  } else if (savedDefault) {
+    value = savedDefault;
+    source = "saved";
+  }
+
+  const normSys = normalizePromptText(systemPrompt);
+  const normVal = normalizePromptText(value);
+  const isCustom = Boolean(normSys) ? normVal.trim() !== normSys.trim() : Boolean(normVal.trim());
+  const isEmpty = !normVal.trim();
+  const missingJson = !isEmpty && !/json/i.test(normVal);
+  const matchesSaved = Boolean(savedDefault) && normVal.trim() === savedDefault.trim();
+  const canSaveDefault = !isEmpty && !missingJson && isCustom && !matchesSaved;
+  const canResetSystem = source !== "system" || isCustom;
+
+  let badgeLabel = "系统默认";
+  let badgeClass = "is-default";
+  let summaryLabel = "系统默认";
+  if (source === "work" && isCustom) {
+    badgeLabel = "已修改";
+    badgeClass = "is-custom";
+    summaryLabel = "已自定义（本作品）";
+  } else if (source === "saved" && isCustom) {
+    badgeLabel = "常用默认";
+    badgeClass = "is-saved";
+    summaryLabel = "已优化（常用默认）";
+  }
+
+  return {
+    mode,
+    params,
+    sig,
+    systemPrompt,
+    savedDefault,
+    value,
+    source,
+    isCustom,
+    isEmpty,
+    missingJson,
+    matchesSaved,
+    canSaveDefault,
+    canResetSystem,
+    badgeLabel,
+    badgeClass,
+    summaryLabel,
+    syncPending: !scriptPromptCache.has(sig),
+  };
+}
+
+function syncSystemScriptPrompt(w) {
+  if (!w || w.type !== "video") return;
+  const params = scriptPromptParams(w);
+  const sig = scriptPromptSignature(params);
+  if (scriptPromptCache.has(sig)) return;
+  if (config?.defaultScriptPrompts?.[params.videoMode] && isBaselineScriptPromptParams(params)) {
+    scriptPromptCache.set(sig, config.defaultScriptPrompts[params.videoMode]);
+    return;
+  }
+  let pending = scriptPromptInflight.get(sig);
+  if (!pending) {
+    pending = jsonRequest("/api/script-prompt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+    })
+      .then((res) => {
+        if (typeof res?.prompt === "string") {
+          scriptPromptCache.set(sig, res.prompt);
+        }
+        return res?.prompt || "";
+      })
+      .catch(() => "")
+      .finally(() => {
+        scriptPromptInflight.delete(sig);
+      });
+    scriptPromptInflight.set(sig, pending);
+  }
+  pending.then((promptText) => {
+    if (!promptText || current() !== w) return;
+    if (scriptPromptSignature(scriptPromptParams(w)) !== sig) return;
+    const state = getScriptPromptState(w);
+    const inlineTa = $("#video-script-prompt");
+    if (inlineTa && state.source === "system" && inlineTa.value !== state.value) {
+      inlineTa.value = state.value;
+    }
+    const modalTa = $("#script-prompt-modal-input", dialogBody);
+    if (modalTa && state.source === "system" && modalTa.value !== state.value) {
+      modalTa.value = state.value;
+    }
+    updateScriptPromptCardUI(w);
+    if (dialog.open && modalType === "script-prompt" && scriptPromptModalTab === "diff") {
+      renderScriptPromptModalBody(w);
+    }
+  });
+}
+
+function scriptPromptDynamicContextLabel(params) {
+  const parts = [];
+  if (params.videoMode === "stage") {
+    const layoutName = (config?.stageLayouts || []).find((item) => item.id === params.layoutId)?.name;
+    if (layoutName) parts.push(`布局「${layoutName}」`);
+  }
+  parts.push(params.duration ? `时长 ${params.duration} 秒` : "时长自动");
+  if (params.drug) parts.push(`药品「${params.drug}」`);
+  if (params.videoMode === "storyboard") {
+    parts.push(`画幅 ${params.ratio}`);
+    if (params.pharmacist) parts.push("药师出镜");
+  }
+  return parts.join(" · ");
+}
+
+function scriptPromptWarningText(st) {
+  if (!config?.scriptPromptEditor) {
+    return "本地工作台服务尚未更新，请重启工作台服务后刷新页面，即可自动加载系统默认提示词。";
+  }
+  if (st.source === "system" && st.isEmpty) {
+    return st.syncPending ? "" : "未能加载当前系统默认提示词，请刷新页面或重启本地工作台服务。";
+  }
+  if (st.isEmpty) {
+    return "提示词不能为空，请补充内容或点击「恢复系统默认」。";
+  }
+  if (st.missingJson) {
+    return "未检测到 JSON 输出格式说明，直接生成可能导致分镜脚本解析失败。";
+  }
+  return "";
+}
+
+function renderScriptPromptCard(w) {
+  const st = getScriptPromptState(w);
+  const contextText = scriptPromptDynamicContextLabel(st.params);
+  const warnText = scriptPromptWarningText(st);
+  return (
+    '<div class="sheet setup-prompt-panel">' +
+    '<div class="card-head">' +
+    '<div class="prompt-head-title">' +
+    "<h2>视频脚本提示词</h2>" +
+    '<span id="script-prompt-badge" class="prompt-badge ' + st.badgeClass + '">' + esc(st.badgeLabel) + "</span>" +
+    "</div>" +
+    btn(ico("expand") + " 放大编辑", "script-prompt-expand", "textbtn prompt-expand-btn") +
+    "</div>" +
+    '<div class="prompt-meta-row">' +
+    '<span class="small" id="script-prompt-context">' + esc(contextText) + "</span>" +
+    '<span class="small" id="script-prompt-chars">' + st.value.length.toLocaleString("zh-CN") + " 字</span>" +
+    "</div>" +
+    '<textarea id="video-script-prompt" class="prompt-editor-textarea" data-script-prompt="inline" rows="11" maxlength="20000" aria-label="视频脚本提示词" placeholder="默认加载当前模式下的系统脚本提示词，可直接修改优化并测试效果">' +
+    esc(st.value) +
+    "</textarea>" +
+    '<p class="prompt-warn" id="script-prompt-json-warn"' + (warnText ? "" : " hidden") + ">" + esc(warnText) + "</p>" +
+    '<p class="small prompt-sync-hint" id="script-prompt-sync-hint"' + (st.isCustom ? "" : " hidden") + ">" +
+    "当前使用自定义提示词，修改左侧布局/时长/药品不会覆盖你的内容；可在「放大编辑」中与系统默认对比。" +
+    "</p>" +
+    '<div class="prompt-actions">' +
+    btn(ico("copy") + " 复制提示词", "script-prompt-copy", "outline") +
+    btn("存为常用默认", "script-prompt-save-default", "outline", "", st.canSaveDefault ? "" : "disabled") +
+    btn(ico("reset") + " 恢复系统默认", "script-prompt-reset", "textbtn", "", st.canResetSystem ? "" : "disabled") +
+    "</div>" +
+    '<p class="footmeta setup-footnote">默认内容为当前系统生成脚本的完整提示词，修改后直接生效于本次生成；建议保留【输出】中的 JSON 格式要求。</p>' +
+    "</div>"
+  );
+}
+
+function updateScriptPromptCardUI(w) {
+  if (!w || w.type !== "video") return;
+  const st = getScriptPromptState(w);
+  const badge = $("#script-prompt-badge");
+  if (badge) {
+    badge.textContent = st.badgeLabel;
+    badge.className = "prompt-badge " + st.badgeClass;
+  }
+  const summaryVal = $("#setup-summary-prompt-state");
+  if (summaryVal) summaryVal.textContent = st.summaryLabel;
+  const chars = $("#script-prompt-chars");
+  if (chars) chars.textContent = st.value.length.toLocaleString("zh-CN") + " 字";
+  const warn = $("#script-prompt-json-warn");
+  if (warn) {
+    const warnText = scriptPromptWarningText(st);
+    warn.textContent = warnText;
+    warn.hidden = !warnText;
+  }
+  const syncHint = $("#script-prompt-sync-hint");
+  if (syncHint) syncHint.hidden = !st.isCustom;
+  for (const el of document.querySelectorAll('[data-action="script-prompt-save-default"]')) {
+    el.disabled = !st.canSaveDefault;
+  }
+  for (const el of document.querySelectorAll('[data-action="script-prompt-reset"]')) {
+    el.disabled = !st.canResetSystem;
+  }
+  const modalChars = $("#script-prompt-modal-chars", dialogBody);
+  if (modalChars) modalChars.textContent = st.value.length.toLocaleString("zh-CN") + " 字";
+  const modalBadge = $("#script-prompt-modal-badge", dialogBody);
+  if (modalBadge) {
+    modalBadge.textContent = st.badgeLabel;
+    modalBadge.className = "prompt-badge " + st.badgeClass;
+  }
+  const modalWarn = $("#script-prompt-modal-warn", dialogBody);
+  if (modalWarn) {
+    const warnText = scriptPromptWarningText(st);
+    modalWarn.textContent = warnText;
+    modalWarn.hidden = !warnText;
+  }
+}
+
+function recordScriptPromptSnapshot(mode, promptText, source, meta = {}) {
+  const clean = normalizePromptText(promptText).trim();
+  if (!clean) return;
+  data.scriptPromptHistory ||= {};
+  const list = Array.isArray(data.scriptPromptHistory[mode]) ? data.scriptPromptHistory[mode] : [];
+  if (list[0] && list[0].prompt === clean && list[0].source === source && list[0].topic === (meta.topic || "")) {
+    list[0].at = Date.now();
+  } else {
+    list.unshift({
+      id: crypto.randomUUID(),
+      at: Date.now(),
+      source,
+      topic: String(meta.topic || "").slice(0, 60),
+      drug: String(meta.drug || "").slice(0, 30),
+      customized: Boolean(meta.customized),
+      prompt: clean,
+    });
+  }
+  data.scriptPromptHistory[mode] = list.slice(0, 20);
+  save();
+}
+
+function validateVideoScriptPrompt(w) {
+  if (!w || w.type !== "video") return true;
+  const st = getScriptPromptState(w);
+  if (!config?.scriptPromptEditor) {
+    if (st.isCustom) {
+      notify("本地工作台服务尚未重启，请重启服务并刷新页面，自定义提示词才能生效。", "warn");
+      return false;
+    }
+    return true;
+  }
+  if (st.source === "system" && st.isEmpty) return true;
+  if (st.isEmpty) {
+    notify("视频脚本提示词不能为空，请补充内容或点击「恢复系统默认」。", "warn");
+    $("#video-script-prompt")?.focus();
+    return false;
+  }
+  if (st.isCustom && st.missingJson) {
+    notify("自定义提示词需保留 JSON 输出格式说明，否则系统无法解析脚本和分镜。", "warn");
+    $("#video-script-prompt")?.focus();
+    return false;
+  }
+  return true;
+}
+
+function resolveVideoScriptPromptForSubmit(w) {
+  if (!w || w.type !== "video") return null;
+  const st = getScriptPromptState(w);
+  const trimmed = st.value.trim();
+  return {
+    mode: st.mode,
+    prompt: trimmed,
+    customPrompt: st.isCustom ? trimmed : "",
+    customized: st.isCustom,
+  };
+}
+
+function recordScriptPromptUse(w, meta) {
+  if (!w || !meta?.prompt) return;
+  w.lastUsedScriptPrompt = {
+    mode: meta.mode,
+    prompt: meta.prompt,
+    customized: Boolean(meta.customized),
+    at: Date.now(),
+  };
+  recordScriptPromptSnapshot(meta.mode, meta.prompt, "generate", {
+    topic: w.topic?.trim() || "",
+    drug: w.drug || "",
+    customized: meta.customized,
+  });
+  changed(w);
+}
+
+function diffPromptLines(baseText, nextText) {
+  const a = normalizePromptText(baseText).split("\n");
+  const b = normalizePromptText(nextText).split("\n");
+  if (a.length * b.length > 160000) {
+    return {
+      lines: [
+        ...a.map((text) => ({ type: "del", text })),
+        ...b.map((text) => ({ type: "add", text })),
+      ],
+      added: b.length,
+      removed: a.length,
+    };
+  }
+  const n = a.length;
+  const m = b.length;
+  const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const lines = [];
+  let i = 0;
+  let j = 0;
+  let added = 0;
+  let removed = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      lines.push({ type: "same", text: a[i] });
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      lines.push({ type: "del", text: a[i] });
+      removed++;
+      i++;
+    } else {
+      lines.push({ type: "add", text: b[j] });
+      added++;
+      j++;
+    }
+  }
+  while (i < n) {
+    lines.push({ type: "del", text: a[i++] });
+    removed++;
+  }
+  while (j < m) {
+    lines.push({ type: "add", text: b[j++] });
+    added++;
+  }
+  return { lines, added, removed };
+}
+
+function formatPromptDiffText(baseText, nextText) {
+  const diff = diffPromptLines(baseText, nextText);
+  if (!diff.added && !diff.removed) return "（当前提示词与系统默认完全一致）";
+  const prefix = { same: "  ", add: "+ ", del: "- " };
+  return [
+    "--- 系统默认提示词",
+    "+++ 当前优化版提示词",
+    ...diff.lines.map((row) => prefix[row.type] + row.text),
+  ].join("\n");
+}
+
+function formatSnapshotTime(ts) {
+  const d = new Date(ts);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function renderScriptPromptModalBody(w) {
+  const st = getScriptPromptState(w);
+  const history = Array.isArray(data.scriptPromptHistory?.[st.mode]) ? data.scriptPromptHistory[st.mode] : [];
+  const diff = diffPromptLines(st.systemPrompt, st.value);
+  const tabHtml =
+    '<div class="settings-tabs prompt-modal-tabs" role="tablist" aria-label="提示词视图">' +
+    [
+      ["edit", "编辑提示词"],
+      ["diff", "对比系统默认" + (diff.added || diff.removed ? ` (+${diff.added}/-${diff.removed})` : "")],
+      ["history", `测试记录（${history.length}）`],
+    ]
+      .map(([id, label]) =>
+        btn(
+          esc(label),
+          "script-prompt-tab",
+          "settings-tab" + (scriptPromptModalTab === id ? " active" : ""),
+          id,
+          `role="tab" aria-selected="${scriptPromptModalTab === id}"`,
+        ),
+      )
+      .join("") +
+    "</div>";
+
+  let panelHtml = "";
+  if (scriptPromptModalTab === "edit") {
+    const warnText = scriptPromptWarningText(st);
+    panelHtml =
+      '<div class="prompt-modal-meta">' +
+      '<div class="prompt-head-title">' +
+      '<span class="pill">' + esc(scriptPromptModeLabel(st.mode)) + "</span>" +
+      '<span id="script-prompt-modal-badge" class="prompt-badge ' + st.badgeClass + '">' + esc(st.badgeLabel) + "</span>" +
+      '<span class="small">' + esc(scriptPromptDynamicContextLabel(st.params)) + "</span>" +
+      "</div>" +
+      '<span class="small" id="script-prompt-modal-chars">' + st.value.length.toLocaleString("zh-CN") + " 字</span>" +
+      "</div>" +
+      '<textarea id="script-prompt-modal-input" class="prompt-modal-textarea" data-script-prompt="modal" rows="18" maxlength="20000" aria-label="视频脚本提示词（放大编辑）">' +
+      esc(st.value) +
+      "</textarea>" +
+      '<p class="prompt-warn" id="script-prompt-modal-warn"' + (warnText ? "" : " hidden") + ">" + esc(warnText) + "</p>";
+  } else if (scriptPromptModalTab === "diff") {
+    panelHtml =
+      '<div class="prompt-modal-meta">' +
+      '<span class="small">' +
+      (diff.added || diff.removed
+        ? `较当前系统默认（${esc(scriptPromptDynamicContextLabel(st.params))}）：新增 ${diff.added} 行，删改 ${diff.removed} 行`
+        : "当前提示词与系统默认完全一致，暂无改动。") +
+      "</span>" +
+      btn(ico("copy") + " 复制差异对比", "script-prompt-copy-diff", "outline", "", diff.added || diff.removed ? "" : "disabled") +
+      "</div>" +
+      '<div class="prompt-diff" role="region" aria-label="提示词对比">' +
+      diff.lines
+        .map((row) => {
+          const cls = row.type === "add" ? "is-add" : row.type === "del" ? "is-del" : "is-ctx";
+          const sign = row.type === "add" ? "+" : row.type === "del" ? "−" : " ";
+          return `<div class="prompt-diff-line ${cls}"><span class="prompt-diff-sign">${sign}</span><span class="prompt-diff-text">${esc(row.text || " ")}</span></div>`;
+        })
+        .join("") +
+      "</div>";
+  } else {
+    const sourceLabels = {
+      generate: "生成脚本时使用",
+      "save-default": "保存为常用默认",
+      "before-reset": "重置前自动备份",
+    };
+    panelHtml = history.length
+      ? '<div class="prompt-history-list">' +
+        history
+          .map((item, idx) =>
+            '<div class="prompt-history-item">' +
+            '<div class="prompt-history-head">' +
+            '<div class="prompt-head-title">' +
+            '<span class="prompt-badge ' + (item.customized ? "is-custom" : "is-default") + '">' +
+            esc(sourceLabels[item.source] || "历史快照") +
+            "</span>" +
+            '<span class="small">' + esc(formatSnapshotTime(item.at)) + " · " + item.prompt.length.toLocaleString("zh-CN") + " 字</span>" +
+            "</div>" +
+            '<div class="buttons">' +
+            btn("应用到当前", "script-prompt-apply-history", "outline", String(idx)) +
+            btn("复制", "script-prompt-copy-history", "textbtn", String(idx)) +
+            "</div>" +
+            "</div>" +
+            (item.topic ? '<p class="small prompt-history-topic">测试主题：' + esc(item.topic) + (item.drug ? " · " + esc(item.drug) : "") + "</p>" : "") +
+            '<pre class="prompt-history-preview">' + esc(item.prompt.slice(0, 260) + (item.prompt.length > 260 ? "…" : "")) + "</pre>" +
+            "</div>",
+          )
+          .join("") +
+        "</div>"
+      : '<p class="small prompt-history-empty">暂无测试记录。每次生成视频脚本、保存默认或恢复系统默认时，系统都会自动保留历史快照，方便回溯优化过程。</p>';
+  }
+
+  const loadSavedBtn = st.savedDefault && st.source !== "saved"
+    ? btn("载入常用默认", "script-prompt-load-saved", "textbtn")
+    : "";
+
+  const footerHtml =
+    '<div class="prompt-modal-footer">' +
+    '<div class="buttons">' +
+    btn(ico("copy") + " 复制提示词", "script-prompt-copy", "outline") +
+    btn(ico("download") + " 导出对接文档 (.md)", "script-prompt-export", "outline") +
+    loadSavedBtn +
+    btn(ico("reset") + " 恢复系统默认", "script-prompt-reset", "textbtn", "", st.canResetSystem ? "" : "disabled") +
+    "</div>" +
+    '<div class="buttons">' +
+    btn("存为常用默认", "script-prompt-save-default", "secondary", "", st.canSaveDefault ? "" : "disabled") +
+    btn("完成", "close", "primary") +
+    "</div>" +
+    "</div>";
+
+  const host = $("#script-prompt-modal-host", dialogBody);
+  if (host) {
+    host.innerHTML = tabHtml + panelHtml + footerHtml;
+  } else {
+    openModal("视频脚本提示词 · 编辑与对接", '<div id="script-prompt-modal-host">' + tabHtml + panelHtml + footerHtml + "</div>", "script-prompt");
+  }
+  if (scriptPromptModalTab === "diff") {
+    dialogBody.querySelector(".prompt-diff-line.is-add, .prompt-diff-line.is-del")?.scrollIntoView({ block: "center" });
+  }
+}
+
+function openScriptPromptModal(w, tabName = "edit") {
+  if (!w || w.type !== "video") return;
+  scriptPromptModalTab = tabName;
+  syncSystemScriptPrompt(w);
+  renderScriptPromptModalBody(w);
+}
+
+async function copyPlainText(text, successMsg) {
+  try {
+    await navigator.clipboard.writeText(text);
+    notify(successMsg, "ok");
+  } catch {
+    const area = document.createElement("textarea");
+    area.value = text;
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+    notify(successMsg, "ok");
+  }
+}
+
+function exportScriptPromptMarkdown(w) {
+  const st = getScriptPromptState(w);
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`;
+  const modeLabel = scriptPromptModeLabel(st.mode);
+  const diff = diffPromptLines(st.systemPrompt, st.value);
+  const lines = [
+    `# 视频脚本提示词（${modeLabel}）`,
+    "",
+    `- 导出时间：${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`,
+    `- 视频模式：${modeLabel}（\`${st.mode}\`）`,
+    `- 测试参数：${scriptPromptDynamicContextLabel(st.params)}`,
+    `- 提示词状态：${st.summaryLabel}`,
+    ...(w.topic?.trim() ? [`- 当前测试主题：${w.topic.trim()}`] : []),
+    "",
+    "## 当前提示词全文",
+    "",
+    "```text",
+    st.value,
+    "```",
+  ];
+  if (diff.added || diff.removed) {
+    lines.push(
+      "",
+      `## 与原系统默认提示词的改动对比（+${diff.added} / -${diff.removed}）`,
+      "",
+      "```diff",
+      formatPromptDiffText(st.systemPrompt, st.value),
+      "```",
+    );
+  }
+  const blob = new Blob([lines.join("\n") + "\n"], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `视频脚本提示词-${modeLabel}-${stamp}.md`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  notify("已导出提示词对接文档（.md）", "ok");
+}
+
+/* Multi-stage Prompt Workbench: article draft/images, stage image/art templates, arrange & produceShot. */
+const extraPromptCache = new Map();
+const extraPromptInflight = new Map();
+let articlePromptChannel = "article-draft";
+let promptStudioChannel = "stage-image";
+let promptStudioModalTab = "edit";
+
+const EXTRA_PROMPT_META = {
+  "article-draft": {
+    label: "文章正文提示词",
+    shortLabel: "文章正文",
+    requireJson: true,
+    maxLen: 20000,
+    apiKind: "article-draft",
+    hint: "控制文章口吻、段落深度、医学安全边界与 JSON 输出结构；修改后作用于本次正文生成。",
+  },
+  "article-images": {
+    label: "配图规划提示词",
+    shortLabel: "配图规划",
+    requireJson: true,
+    maxLen: 20000,
+    apiKind: "article-images",
+    hint: "控制选哪些段落配图、参考张数与每张配图画面描述写法；修改后作用于本次配图规划。",
+  },
+  "stage-image": {
+    label: "整图信息图生图规则",
+    shortLabel: "整图生图",
+    requireJson: false,
+    maxLen: 3800,
+    local: true,
+    hint: "作用于全片所有「AI 完整图」分镜。可用占位符：{{本幕构图}}、{{画面与排版设计}}、{{图内核心词条}}、{{底部单行提示条}}、{{药品说明}}。",
+  },
+  "stage-art": {
+    label: "单幕插画生图规则",
+    shortLabel: "插画生图",
+    requireJson: false,
+    maxLen: 3800,
+    local: true,
+    hint: "作用于全片所有卡片/场景「本幕插画」。可用占位符：{{画面内容}}、{{药品说明}}。",
+  },
+  "stage-arrange": {
+    label: "各幕呈现编排提示词",
+    shortLabel: "分镜编排",
+    requireJson: true,
+    maxLen: 20000,
+    apiKind: "stage-arrange",
+    hint: "控制 Mix / SVG / MG 自动编排各幕方式、版式多样性与插画建议；建议保留 JSON 格式说明。",
+  },
+  "stage-produce": {
+    label: "单幕画面制作提示词",
+    shortLabel: "单幕制作",
+    requireJson: true,
+    maxLen: 20000,
+    apiKind: "stage-produce",
+    hint: "控制分镜页点击「制作本幕 / 重新制作本幕」时的单幕方案生成规则；建议保留 JSON 格式说明。",
+  },
+};
+
+function extraPromptStorageKey(w, channel) {
+  if (channel === "stage-arrange") {
+    const pres = w?.stagePlan?.mode;
+    return "stage-arrange:" + (pres === "svg" || pres === "mg" ? pres : "mix");
+  }
+  if (channel === "stage-produce") {
+    const kind = StageStudio.currentProduceKind ? StageStudio.currentProduceKind(w) : "card";
+    return "stage-produce:" + kind;
+  }
+  return channel;
+}
+
+function extraPromptParams(w, channel) {
+  const layoutId = w?.stagePlan?.layout?.id || "builtin:layout/info-classic";
+  if (channel === "article-draft") {
+    return { kind: "article-draft", layout: w?.layout || "通俗图解版", drug: (w?.drug || "").trim() };
+  }
+  if (channel === "article-images") {
+    return { kind: "article-images", layout: w?.layout || "通俗图解版" };
+  }
+  if (channel === "stage-arrange") {
+    const pres = w?.stagePlan?.mode;
+    return { kind: "stage-arrange", layoutId, presentation: pres === "svg" || pres === "mg" ? pres : "mix" };
+  }
+  if (channel === "stage-produce") {
+    const kind = StageStudio.currentProduceKind ? StageStudio.currentProduceKind(w) : "card";
+    return { kind: "stage-produce", layoutId, presentation: kind };
+  }
+  return { kind: channel, layoutId, themeId: w?.stagePlan?.themeId || w?.templateTheme || "medical" };
+}
+
+function extraPromptContextLabel(w, channel) {
+  const params = extraPromptParams(w, channel);
+  const parts = [];
+  if (channel === "article-draft" || channel === "article-images") {
+    parts.push(`风格「${params.layout}」`);
+    if (channel === "article-draft" && params.drug) parts.push(`药品「${params.drug}」`);
+  } else if (channel === "stage-image" || channel === "stage-art") {
+    const layoutName = (config?.stageLayouts || []).find((item) => item.id === params.layoutId)?.name;
+    if (layoutName) parts.push(`布局「${layoutName}」`);
+    if (StageStudio.themeName && w?.stagePlan) parts.push(`主题「${StageStudio.themeName(w)}」`);
+  } else if (channel === "stage-arrange") {
+    const layoutName = (config?.stageLayouts || []).find((item) => item.id === params.layoutId)?.name;
+    if (layoutName) parts.push(`布局「${layoutName}」`);
+    parts.push(`编排方式「${params.presentation}」`);
+  } else if (channel === "stage-produce") {
+    const layoutName = (config?.stageLayouts || []).find((item) => item.id === params.layoutId)?.name;
+    if (layoutName) parts.push(`布局「${layoutName}」`);
+    parts.push(`当前幕方式「${params.presentation}」`);
+  }
+  return parts.join(" · ");
+}
+
+function getCachedExtraSystemPrompt(w, channel) {
+  const meta = EXTRA_PROMPT_META[channel];
+  if (!meta) return "";
+  if (meta.local) {
+    if (channel === "stage-image") return StageStudio.defaultImagePromptTemplate ? StageStudio.defaultImagePromptTemplate(w) : "";
+    if (channel === "stage-art") return StageStudio.defaultArtPromptTemplate ? StageStudio.defaultArtPromptTemplate(w) : "";
+    return "";
+  }
+  const params = extraPromptParams(w, channel);
+  const sig = JSON.stringify(params);
+  if (extraPromptCache.has(sig)) return extraPromptCache.get(sig);
+  const storageKey = extraPromptStorageKey(w, channel);
+  const fallback = config?.defaultPrompts?.[storageKey] || config?.defaultPrompts?.[channel] || "";
+  return fallback;
+}
+
+function getExtraPromptState(w, channel) {
+  const meta = EXTRA_PROMPT_META[channel] || EXTRA_PROMPT_META["stage-image"];
+  const storageKey = extraPromptStorageKey(w, channel);
+  const params = extraPromptParams(w, channel);
+  const sig = JSON.stringify(params);
+  const systemPrompt = getCachedExtraSystemPrompt(w, channel);
+  const savedRaw = data.savedExtraPrompts?.[storageKey];
+  const savedDefault = typeof savedRaw === "string" && savedRaw.trim() ? normalizePromptText(savedRaw) : "";
+  const hasWorkEntry = Boolean(w?.extraPrompts && Object.prototype.hasOwnProperty.call(w.extraPrompts, storageKey));
+  const workEntry = hasWorkEntry ? w.extraPrompts[storageKey] : undefined;
+
+  let value = systemPrompt;
+  let source = "system";
+  if (typeof workEntry === "string") {
+    value = normalizePromptText(workEntry);
+    source = "work";
+  } else if (workEntry === null) {
+    value = systemPrompt;
+    source = "system";
+  } else if (savedDefault) {
+    value = savedDefault;
+    source = "saved";
+  }
+
+  const normSys = normalizePromptText(systemPrompt);
+  const normVal = normalizePromptText(value);
+  const isCustom = Boolean(normSys) ? normVal.trim() !== normSys.trim() : Boolean(normVal.trim());
+  const isEmpty = !normVal.trim();
+  const missingJson = Boolean(meta.requireJson) && !isEmpty && !/json/i.test(normVal);
+  const matchesSaved = Boolean(savedDefault) && normVal.trim() === savedDefault.trim();
+  const canSaveDefault = !isEmpty && !missingJson && isCustom && !matchesSaved;
+  const canResetSystem = source !== "system" || isCustom;
+
+  let badgeLabel = "系统默认";
+  let badgeClass = "is-default";
+  let summaryLabel = "系统默认";
+  if (source === "work" && isCustom) {
+    badgeLabel = "已修改";
+    badgeClass = "is-custom";
+    summaryLabel = "已自定义（本作品）";
+  } else if (source === "saved" && isCustom) {
+    badgeLabel = "常用默认";
+    badgeClass = "is-saved";
+    summaryLabel = "已优化（常用默认）";
+  }
+
+  return {
+    channel,
+    meta,
+    storageKey,
+    params,
+    sig,
+    systemPrompt,
+    savedDefault,
+    value,
+    source,
+    isCustom,
+    isEmpty,
+    missingJson,
+    matchesSaved,
+    canSaveDefault,
+    canResetSystem,
+    badgeLabel,
+    badgeClass,
+    summaryLabel,
+    syncPending: !meta.local && !extraPromptCache.has(sig),
+  };
+}
+
+function syncExtraSystemPrompt(w, channel) {
+  const meta = EXTRA_PROMPT_META[channel];
+  if (!w || !meta || meta.local) return;
+  const params = extraPromptParams(w, channel);
+  const sig = JSON.stringify(params);
+  if (extraPromptCache.has(sig)) return;
+  let pending = extraPromptInflight.get(sig);
+  if (!pending) {
+    pending = jsonRequest("/api/prompt-template", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+    })
+      .then((res) => {
+        if (typeof res?.prompt === "string") extraPromptCache.set(sig, res.prompt);
+        return res?.prompt || "";
+      })
+      .catch(() => "")
+      .finally(() => {
+        extraPromptInflight.delete(sig);
+      });
+    extraPromptInflight.set(sig, pending);
+  }
+  pending.then((promptText) => {
+    if (!promptText || current() !== w) return;
+    if (JSON.stringify(extraPromptParams(w, channel)) !== sig) return;
+    const st = getExtraPromptState(w, channel);
+    if (channel === articlePromptChannel) {
+      const articleTa = $("#article-prompt-editor");
+      if (articleTa && st.source === "system" && articleTa.value !== st.value) articleTa.value = st.value;
+      updateArticlePromptCardUI(w);
+    }
+    if (channel === "stage-produce") {
+      const prodTa = $("#stage-produce-prompt", dialogBody);
+      if (prodTa && st.source === "system" && prodTa.value !== st.value) prodTa.value = st.value;
+      const prodBadge = $("#stage-produce-prompt-badge", dialogBody);
+      if (prodBadge) { prodBadge.textContent = st.badgeLabel; prodBadge.className = "prompt-badge " + st.badgeClass; }
+    }
+    if (dialog.open && modalType === "prompt-studio" && promptStudioChannel === channel) {
+      const modalTa = $("#prompt-studio-modal-input", dialogBody);
+      if (modalTa && st.source === "system" && modalTa.value !== st.value) modalTa.value = st.value;
+      updatePromptStudioModalUI(w);
+      if (promptStudioModalTab === "diff") renderPromptStudioModalBody(w);
+    }
+  });
+}
+
+function extraPromptWarningText(st) {
+  if (!st.meta.local && !config?.promptStudio) {
+    return "本地工作台服务尚未更新，请重启工作台服务后刷新页面。";
+  }
+  if (st.source === "system" && st.isEmpty) {
+    return st.syncPending ? "" : "未能加载当前系统默认提示词，请刷新页面或重启本地工作台服务。";
+  }
+  if (st.isEmpty) {
+    return "提示词不能为空，请补充内容或点击「恢复系统默认」。";
+  }
+  if (st.missingJson) {
+    return "未检测到 JSON 输出格式说明，直接生成可能导致结构解析失败。";
+  }
+  return "";
+}
+
+function recordExtraPromptSnapshot(storageKey, promptText, source, meta = {}) {
+  const clean = normalizePromptText(promptText).trim();
+  if (!clean) return;
+  data.extraPromptHistory ||= {};
+  const list = Array.isArray(data.extraPromptHistory[storageKey]) ? data.extraPromptHistory[storageKey] : [];
+  if (list[0] && list[0].prompt === clean && list[0].source === source && list[0].topic === (meta.topic || "")) {
+    list[0].at = Date.now();
+  } else {
+    list.unshift({
+      id: crypto.randomUUID(),
+      at: Date.now(),
+      source,
+      topic: String(meta.topic || "").slice(0, 60),
+      drug: String(meta.drug || "").slice(0, 30),
+      customized: Boolean(meta.customized),
+      prompt: clean,
+    });
+  }
+  data.extraPromptHistory[storageKey] = list.slice(0, 20);
+  save();
+}
+
+function validateExtraPrompt(w, channel) {
+  if (!w) return true;
+  const st = getExtraPromptState(w, channel);
+  if (st.source === "system" && st.isEmpty) return true;
+  if (st.isEmpty) {
+    notify(`${st.meta.label}不能为空，请补充内容或恢复系统默认。`, "warn");
+    return false;
+  }
+  if (st.isCustom && st.missingJson) {
+    notify(`${st.meta.label}需保留 JSON 输出格式说明，否则系统无法解析返回内容。`, "warn");
+    return false;
+  }
+  return true;
+}
+
+function resolveExtraPromptForSubmit(w, channel) {
+  if (!w) return null;
+  const st = getExtraPromptState(w, channel);
+  const trimmed = st.value.trim();
+  return {
+    channel,
+    storageKey: st.storageKey,
+    prompt: trimmed,
+    customPrompt: st.isCustom ? trimmed : "",
+    customized: st.isCustom,
+  };
+}
+
+function recordExtraPromptUse(w, meta) {
+  if (!w || !meta?.prompt) return;
+  recordExtraPromptSnapshot(meta.storageKey, meta.prompt, "generate", {
+    topic: w.topic?.trim() || "",
+    drug: w.drug || "",
+    customized: meta.customized,
+  });
+  changed(w);
+}
+
+function articlePromptSummaryLabel(w) {
+  const s1 = getExtraPromptState(w, "article-draft");
+  const s2 = getExtraPromptState(w, "article-images");
+  if (s1.isCustom && s2.isCustom) return "正文与配图均已自定义";
+  if (s1.isCustom) return "正文已自定义";
+  if (s2.isCustom) return "配图规划已自定义";
+  return "系统默认";
+}
+
+function renderArticlePromptCard(w) {
+  const ch = articlePromptChannel === "article-images" ? "article-images" : "article-draft";
+  const st = getExtraPromptState(w, ch);
+  const warnText = extraPromptWarningText(st);
+  const sDraft = getExtraPromptState(w, "article-draft");
+  const sImages = getExtraPromptState(w, "article-images");
+  return (
+    '<div class="sheet setup-prompt-panel">' +
+    '<div class="card-head">' +
+    '<div class="prompt-head-title">' +
+    "<h2>图文提示词</h2>" +
+    '<span id="article-prompt-badge" class="prompt-badge ' + st.badgeClass + '">' + esc(st.badgeLabel) + "</span>" +
+    "</div>" +
+    btn(ico("expand") + " 放大编辑", "prompt-studio-open", "textbtn prompt-expand-btn", ch) +
+    "</div>" +
+    '<div class="prompt-channel-tabs" role="tablist" aria-label="图文提示词环节">' +
+    btn("文章正文" + (sDraft.isCustom ? " · 已改" : ""), "article-prompt-tab", "chip" + (ch === "article-draft" ? " selected" : ""), "article-draft", `role="tab" aria-selected="${ch === "article-draft"}"`) +
+    btn("配图规划" + (sImages.isCustom ? " · 已改" : ""), "article-prompt-tab", "chip" + (ch === "article-images" ? " selected" : ""), "article-images", `role="tab" aria-selected="${ch === "article-images"}"`) +
+    "</div>" +
+    '<div class="prompt-meta-row">' +
+    '<span class="small" id="article-prompt-context">' + esc(extraPromptContextLabel(w, ch)) + "</span>" +
+    '<span class="small" id="article-prompt-chars">' + st.value.length.toLocaleString("zh-CN") + " 字</span>" +
+    "</div>" +
+    '<textarea id="article-prompt-editor" class="prompt-editor-textarea" data-extra-prompt="' + ch + '" rows="11" maxlength="20000" aria-label="' + esc(st.meta.label) + '" placeholder="默认加载系统提示词，可直接修改优化并测试效果">' +
+    esc(st.value) +
+    "</textarea>" +
+    '<p class="prompt-warn" id="article-prompt-warn"' + (warnText ? "" : " hidden") + ">" + esc(warnText) + "</p>" +
+    '<div class="prompt-actions">' +
+    btn(ico("copy") + " 复制提示词", "extra-prompt-copy", "outline", ch) +
+    btn("存为常用默认", "extra-prompt-save-default", "outline", ch, st.canSaveDefault ? "" : "disabled") +
+    btn(ico("reset") + " 恢复系统默认", "extra-prompt-reset", "textbtn", ch, st.canResetSystem ? "" : "disabled") +
+    "</div>" +
+    '<p class="footmeta setup-footnote">' + esc(st.meta.hint) + "</p>" +
+    "</div>"
+  );
+}
+
+function updateArticlePromptCardUI(w) {
+  if (!w || w.type !== "article") return;
+  const ch = articlePromptChannel === "article-images" ? "article-images" : "article-draft";
+  const st = getExtraPromptState(w, ch);
+  const badge = $("#article-prompt-badge");
+  if (badge) { badge.textContent = st.badgeLabel; badge.className = "prompt-badge " + st.badgeClass; }
+  const summaryVal = $("#setup-summary-article-prompt-state");
+  if (summaryVal) summaryVal.textContent = articlePromptSummaryLabel(w);
+  const chars = $("#article-prompt-chars");
+  if (chars) chars.textContent = st.value.length.toLocaleString("zh-CN") + " 字";
+  const warn = $("#article-prompt-warn");
+  if (warn) {
+    const warnText = extraPromptWarningText(st);
+    warn.textContent = warnText;
+    warn.hidden = !warnText;
+  }
+  for (const el of document.querySelectorAll(`[data-action="extra-prompt-save-default"][data-val="${ch}"]`)) {
+    el.disabled = !st.canSaveDefault;
+  }
+  for (const el of document.querySelectorAll(`[data-action="extra-prompt-reset"][data-val="${ch}"]`)) {
+    el.disabled = !st.canResetSystem;
+  }
+}
+
+function updatePromptStudioModalUI(w) {
+  if (!dialog.open || modalType !== "prompt-studio") return;
+  const ch = promptStudioChannel;
+  const st = getExtraPromptState(w, ch);
+  const modalChars = $("#prompt-studio-modal-chars", dialogBody);
+  if (modalChars) modalChars.textContent = st.value.length.toLocaleString("zh-CN") + " 字";
+  const modalBadge = $("#prompt-studio-modal-badge", dialogBody);
+  if (modalBadge) { modalBadge.textContent = st.badgeLabel; modalBadge.className = "prompt-badge " + st.badgeClass; }
+  const modalWarn = $("#prompt-studio-modal-warn", dialogBody);
+  if (modalWarn) {
+    const warnText = extraPromptWarningText(st);
+    modalWarn.textContent = warnText;
+    modalWarn.hidden = !warnText;
+  }
+  for (const el of dialogBody.querySelectorAll(`[data-action="extra-prompt-save-default"][data-val="${ch}"]`)) {
+    el.disabled = !st.canSaveDefault;
+  }
+  for (const el of dialogBody.querySelectorAll(`[data-action="extra-prompt-reset"][data-val="${ch}"]`)) {
+    el.disabled = !st.canResetSystem;
+  }
+}
+
+function promptStudioChannelsFor(w) {
+  if (w?.type === "article") return ["article-draft", "article-images"];
+  return ["stage-image", "stage-art", "stage-arrange", "stage-produce"];
+}
+
+function renderPromptStudioModalBody(w) {
+  const channels = promptStudioChannelsFor(w);
+  if (!channels.includes(promptStudioChannel)) promptStudioChannel = channels[0];
+  const ch = promptStudioChannel;
+  const st = getExtraPromptState(w, ch);
+  const history = Array.isArray(data.extraPromptHistory?.[st.storageKey]) ? data.extraPromptHistory[st.storageKey] : [];
+  const diff = diffPromptLines(st.systemPrompt, st.value);
+
+  const channelBarHtml =
+    '<div class="prompt-channel-tabs" role="tablist" aria-label="选择调试环节">' +
+    channels.map((id) => {
+      const cst = getExtraPromptState(w, id);
+      return btn(
+        esc(cst.meta.shortLabel) + (cst.isCustom ? " · 已改" : ""),
+        "prompt-studio-channel",
+        "chip" + (id === ch ? " selected" : ""),
+        id,
+        `role="tab" aria-selected="${id === ch}"`,
+      );
+    }).join("") +
+    "</div>";
+
+  const tabHtml =
+    '<div class="settings-tabs prompt-modal-tabs" role="tablist" aria-label="提示词视图">' +
+    [
+      ["edit", "编辑提示词"],
+      ["diff", "对比系统默认" + (diff.added || diff.removed ? ` (+${diff.added}/-${diff.removed})` : "")],
+      ["history", `测试记录（${history.length}）`],
+    ].map(([id, label]) =>
+      btn(esc(label), "prompt-studio-tab", "settings-tab" + (promptStudioModalTab === id ? " active" : ""), id, `role="tab" aria-selected="${promptStudioModalTab === id}"`),
+    ).join("") +
+    "</div>";
+
+  let panelHtml = "";
+  if (promptStudioModalTab === "edit") {
+    const warnText = extraPromptWarningText(st);
+    panelHtml =
+      '<div class="prompt-modal-meta">' +
+      '<div class="prompt-head-title">' +
+      '<span class="pill">' + esc(st.meta.label) + "</span>" +
+      '<span id="prompt-studio-modal-badge" class="prompt-badge ' + st.badgeClass + '">' + esc(st.badgeLabel) + "</span>" +
+      '<span class="small">' + esc(extraPromptContextLabel(w, ch)) + "</span>" +
+      "</div>" +
+      '<span class="small" id="prompt-studio-modal-chars">' + st.value.length.toLocaleString("zh-CN") + " 字</span>" +
+      "</div>" +
+      '<textarea id="prompt-studio-modal-input" class="prompt-modal-textarea" data-extra-prompt="' + ch + '" rows="17" maxlength="' + st.meta.maxLen + '" aria-label="' + esc(st.meta.label) + '">' +
+      esc(st.value) +
+      "</textarea>" +
+      '<p class="prompt-placeholder-hint">' + esc(st.meta.hint) + "</p>" +
+      '<p class="prompt-warn" id="prompt-studio-modal-warn"' + (warnText ? "" : " hidden") + ">" + esc(warnText) + "</p>";
+  } else if (promptStudioModalTab === "diff") {
+    panelHtml =
+      '<div class="prompt-modal-meta">' +
+      '<span class="small">' +
+      (diff.added || diff.removed
+        ? `较当前系统默认（${esc(extraPromptContextLabel(w, ch))}）：新增 ${diff.added} 行，删改 ${diff.removed} 行`
+        : "当前提示词与系统默认完全一致，暂无改动。") +
+      "</span>" +
+      btn(ico("copy") + " 复制差异对比", "extra-prompt-copy-diff", "outline", ch, diff.added || diff.removed ? "" : "disabled") +
+      "</div>" +
+      '<div class="prompt-diff" role="region" aria-label="提示词对比">' +
+      diff.lines.map((row) => {
+        const cls = row.type === "add" ? "is-add" : row.type === "del" ? "is-del" : "is-ctx";
+        const sign = row.type === "add" ? "+" : row.type === "del" ? "−" : " ";
+        return `<div class="prompt-diff-line ${cls}"><span class="prompt-diff-sign">${sign}</span><span class="prompt-diff-text">${esc(row.text || " ")}</span></div>`;
+      }).join("") +
+      "</div>";
+  } else {
+    const sourceLabels = { generate: "生成时使用", "save-default": "保存为常用默认", "before-reset": "重置前自动备份" };
+    panelHtml = history.length
+      ? '<div class="prompt-history-list">' +
+        history.map((item, idx) =>
+          '<div class="prompt-history-item">' +
+          '<div class="prompt-history-head">' +
+          '<div class="prompt-head-title">' +
+          '<span class="prompt-badge ' + (item.customized ? "is-custom" : "is-default") + '">' + esc(sourceLabels[item.source] || "历史快照") + "</span>" +
+          '<span class="small">' + esc(formatSnapshotTime(item.at)) + " · " + item.prompt.length.toLocaleString("zh-CN") + " 字</span>" +
+          "</div>" +
+          '<div class="buttons">' +
+          btn("应用到当前", "extra-prompt-apply-history", "outline", `${ch}:${idx}`) +
+          btn("复制", "extra-prompt-copy-history", "textbtn", `${ch}:${idx}`) +
+          "</div></div>" +
+          (item.topic ? '<p class="small prompt-history-topic">测试主题：' + esc(item.topic) + (item.drug ? " · " + esc(item.drug) : "") + "</p>" : "") +
+          '<pre class="prompt-history-preview">' + esc(item.prompt.slice(0, 260) + (item.prompt.length > 260 ? "…" : "")) + "</pre>" +
+          "</div>",
+        ).join("") +
+        "</div>"
+      : '<p class="small prompt-history-empty">暂无测试记录。保存默认、重置或使用自定义提示词生成后，会自动留存历史快照。</p>';
+  }
+
+  const loadSavedBtn = st.savedDefault && st.source !== "saved"
+    ? btn("载入常用默认", "extra-prompt-load-saved", "textbtn", ch)
+    : "";
+
+  const footerHtml =
+    '<div class="prompt-modal-footer">' +
+    '<div class="buttons">' +
+    btn(ico("copy") + " 复制提示词", "extra-prompt-copy", "outline", ch) +
+    btn(ico("download") + " 导出对接文档 (.md)", "extra-prompt-export", "outline", ch) +
+    loadSavedBtn +
+    btn(ico("reset") + " 恢复系统默认", "extra-prompt-reset", "textbtn", ch, st.canResetSystem ? "" : "disabled") +
+    "</div>" +
+    '<div class="buttons">' +
+    btn("存为常用默认", "extra-prompt-save-default", "secondary", ch, st.canSaveDefault ? "" : "disabled") +
+    btn("完成", "close", "primary") +
+    "</div></div>";
+
+  const host = $("#prompt-studio-modal-host", dialogBody);
+  if (host) {
+    host.innerHTML = channelBarHtml + tabHtml + panelHtml + footerHtml;
+  } else {
+    openModal(
+      w?.type === "article" ? "图文提示词 · 编辑与对接" : "分镜与生图提示词调试台",
+      '<div id="prompt-studio-modal-host">' + channelBarHtml + tabHtml + panelHtml + footerHtml + "</div>",
+      "prompt-studio",
+    );
+  }
+  if (promptStudioModalTab === "diff") {
+    dialogBody.querySelector(".prompt-diff-line.is-add, .prompt-diff-line.is-del")?.scrollIntoView({ block: "center" });
+  }
+}
+
+function openPromptStudioModal(w, channel, tabName = "edit") {
+  if (!w) return;
+  const channels = promptStudioChannelsFor(w);
+  promptStudioChannel = channels.includes(channel) ? channel : channels[0];
+  promptStudioModalTab = tabName;
+  syncExtraSystemPrompt(w, promptStudioChannel);
+  renderPromptStudioModalBody(w);
+}
+
+function exportExtraPromptMarkdown(w, channel) {
+  const st = getExtraPromptState(w, channel);
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`;
+  const diff = diffPromptLines(st.systemPrompt, st.value);
+  const lines = [
+    `# ${st.meta.label}`,
+    "",
+    `- 导出时间：${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`,
+    `- 环节标识：\`${st.storageKey}\``,
+    `- 上下文参数：${extraPromptContextLabel(w, channel)}`,
+    `- 提示词状态：${st.summaryLabel}`,
+    ...(w?.topic?.trim() ? [`- 当前测试主题：${w.topic.trim()}`] : []),
+    "",
+    "## 当前提示词全文",
+    "",
+    "```text",
+    st.value,
+    "```",
+  ];
+  if (diff.added || diff.removed) {
+    lines.push(
+      "",
+      `## 与系统默认提示词的改动对比（+${diff.added} / -${diff.removed}）`,
+      "",
+      "```diff",
+      formatPromptDiffText(st.systemPrompt, st.value),
+      "```",
+    );
+  }
+  const blob = new Blob([lines.join("\n") + "\n"], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${st.meta.label}-${stamp}.md`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  notify("已导出提示词对接文档（.md）", "ok");
+}
+
 function setup(w) {
   const video = w.type === "video";
   const stageVideo = StageStudio.isActive(w);
@@ -1589,6 +2801,12 @@ function setup(w) {
         ["配图画幅", w.settings.ratio],
       ];
   if (w.drug) summaryRows.push(["关联药品", w.drug]);
+  if (video) {
+    const promptState = getScriptPromptState(w);
+    summaryRows.push(["脚本提示词", promptState.summaryLabel, "setup-summary-prompt-state"]);
+  } else {
+    summaryRows.push(["图文提示词", articlePromptSummaryLabel(w), "setup-summary-article-prompt-state"]);
+  }
   const topicText = w.topic.trim();
 
   const right =
@@ -1599,7 +2817,7 @@ function setup(w) {
     "<p>" + esc(topicText || "尚未填写主题，请在左侧输入或选择推荐主题") + "</p></div>" +
     '<dl class="setup-summary">' +
     summaryRows
-      .map(([k, val]) => '<div class="setup-summary-row"><dt>' + esc(k) + "</dt><dd>" + esc(val) + "</dd></div>")
+      .map(([k, val, id]) => '<div class="setup-summary-row"><dt>' + esc(k) + '</dt><dd' + (id ? ' id="' + id + '"' : "") + '>' + esc(val) + "</dd></div>")
       .join("") +
     "</dl>" +
     '<div id="initial-generation">' +
@@ -1612,7 +2830,8 @@ function setup(w) {
     " 可随时调整" +
     btn("模型配置", "work-settings", "textbtn inline-link") +
     "</p>" +
-    "</div>";
+    "</div>" +
+    (video ? renderScriptPromptCard(w) : renderArticlePromptCard(w));
 
   shell(
     w,
@@ -1620,13 +2839,18 @@ function setup(w) {
     0,
     '<div class="layout"><div>' +
       left +
-      '</div><aside class="aside">' +
+      '</div><aside class="aside setup-video-aside">' +
       right +
       "</aside></div>",
     hasBlocks
       ? btn(ico("trash") + " 删除作品", "ask-delete", "textbtn danger", w.id)
       : "",
   );
+  if (video) syncSystemScriptPrompt(w);
+  else {
+    syncExtraSystemPrompt(w, "article-draft");
+    syncExtraSystemPrompt(w, "article-images");
+  }
   if (w.job?.target === "initial") updateJobView(w, w);
 }
 
@@ -1934,9 +3158,15 @@ function renderPictureDialog(w) {
     '<textarea id="imageprompt" rows="3" maxlength="1800" placeholder="例如：近景，一只手把药盒转到侧面，手指停在印日期的位置">' +
     esc(prompt) +
     "</textarea></label>" +
-    '<details class="shot-options"><summary>查看完整生成提示词</summary>' +
-    '<textarea id="generated-image-prompt" rows="5" readonly aria-label="提交给方舟的提示词">' +
-    esc(picturePrompt(w, index, prompt, reference)) + '</textarea></details>' +
+    '<details class="shot-options stage-full-prompt-box"><summary>查看并编辑完整生成提示词' +
+    (regenModal?.customFullPrompt ? ' <span class="prompt-badge is-custom">已手改</span>' : "") +
+    "</summary>" +
+    '<textarea id="generated-image-prompt" rows="6" maxlength="3800" aria-label="提交给方舟的提示词">' +
+    esc(regenModal?.customFullPrompt || picturePrompt(w, index, prompt, reference)) +
+    "</textarea>" +
+    '<div class="asset-inline" style="margin-top:6px">' +
+    btn("恢复自动拼装", "reset-regen-full-prompt", "textbtn", "", regenModal?.customFullPrompt ? "" : "disabled") +
+    "</div></details>" +
     '<div class="fields" style="margin-top:11px">' +
     '<label class="field">生图模型<select id="picture-model">' +
     opts(models, imageModel) +
@@ -2809,6 +4039,9 @@ async function poll(w, owner = w) {
             save();
           }
           updateJobView(w, owner, true);
+          if (job.stageAutoImages && data.works.includes(w)) {
+            StageStudio.autoGenerateImages(w, job.stageAutoImages);
+          }
           for (const block of ready) sendJob(w, block);
           return;
         }
@@ -2927,8 +4160,10 @@ function authorize(w, count, kind, fn, voicedCount = count, draftOptions) {
       : `<p>正文完成后将尝试调用火山方舟生成建议配图（当前尚未连接火山方舟，届时可补充连接后再生成）。</p>`)
     : "";
   const chosenTextModel = resolveTextModel(w.settings);
+  const customScriptPrompt = writing && w.type === "video" && getScriptPromptState(w).isCustom;
   const stageText = draftOptions ? `<p>${esc(draftOptions.detail)}预计提交 ${count} 次文本请求，按 Token 计费。</p>` +
-    (draftOptions.image ? `<p>${esc(draftOptions.image)}</p>` : "") : "";
+    (draftOptions.image ? `<p>${esc(draftOptions.image)}</p>` : "") +
+    (customScriptPrompt ? '<div class="summary-kv" style="margin-top:12px"><span class="pill">使用自定义视频脚本提示词</span></div>' : "") : "";
   const textSummary = stageText || (writing ? "<p>将使用 DeepSeek " +
     (w.type === "video" ? (isCodeMotion(w)
       ? (reference === null
@@ -2944,7 +4179,8 @@ function authorize(w, count, kind, fn, voicedCount = count, draftOptions) {
       w.job?.partial ? "根据已生成的正文规划配图。" : "生成完整文章，再按正文决定哪些段落需要配图。") +
     (isSvgVideo(w) ? "预计提交 1 次文本请求，分镜校验未通过时校正 1 次，按 token 计费。</p>" :
       "预计提交 " + count + " 次文本请求，按 token 计费。</p>") + pictureSummary +
-    '<div class="summary-kv" style="margin-top:12px"><span class="pill">' + esc(textModelLabel(chosenTextModel)) + "</span></div>" : "");
+    '<div class="summary-kv" style="margin-top:12px"><span class="pill">' + esc(textModelLabel(chosenTextModel)) + "</span>" +
+    (customScriptPrompt ? '<span class="pill">使用自定义视频脚本提示词</span>' : "") + "</div>" : "");
   const arkSummary = !isArk ? "" : (
     "<p>将按当前参数提交最多 <b>" +
       count +
@@ -3040,9 +4276,12 @@ function generate(w) {
     return;
   }
   if (w.job || w.blocks.some((b) => b.job && !b.job.error)) return;
+  if (w.type === "video" && !validateVideoScriptPrompt(w)) return;
+  if (w.type === "article" && (!validateExtraPrompt(w, "article-draft") || !validateExtraPrompt(w, "article-images"))) return;
   if (StageStudio.isActive(w)) return StageStudio.requestDraft(w);
   if (isCodeMotion(w)) {
     return authorize(w, 1, "draft", () => {
+      const promptMeta = resolveVideoScriptPromptForSubmit(w);
       const settings = {
         ...w.settings,
         ratio: "16:9",
@@ -3050,13 +4289,21 @@ function generate(w) {
         textModel: resolveTextModel(w.settings),
       };
       const job = createJob(w, "write-draft", [], settings);
-      job.payload.draft = { type: "video", videoMode: "code-motion", topic: w.topic.trim(), drug: w.drug };
+      job.payload.draft = {
+        type: "video",
+        videoMode: "code-motion",
+        topic: w.topic.trim(),
+        drug: w.drug,
+        ...(promptMeta?.customPrompt ? { scriptPrompt: promptMeta.customPrompt } : {}),
+      };
+      recordScriptPromptUse(w, promptMeta);
       w.job = job;
       return sendJob(w);
     });
   }
   if (TemplateStudio.isTemplateVideo(w)) {
     return authorize(w, 1, "draft", () => {
+      const promptMeta = resolveVideoScriptPromptForSubmit(w);
       const settings = {
         ...w.settings,
         mode: "ark",
@@ -3070,16 +4317,29 @@ function generate(w) {
         videoMode: "template",
         topic: w.topic.trim(),
         drug: w.drug,
+        ...(promptMeta?.customPrompt ? { scriptPrompt: promptMeta.customPrompt } : {}),
       };
+      recordScriptPromptUse(w, promptMeta);
       w.job = job;
       return sendJob(w);
     });
   }
   return authorize(w, w.type === "article" ? 2 : 1, "draft", () => {
+    const promptMeta = w.type === "video" ? resolveVideoScriptPromptForSubmit(w) : null;
+    const articleDraftMeta = w.type === "article" ? resolveExtraPromptForSubmit(w, "article-draft") : null;
+    const articleImagesMeta = w.type === "article" ? resolveExtraPromptForSubmit(w, "article-images") : null;
     const settings = { ...w.settings, mode: "ark", textModel: resolveTextModel(w.settings) };
     if (w.type === "video") settings.duration = videoReferenceSeconds(w);
     const job = createJob(w, "write-draft", [], settings);
-    job.payload.draft = { type: w.type, topic: w.topic.trim(), layout: w.layout, drug: w.drug };
+    job.payload.draft = {
+      type: w.type,
+      topic: w.topic.trim(),
+      layout: w.layout,
+      drug: w.drug,
+      ...(promptMeta?.customPrompt ? { scriptPrompt: promptMeta.customPrompt } : {}),
+      ...(articleDraftMeta?.customPrompt ? { articlePrompt: articleDraftMeta.customPrompt } : {}),
+      ...(articleImagesMeta?.customPrompt ? { articleImagePrompt: articleImagesMeta.customPrompt } : {}),
+    };
     if (isSvgVideo(w)) job.payload.draft.videoMode = "svg";
     else if (w.type === "video") job.payload.draft.pharmacist = w.avatar === pharmacistAvatar;
     else {
@@ -3089,6 +4349,9 @@ function generate(w) {
         jobIds: Array.from({ length: maxArticleImages }, () => crypto.randomUUID()),
       };
     }
+    if (promptMeta) recordScriptPromptUse(w, promptMeta);
+    if (articleDraftMeta?.customized) recordExtraPromptUse(w, articleDraftMeta);
+    if (articleImagesMeta?.customized) recordExtraPromptUse(w, articleImagesMeta);
     w.job = job;
     return sendJob(w);
   });
@@ -3481,11 +4744,70 @@ document.addEventListener("input", (e) => {
   if (el.id === "imageprompt" && regenModal) {
     regenModal.prompt = el.value;
     const preview = $("#generated-image-prompt", dialogBody);
-    if (w && preview) preview.value = picturePrompt(w, regenModal.index, el.value, regenModal.reference);
+    if (w && preview && !regenModal.customFullPrompt) {
+      preview.value = picturePrompt(w, regenModal.index, el.value, regenModal.reference);
+    }
+    return;
+  }
+  if (el.id === "generated-image-prompt" && regenModal) {
+    regenModal.customFullPrompt = el.value;
+    const resetBtn = dialogBody.querySelector('[data-action="reset-regen-full-prompt"]');
+    if (resetBtn) resetBtn.disabled = !el.value.trim();
     return;
   }
   if (el.id === "tpl-image-prompt") {
     TemplateStudio.updateImageModalField(w, "prompt", el.value, templateHooks());
+    return;
+  }
+  if (el.id === "tpl-generated-prompt") {
+    TemplateStudio.updateImageModalField(w, "fullPrompt", el.value, templateHooks());
+    return;
+  }
+  if (el.dataset.extraPrompt && w) {
+    const ch = el.dataset.extraPrompt;
+    const storageKey = extraPromptStorageKey(w, ch);
+    const val = normalizePromptText(el.value);
+    const sys = normalizePromptText(getCachedExtraSystemPrompt(w, ch));
+    const saved = data.savedExtraPrompts?.[storageKey] ? normalizePromptText(data.savedExtraPrompts[storageKey]) : "";
+    w.extraPrompts ||= {};
+    if (!saved && sys && val === sys) delete w.extraPrompts[storageKey];
+    else if (saved && val === saved) delete w.extraPrompts[storageKey];
+    else w.extraPrompts[storageKey] = val;
+    changed(w);
+    if (ch === articlePromptChannel) {
+      const peer = el.id === "prompt-studio-modal-input" ? $("#article-prompt-editor") : $("#prompt-studio-modal-input", dialogBody);
+      if (peer && peer.value !== el.value) peer.value = el.value;
+      updateArticlePromptCardUI(w);
+    }
+    if (ch === "stage-produce") {
+      const st = getExtraPromptState(w, ch);
+      const badge = $("#stage-produce-prompt-badge", dialogBody);
+      if (badge) { badge.textContent = st.badgeLabel; badge.className = "prompt-badge " + st.badgeClass; }
+      for (const b of dialogBody.querySelectorAll('[data-action="extra-prompt-save-default"][data-val="stage-produce"]')) b.disabled = !st.canSaveDefault;
+      for (const b of dialogBody.querySelectorAll('[data-action="extra-prompt-reset"][data-val="stage-produce"]')) b.disabled = !st.canResetSystem;
+    }
+    updatePromptStudioModalUI(w);
+    return;
+  }
+  if (el.dataset.scriptPrompt && w && w.type === "video") {
+    const mode = scriptPromptMode(w);
+    const val = normalizePromptText(el.value);
+    const sys = normalizePromptText(getCachedSystemScriptPrompt(w));
+    const saved = data.savedScriptPrompts?.[mode] ? normalizePromptText(data.savedScriptPrompts[mode]) : "";
+    w.scriptPrompts ||= {};
+    if (!saved && sys && val === sys) {
+      delete w.scriptPrompts[mode];
+    } else if (saved && val === saved) {
+      delete w.scriptPrompts[mode];
+    } else {
+      w.scriptPrompts[mode] = val;
+    }
+    const peer = el.dataset.scriptPrompt === "modal"
+      ? $("#video-script-prompt")
+      : $("#script-prompt-modal-input", dialogBody);
+    if (peer && peer.value !== el.value) peer.value = el.value;
+    changed(w);
+    updateScriptPromptCardUI(w);
     return;
   }
   if (el.classList.contains("autogrow")) autoGrow(el);
@@ -4119,12 +5441,18 @@ document.addEventListener("click", async (e) => {
           TemplateStudio.openImageDialog(w, Number(v), templateHooks(), "outro");
         }
         break;
+      case "tpl-reset-full-prompt":
+        if (w && TemplateStudio.isTemplateVideo(w)) {
+          TemplateStudio.updateImageModalField(w, "resetFullPrompt", "", templateHooks());
+        }
+        break;
       case "tpl-regen-ark":
         if (w && TemplateStudio.isTemplateVideo(w)) {
           const [idxStr, rawSlot] = String(v).split(":");
           const slideIdx = Number(idxStr);
           const slotKind = rawSlot === "outro" ? "outro" : "main";
           const promptVal = ($("#tpl-image-prompt", dialogBody)?.value || "").trim();
+          const fullVal = ($("#tpl-generated-prompt", dialogBody)?.value || "").trim();
           const settings = {
             ...w.settings,
             mode: "ark",
@@ -4137,7 +5465,7 @@ document.addEventListener("click", async (e) => {
             return;
           }
           dialog.close();
-          await TemplateStudio.startSlideImageJob(w, slideIdx, promptVal, settings, templateHooks(), slotKind);
+          await TemplateStudio.startSlideImageJob(w, slideIdx, promptVal, settings, templateHooks(), slotKind, fullVal);
         }
         break;
       case "tpl-clear-image":
@@ -4273,9 +5601,12 @@ document.addEventListener("click", async (e) => {
       case "open":
         navigate("work/" + v);
         break;
-      case "close":
+      case "close": {
+        const wasPromptStudio = modalType === "prompt-studio";
         dialog.close();
+        if (wasPromptStudio && w && (StageStudio.isActive(w) || w.type === "article")) render(true);
         break;
+      }
       case "global-settings":
         prefs(null);
         break;
@@ -4441,6 +5772,275 @@ document.addEventListener("click", async (e) => {
         break;
       case "generate":
         generate(w);
+        break;
+      case "script-prompt-expand":
+        if (w && w.type === "video") openScriptPromptModal(w, "edit");
+        break;
+      case "script-prompt-tab":
+        if (w && w.type === "video" && ["edit", "diff", "history"].includes(v)) {
+          scriptPromptModalTab = v;
+          renderScriptPromptModalBody(w);
+        }
+        break;
+      case "script-prompt-copy":
+        if (w && w.type === "video") {
+          const st = getScriptPromptState(w);
+          await copyPlainText(st.value, "已复制视频脚本提示词");
+        }
+        break;
+      case "script-prompt-copy-diff":
+        if (w && w.type === "video") {
+          const st = getScriptPromptState(w);
+          await copyPlainText(formatPromptDiffText(st.systemPrompt, st.value), "已复制提示词变更对比");
+        }
+        break;
+      case "script-prompt-export":
+        if (w && w.type === "video") exportScriptPromptMarkdown(w);
+        break;
+      case "script-prompt-save-default":
+        if (w && w.type === "video") {
+          if (!validateVideoScriptPrompt(w)) break;
+          const st = getScriptPromptState(w);
+          const clean = st.value.trim();
+          data.savedScriptPrompts ||= {};
+          data.savedScriptPrompts[st.mode] = clean;
+          if (w.scriptPrompts) delete w.scriptPrompts[st.mode];
+          recordScriptPromptSnapshot(st.mode, clean, "save-default", {
+            topic: w.topic?.trim() || "",
+            drug: w.drug || "",
+            customized: st.isCustom,
+          });
+          changed(w);
+          const inlineTa = $("#video-script-prompt");
+          if (inlineTa) inlineTa.value = clean;
+          updateScriptPromptCardUI(w);
+          if (dialog.open && modalType === "script-prompt") renderScriptPromptModalBody(w);
+          notify("已保存为默认提示词，后续新建视频将自动沿用", "ok");
+        }
+        break;
+      case "script-prompt-load-saved":
+        if (w && w.type === "video") {
+          const st = getScriptPromptState(w);
+          if (!st.savedDefault) break;
+          if (w.scriptPrompts) delete w.scriptPrompts[st.mode];
+          changed(w);
+          const inlineTa = $("#video-script-prompt");
+          if (inlineTa) inlineTa.value = st.savedDefault;
+          updateScriptPromptCardUI(w);
+          if (dialog.open && modalType === "script-prompt") renderScriptPromptModalBody(w);
+          notify("已载入常用默认提示词", "ok");
+        }
+        break;
+      case "script-prompt-reset":
+        if (w && w.type === "video") {
+          const st = getScriptPromptState(w);
+          if (st.isCustom && !st.isEmpty) {
+            recordScriptPromptSnapshot(st.mode, st.value, "before-reset", {
+              topic: w.topic?.trim() || "",
+              drug: w.drug || "",
+              customized: true,
+            });
+          }
+          let msg = "已恢复为系统默认提示词";
+          if (st.source === "saved") {
+            if (data.savedScriptPrompts) delete data.savedScriptPrompts[st.mode];
+            if (w.scriptPrompts) delete w.scriptPrompts[st.mode];
+            msg = "已恢复为系统默认提示词（原常用默认已保留在测试记录中）";
+          } else {
+            w.scriptPrompts ||= {};
+            if (st.savedDefault) {
+              w.scriptPrompts[st.mode] = null;
+              msg = "本作品已恢复为系统默认（原内容已保留在测试记录中）";
+            } else {
+              delete w.scriptPrompts[st.mode];
+              msg = "已恢复为系统默认提示词（修改前内容已保留在测试记录中）";
+            }
+          }
+          changed(w);
+          const nextState = getScriptPromptState(w);
+          const inlineTa = $("#video-script-prompt");
+          if (inlineTa) inlineTa.value = nextState.value;
+          updateScriptPromptCardUI(w);
+          if (dialog.open && modalType === "script-prompt") renderScriptPromptModalBody(w);
+          notify(msg, "ok");
+        }
+        break;
+      case "script-prompt-apply-history":
+        if (w && w.type === "video") {
+          const mode = scriptPromptMode(w);
+          const item = data.scriptPromptHistory?.[mode]?.[Number(v)];
+          if (!item) break;
+          w.scriptPrompts ||= {};
+          w.scriptPrompts[mode] = item.prompt;
+          changed(w);
+          const inlineTa = $("#video-script-prompt");
+          if (inlineTa) inlineTa.value = item.prompt;
+          updateScriptPromptCardUI(w);
+          scriptPromptModalTab = "edit";
+          if (dialog.open && modalType === "script-prompt") renderScriptPromptModalBody(w);
+          notify("已恢复该历史版本提示词到当前作品", "ok");
+        }
+        break;
+      case "script-prompt-copy-history":
+        if (w && w.type === "video") {
+          const mode = scriptPromptMode(w);
+          const item = data.scriptPromptHistory?.[mode]?.[Number(v)];
+          if (item) await copyPlainText(item.prompt, "已复制该版本提示词");
+        }
+        break;
+      case "article-prompt-tab":
+        if (w && w.type === "article" && ["article-draft", "article-images"].includes(v)) {
+          articlePromptChannel = v;
+          syncExtraSystemPrompt(w, v);
+          render(true);
+        }
+        break;
+      case "prompt-studio-open":
+        if (w) openPromptStudioModal(w, v || (w.type === "article" ? articlePromptChannel : "stage-image"), "edit");
+        break;
+      case "prompt-studio-channel":
+        if (w && EXTRA_PROMPT_META[v]) {
+          promptStudioChannel = v;
+          if (w.type === "article") articlePromptChannel = v;
+          syncExtraSystemPrompt(w, v);
+          renderPromptStudioModalBody(w);
+        }
+        break;
+      case "prompt-studio-tab":
+        if (w && ["edit", "diff", "history"].includes(v)) {
+          promptStudioModalTab = v;
+          renderPromptStudioModalBody(w);
+        }
+        break;
+      case "extra-prompt-copy":
+        if (w && EXTRA_PROMPT_META[v]) {
+          const st = getExtraPromptState(w, v);
+          await copyPlainText(st.value, `已复制${st.meta.label}`);
+        }
+        break;
+      case "extra-prompt-copy-diff":
+        if (w && EXTRA_PROMPT_META[v]) {
+          const st = getExtraPromptState(w, v);
+          await copyPlainText(formatPromptDiffText(st.systemPrompt, st.value), "已复制提示词变更对比");
+        }
+        break;
+      case "extra-prompt-export":
+        if (w && EXTRA_PROMPT_META[v]) exportExtraPromptMarkdown(w, v);
+        break;
+      case "extra-prompt-save-default":
+        if (w && EXTRA_PROMPT_META[v]) {
+          if (!validateExtraPrompt(w, v)) break;
+          const st = getExtraPromptState(w, v);
+          const clean = st.value.trim();
+          data.savedExtraPrompts ||= {};
+          data.savedExtraPrompts[st.storageKey] = clean;
+          if (w.extraPrompts) delete w.extraPrompts[st.storageKey];
+          recordExtraPromptSnapshot(st.storageKey, clean, "save-default", {
+            topic: w.topic?.trim() || "",
+            drug: w.drug || "",
+            customized: st.isCustom,
+          });
+          changed(w);
+          if (v === articlePromptChannel) {
+            const ta = $("#article-prompt-editor");
+            if (ta) ta.value = clean;
+            updateArticlePromptCardUI(w);
+          }
+          if (v === "stage-produce") {
+            const ta = $("#stage-produce-prompt", dialogBody);
+            if (ta) ta.value = clean;
+            const badge = $("#stage-produce-prompt-badge", dialogBody);
+            if (badge) { badge.textContent = "常用默认"; badge.className = "prompt-badge is-saved"; }
+          }
+          if (dialog.open && modalType === "prompt-studio") renderPromptStudioModalBody(w);
+          else if (w.type === "video" && StageStudio.isActive(w) && (v === "stage-image" || v === "stage-art")) render(true);
+          notify(`已保存「${st.meta.label}」为常用默认`, "ok");
+        }
+        break;
+      case "extra-prompt-load-saved":
+        if (w && EXTRA_PROMPT_META[v]) {
+          const st = getExtraPromptState(w, v);
+          if (!st.savedDefault) break;
+          if (w.extraPrompts) delete w.extraPrompts[st.storageKey];
+          changed(w);
+          if (v === articlePromptChannel) {
+            const ta = $("#article-prompt-editor");
+            if (ta) ta.value = st.savedDefault;
+            updateArticlePromptCardUI(w);
+          }
+          if (dialog.open && modalType === "prompt-studio") renderPromptStudioModalBody(w);
+          notify("已载入常用默认提示词", "ok");
+        }
+        break;
+      case "extra-prompt-reset":
+        if (w && EXTRA_PROMPT_META[v]) {
+          const st = getExtraPromptState(w, v);
+          if (st.isCustom && !st.isEmpty) {
+            recordExtraPromptSnapshot(st.storageKey, st.value, "before-reset", {
+              topic: w.topic?.trim() || "",
+              drug: w.drug || "",
+              customized: true,
+            });
+          }
+          let msg = "已恢复为系统默认提示词";
+          if (st.source === "saved") {
+            if (data.savedExtraPrompts) delete data.savedExtraPrompts[st.storageKey];
+            if (w.extraPrompts) delete w.extraPrompts[st.storageKey];
+            msg = "已恢复为系统默认提示词（原常用默认已保留在测试记录中）";
+          } else {
+            w.extraPrompts ||= {};
+            if (st.savedDefault) {
+              w.extraPrompts[st.storageKey] = null;
+              msg = "本作品已恢复为系统默认（原内容已保留在测试记录中）";
+            } else {
+              delete w.extraPrompts[st.storageKey];
+              msg = "已恢复为系统默认提示词（修改前内容已保留在测试记录中）";
+            }
+          }
+          changed(w);
+          const nextState = getExtraPromptState(w, v);
+          if (v === articlePromptChannel) {
+            const ta = $("#article-prompt-editor");
+            if (ta) ta.value = nextState.value;
+            updateArticlePromptCardUI(w);
+          }
+          if (v === "stage-produce") {
+            const ta = $("#stage-produce-prompt", dialogBody);
+            if (ta) ta.value = nextState.value;
+            const badge = $("#stage-produce-prompt-badge", dialogBody);
+            if (badge) { badge.textContent = nextState.badgeLabel; badge.className = "prompt-badge " + nextState.badgeClass; }
+          }
+          if (dialog.open && modalType === "prompt-studio") renderPromptStudioModalBody(w);
+          else if (w.type === "video" && StageStudio.isActive(w) && (v === "stage-image" || v === "stage-art")) render(true);
+          notify(msg, "ok");
+        }
+        break;
+      case "extra-prompt-apply-history":
+        if (w && v) {
+          const [ch, idxStr] = String(v).split(":");
+          const storageKey = extraPromptStorageKey(w, ch);
+          const item = data.extraPromptHistory?.[storageKey]?.[Number(idxStr)];
+          if (!item) break;
+          w.extraPrompts ||= {};
+          w.extraPrompts[storageKey] = item.prompt;
+          changed(w);
+          if (ch === articlePromptChannel) {
+            const ta = $("#article-prompt-editor");
+            if (ta) ta.value = item.prompt;
+            updateArticlePromptCardUI(w);
+          }
+          promptStudioModalTab = "edit";
+          if (dialog.open && modalType === "prompt-studio") renderPromptStudioModalBody(w);
+          notify("已恢复该历史版本提示词到当前作品", "ok");
+        }
+        break;
+      case "extra-prompt-copy-history":
+        if (w && v) {
+          const [ch, idxStr] = String(v).split(":");
+          const storageKey = extraPromptStorageKey(w, ch);
+          const item = data.extraPromptHistory?.[storageKey]?.[Number(idxStr)];
+          if (item) await copyPlainText(item.prompt, "已复制该版本提示词");
+        }
         break;
       case "edit":
         w.viewingSetup = false;
@@ -4628,9 +6228,17 @@ document.addEventListener("click", async (e) => {
       case "reimage":
         openPictureDialog(w, Number(v));
         break;
+      case "reset-regen-full-prompt":
+        if (w && regenModal) {
+          delete regenModal.customFullPrompt;
+          renderPictureDialog(w);
+        }
+        break;
       case "regen": {
         const i = Number(v),
           prompt = sceneDescription(w, $("#imageprompt", dialogBody)?.value || "");
+        const customFull = ($("#generated-image-prompt", dialogBody)?.value || "").trim();
+        const useCustomFull = Boolean(regenModal?.customFullPrompt && customFull);
         const reference = regenModal?.reference || "";
         const settings = {
           ...w.settings,
@@ -4645,10 +6253,12 @@ document.addEventListener("click", async (e) => {
           return;
         }
         dialog.close();
+        const item = pictureItem(w, i, prompt, (w.blocks[i].variant || 0) + i + 1, reference);
+        if (useCustomFull) item.prompt = customFull.slice(0, 3800);
         await startJob(
           w,
           "regenerate",
-          [pictureItem(w, i, prompt, (w.blocks[i].variant || 0) + i + 1, reference)],
+          [item],
           { index: i, prompt },
           settings,
         );
@@ -4830,6 +6440,7 @@ document.addEventListener("click", async (e) => {
 
 dialog.addEventListener("close", () => {
   if (dialog.open) return;
+  dialog.classList.remove("prompt-modal");
   if (modalType === "settings") dialogBody.replaceChildren();
   editingKeyKind = null;
   retryPayload = null;

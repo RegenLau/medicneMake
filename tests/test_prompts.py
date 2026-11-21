@@ -53,6 +53,68 @@ class ArticlePromptTests(unittest.TestCase):
         self.assertIn("本篇是「通俗图解版」，参考数量 2 到 4 张", prompts[0])
         self.assertIn("不画品牌标识和红十字", prompts[0])
 
+    def test_custom_article_draft_and_image_prompts_override_and_validate(self):
+        custom_body = '自定义文章正文提示词，必须返回 JSON：{"title":"","lead":"","sections":[]}'
+        custom_img = '自定义配图规划提示词，必须返回 JSON：{"images":[{"section":1,"scene":""}]}'
+        prompts = []
+        draft = article_draft(
+            fake_ark(ARTICLE, prompts),
+            "test",
+            {"type": "article", "topic": "有效期", "layout": "通俗图解版", "articlePrompt": custom_body},
+        )
+        self.assertEqual(draft["title"], ARTICLE["title"])
+        self.assertEqual(prompts[0], custom_body)
+
+        img_prompts = []
+        imgs = article_images(
+            fake_ark({"images": [{"section": 1, "scene": "药盒特写"}]}, img_prompts),
+            "test",
+            ARTICLE,
+            "通俗图解版",
+            custom_prompt=custom_img,
+        )
+        self.assertEqual(imgs, [{"section": 1, "scene": "药盒特写"}])
+        self.assertEqual(img_prompts[0], custom_img)
+
+        validate_request(
+            {"type": "article", "topic": "有效期", "layout": "通俗图解版", "articlePrompt": custom_body, "articleImagePrompt": custom_img},
+            {"ratio": "16:9"},
+            {},
+        )
+        with self.assertRaisesRegex(ValueError, "JSON"):
+            validate_request(
+                {"type": "article", "topic": "有效期", "layout": "通俗图解版", "articlePrompt": "缺少格式关键字"},
+                {"ratio": "16:9"},
+                {},
+            )
+        with self.assertRaisesRegex(ValueError, "JSON"):
+            validate_request(
+                {"type": "article", "topic": "有效期", "layout": "通俗图解版", "articleImagePrompt": "缺少格式关键字"},
+                {"ratio": "16:9"},
+                {},
+            )
+
+    def test_server_default_prompt_template_supports_phase1_channels(self):
+        art_draft = server.default_prompt_template({"kind": "article-draft", "layout": "临床深度版", "drug": "阿司匹林肠溶片"})
+        self.assertIn("临床深度版", art_draft["prompt"])
+        self.assertIn("阿司匹林肠溶片", art_draft["prompt"])
+        self.assertIn("JSON", art_draft["prompt"])
+
+        art_img = server.default_prompt_template({"kind": "article-images", "layout": "避坑问答版"})
+        self.assertIn("避坑问答版", art_img["prompt"])
+        self.assertIn("JSON", art_img["prompt"])
+
+        arrange = server.default_prompt_template({"kind": "stage-arrange", "layoutId": "builtin:layout/qa-chat", "presentation": "mix"})
+        self.assertIn("JSON", arrange["prompt"])
+        self.assertIn("formCatalog", arrange["prompt"])
+
+        produce = server.default_prompt_template({"kind": "stage-produce", "layoutId": "builtin:layout/info-classic", "presentation": "card"})
+        self.assertIn("JSON", produce["prompt"])
+        self.assertIn("plans", produce["prompt"])
+
+        with self.assertRaisesRegex(ValueError, "提示词类型"):
+            server.default_prompt_template({"kind": "unknown"})
+
 
 class VideoPromptTests(unittest.TestCase):
     def run_draft(self, item, ratio="9:16"):
@@ -79,6 +141,61 @@ class VideoPromptTests(unittest.TestCase):
         self.assertEqual(draft["setting"], "")
         with self.assertRaisesRegex(ValueError, "画幅"):
             validate_request({"type": "video", "topic": "有效期"}, {"ratio": "4:3", "videoModel": "m"}, {"m": None})
+
+    def test_custom_script_prompt_override_and_validation(self):
+        custom = "这是优化后的自定义提示词，请严格返回 JSON 格式：{\"title\":\"\",\"setting\":\"\",\"beats\":[]}"
+        draft, prompt = self.run_draft({"scriptPrompt": custom}, "16:9")
+        self.assertEqual(prompt, custom)
+        self.assertEqual(draft["title"], "有效期怎么看")
+
+        validate_request(
+            {"type": "video", "topic": "有效期", "scriptPrompt": custom},
+            {"ratio": "9:16", "videoModel": "m"},
+            {"m": None},
+        )
+        with self.assertRaisesRegex(ValueError, "JSON"):
+            validate_request(
+                {"type": "video", "topic": "有效期", "scriptPrompt": "没有输出格式关键字的提示词"},
+                {"ratio": "9:16", "videoModel": "m"},
+                {"m": None},
+            )
+        with self.assertRaisesRegex(ValueError, "长度"):
+            validate_request(
+                {"type": "video", "topic": "有效期", "scriptPrompt": "JSON " + ("长" * 20001)},
+                {"ratio": "9:16", "videoModel": "m"},
+                {"m": None},
+            )
+
+    def test_server_default_video_script_prompt_reflects_mode_and_options(self):
+        stage_classic = server.default_video_script_prompt({"videoMode": "stage"})
+        self.assertEqual(stage_classic["mode"], "stage")
+        self.assertIn("AI数智人药师", stage_classic["prompt"])
+        self.assertIn("JSON", stage_classic["prompt"])
+        self.assertNotIn("问答对话布局", stage_classic["prompt"])
+
+        stage_qa = server.default_video_script_prompt({
+            "videoMode": "stage",
+            "layoutId": "builtin:layout/qa-chat",
+            "drug": "阿托伐他汀钙片",
+            "duration": 60,
+        })
+        self.assertIn("问答对话布局", stage_qa["prompt"])
+        self.assertIn("阿托伐他汀钙片", stage_qa["prompt"])
+        self.assertIn("60 秒", stage_qa["prompt"])
+
+        sb = server.default_video_script_prompt({
+            "videoMode": "storyboard",
+            "ratio": "16:9",
+            "duration": 45,
+            "pharmacist": True,
+        })
+        self.assertEqual(sb["mode"], "storyboard")
+        self.assertIn("横屏 16:9", sb["prompt"])
+        self.assertIn("45 秒", sb["prompt"])
+        self.assertIn("全片由同一位药师出镜", sb["prompt"])
+
+        with self.assertRaisesRegex(ValueError, "模式"):
+            server.default_video_script_prompt({"videoMode": "unknown"})
 
 
 class DeepSeekDraftTests(unittest.TestCase):
