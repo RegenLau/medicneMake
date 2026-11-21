@@ -702,9 +702,11 @@ def build_arrange_prompt(item, library=None, mode=None):
         "reason 用一句话，逐字引用本幕 name，再具体说明这幕的对象、动作或信息结构为什么适合该方式。"
         "若某幕非常适合用真实动作演示或连续原理视频，可额外输出 clipSuggestion（不超过 160 字的建议说明），"
         "同时仍把 kind 设为当前可直接渲染的 svg/scene/image。"
-        "可在 transition 中从清单选入场转场。延续同一个要点或画面时省略，使用淡入。"
+        "必须为第 2 幕及之后的每幕在 transition 中从 transitions 清单挑选贴合前后幕关系的入场转场，不要全片固定用同一种："
+        "同章延续用 fade/blur，步骤与时间推进用 push-left/slide，开场转解析或展开要点用 slide-up/wipe-up，"
+        "正误对比用 wipe，风险警示聚焦用 zoom-in/iris，总结收尾用 zoom-out/fade，相邻幕尽量避免重复以保证连贯节奏。"
         "只返回 targetIndices 对应的 JSON。"
-        '{"shots":[{"index":0,"kind":"方式","reason":"具体原因","fallback":"备用方式","params":{}}]}'
+        '{"shots":[{"index":0,"kind":"方式","reason":"具体原因","fallback":"备用方式","transition":"转场","params":{}}]}'
     )
 
 
@@ -1009,6 +1011,85 @@ def choose_content(row, choice, supports, catalog, candidates, *, spec=None, dru
     return {**content, "reason": reason, "decidedBy": "mix", "adjusted": adjustment}
 
 
+_RISK_RE = re.compile(r"警惕|误区|禁忌|风险|损伤|中毒|千万别|不要|禁止|危|重叠加|过量")
+_COMPARE_RE = re.compile(r"对比|区别|不同|反而|但是|然而|其实|误以为|不是.*而是")
+
+
+def _transition_candidates(prev_row, cur_row, index, total):
+    prev_type = str((prev_row.get("points") or {}).get("type") or "explain")
+    cur_type = str((cur_row.get("points") or {}).get("type") or "explain")
+    prev_chap = int(prev_row.get("chapterIndex") or 0)
+    cur_chap = int(cur_row.get("chapterIndex") or 0)
+    chapter_changed = cur_chap > prev_chap
+    cur_text = f"{cur_row.get('name') or ''} {cur_row.get('line') or ''}"
+    is_last = index == total - 1
+
+    if cur_type == "summary" or (is_last and total >= 3):
+        return ["zoom-out", "fade", "blur"] if not chapter_changed else ["zoom-out", "blur", "fade"]
+    if cur_type == "warning" or _RISK_RE.search(cur_text):
+        if prev_type == "compare" or _COMPARE_RE.search(cur_text):
+            return ["wipe", "zoom-in", "iris", "blur"]
+        return ["zoom-in", "iris", "wipe", "blur"]
+    if cur_type == "compare" or _COMPARE_RE.search(cur_text):
+        return ["wipe", "slide", "push-left", "blur"]
+    if cur_type in ("steps", "timeline"):
+        if prev_type in ("steps", "timeline"):
+            return ["push-left", "slide", "wipe", "slide-up"]
+        if prev_type == "cover":
+            return ["push-left", "slide-up", "slide", "blur"]
+        return ["push-left", "slide", "blur", "wipe"]
+    if cur_type == "checklist":
+        return ["wipe-up", "slide-up", "push-left", "fade"]
+    if prev_type == "cover":
+        return ["slide-up", "blur", "push-left", "fade"]
+    if chapter_changed:
+        return ["blur", "slide", "wipe-up", "push-left", "fade"]
+    return ["fade", "blur", "slide-up", "wipe"]
+
+
+def plan_shot_transitions(rows, catalog=None):
+    """Assign varied, relationship-matched transitions across shots for coherent pacing."""
+    if len(rows) <= 1:
+        return rows
+    allowed_set = set(stage_video.TRANSITIONS)
+    if isinstance(catalog, dict) and isinstance(catalog.get("transitions"), dict) and catalog["transitions"]:
+        allowed_set &= set(catalog["transitions"].keys())
+    if not allowed_set:
+        allowed_set = {"fade"}
+
+    prev_trans = None
+    assigned = []
+    for i in range(1, len(rows)):
+        content = rows[i].get("content")
+        if not isinstance(content, dict):
+            continue
+        existing = content.get("transition")
+        if existing in allowed_set:
+            prev_trans = existing
+            assigned.append((i, existing))
+            continue
+        cands = [t for t in _transition_candidates(rows[i - 1], rows[i], i, len(rows)) if t in allowed_set]
+        if not cands:
+            cands = [t for t in stage_video.TRANSITIONS if t in allowed_set]
+        chosen = next((t for t in cands if t != prev_trans), cands[0])
+        content["transition"] = chosen
+        prev_trans = chosen
+        assigned.append((i, chosen))
+
+    # Avoid flat monotony on 3+ shot videos when every shot happened to pick the same transition.
+    if len(assigned) >= 2 and len({t for _, t in assigned}) == 1 and len(allowed_set) >= 2:
+        last_idx, only_t = assigned[-1]
+        alt_cands = [
+            t for t in _transition_candidates(rows[last_idx - 1], rows[last_idx], last_idx, len(rows))
+            if t in allowed_set and t != only_t
+        ]
+        if not alt_cands:
+            alt_cands = [t for t in stage_video.TRANSITIONS if t in allowed_set and t != only_t]
+        if alt_cands:
+            rows[last_idx]["content"]["transition"] = alt_cands[0]
+    return rows
+
+
 def arrange_mg(client, model, item, script, rows, catalog, library, spec=None):
     indices = list(range(len(rows)))
     presenter = catalog["presenters"]["mg"]
@@ -1038,6 +1119,7 @@ def arrange_mg(client, model, item, script, rows, catalog, library, spec=None):
         except (ValueError, TypeError, KeyError):
             content = {"kind": "mg", "adjusted": "未找到可用的 MG 动画。请选择素材或制作 MG 草稿。"}
         planned.append({**row, "content": content})
+    plan_shot_transitions(planned, catalog)
     return {**script, "shots": planned, "plannedIndices": indices}
 
 
@@ -1115,6 +1197,8 @@ def arrange(client, model, item, script, library, *, allow_legacy=False):
         planned.append({**row, "content": content})
     if mode == "card":
         stage_forms.enforce_form_diversity(planned, spec=spec, work_id=work_id)
+    if mode != "mix":
+        plan_shot_transitions(planned, catalog)
     return {**script, "shots": planned, "plannedIndices": indices, **({"notice": notice} if notice else {})}
 
 

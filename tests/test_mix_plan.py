@@ -389,12 +389,49 @@ class MixPlanningTests(unittest.TestCase):
 
     def test_mix_transition_accepts_supported_values_only(self):
         choices = [choice(self.script, i, "scene", transition=value)
-                   for i, value in enumerate(("wipe", "iris", "unknown"))]
+                   for i, value in enumerate(("wipe", "zoom-in", "unknown"))]
         result, client = self.arrange(choices)
         normalized = [row["content"].get("transition") for row in result["shots"]]
-        self.assertEqual(["wipe", "iris", None], normalized)
+        self.assertEqual(["wipe", "zoom-in", None], normalized)
         payload = json.loads(client.call_args.args[1]["messages"][1]["content"])
         self.assertEqual(CATALOG["transitions"], payload["transitions"])
+
+    def test_fixed_mode_arrange_plans_varied_coherent_transitions(self):
+        five_shot_script = {
+            "title": "感冒药和退烧药别乱搭",
+            "shortTitle": "小心成分重叠",
+            "chapters": ["先看成分", "常见误区", "记住三点"],
+            "shots": [
+                {"name": "开头", "line": "感冒药和退烧药一起吃，可能让成分重叠。", "seconds": 5, "chapterIndex": 0,
+                 "points": {"type": "cover", "headline": "别乱搭", "items": []},
+                 "cues": [{"text": "感冒药和退烧药一起吃，可能让成分重叠。", "focus": "all", "weight": 18}]},
+                {"name": "先看成分", "line": "很多复方感冒药里已经含有对乙酰氨基酚。", "seconds": 7, "chapterIndex": 0,
+                 "points": {"type": "explain", "headline": "看成分表", "items": []},
+                 "cues": [{"text": "很多复方感冒药里已经含有对乙酰氨基酚。", "focus": "all", "weight": 18}]},
+                {"name": "常见误区", "line": "警惕重复服用，可能增加肝损伤风险。", "seconds": 7, "chapterIndex": 1,
+                 "points": {"type": "warning", "headline": "警惕过量", "items": []},
+                 "cues": [{"text": "警惕重复服用，可能增加肝损伤风险。", "focus": "all", "weight": 16}]},
+                {"name": "记住三点", "line": "一看通用名，二看复方成分，三记每日上限。", "seconds": 8, "chapterIndex": 2,
+                 "points": {"type": "checklist", "headline": "三步核对", "items": []},
+                 "cues": [{"text": "一看通用名，二看复方成分，三记每日上限。", "focus": "all", "weight": 19}]},
+                {"name": "收尾", "line": "对症单用更安心，用药安全请遵医嘱。", "seconds": 6, "chapterIndex": 2,
+                 "points": {"type": "summary", "headline": "安全收尾", "items": []},
+                 "cues": [{"text": "对症单用更安心，用药安全请遵医嘱。", "focus": "all", "weight": 16}]},
+            ],
+        }
+        item = {**self.item, "presentation": "image"}
+        result = mix_plan.arrange(Mock(), "deepseek-flash", item, five_shot_script, self.library)
+        transitions = [row["content"].get("transition") for row in result["shots"]]
+        self.assertIsNone(transitions[0])
+        assigned = transitions[1:]
+        self.assertTrue(all(t in CATALOG["transitions"] for t in assigned), assigned)
+        self.assertGreaterEqual(len(set(assigned)), 3, f"Expected varied transitions, got {assigned}")
+        for a, b in zip(assigned, assigned[1:]):
+            self.assertNotEqual(a, b, f"Adjacent shots should not repeat the same transition: {assigned}")
+        self.assertEqual("slide-up", assigned[0])
+        self.assertEqual("zoom-in", assigned[1])
+        self.assertEqual("wipe-up", assigned[2])
+        self.assertEqual("zoom-out", assigned[3])
 
     def test_invalid_non_image_fallback_uses_point_default(self):
         rows = [choice(self.script, i, "unavailable", fallback="image") for i in range(3)]

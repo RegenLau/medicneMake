@@ -94,15 +94,97 @@
   }
 
   function transition(slot, kind, p) {
-    slot.style.opacity = kind === "fade" ? String(p) : "";
-    slot.style.transform = kind === "slide" && p < 1 ? `translateX(${100 * (1 - p)}%)` : "";
-    const clipping = {
-      wipe: `inset(0 ${100 * (1 - p)}% 0 0)`,
-      iris: `circle(${80 * p}% at 50% 50%)`,
-      slide: `inset(0 ${100 * (1 - p)}% 0 0)`,
-    };
-    slot.style.clipPath = p < 1 ? clipping[kind] || "" : "";
+    const t = clamp(p);
+    if (t >= 1) {
+      slot.style.opacity = kind === "fade" ? "1" : "";
+      slot.style.transform = "";
+      slot.style.clipPath = "";
+      slot.style.filter = "";
+      return;
+    }
+    const eOut = easing.outCubic(t);
+    const eInOut = easing.inOutCubic(t);
+    let opacity = "";
+    let transform = "";
+    let clipPath = "";
+    let filter = "";
+    if (kind === "fade") {
+      opacity = String(t);
+    } else if (kind === "wipe") {
+      clipPath = `inset(0 ${100 * (1 - t)}% 0 0)`;
+    } else if (kind === "wipe-up") {
+      clipPath = `inset(${100 * (1 - eInOut)}% 0 0 0)`;
+    } else if (kind === "iris") {
+      clipPath = `circle(${80 * t}% at 50% 50%)`;
+    } else if (kind === "slide") {
+      transform = `translateX(${100 * (1 - t)}%)`;
+      clipPath = `inset(0 ${100 * (1 - t)}% 0 0)`;
+    } else if (kind === "push-left") {
+      transform = `translateX(${100 * (1 - eOut)}%)`;
+      clipPath = `inset(0 ${100 * (1 - eOut)}% 0 0)`;
+    } else if (kind === "slide-up") {
+      transform = `translateY(${100 * (1 - eOut)}%)`;
+      clipPath = `inset(0 0 ${100 * (1 - eOut)}% 0)`;
+    } else if (kind === "zoom-in") {
+      opacity = String(clamp(t * 1.35));
+      transform = `scale(${(0.92 + 0.08 * eOut).toFixed(4)})`;
+      clipPath = "inset(0)";
+    } else if (kind === "zoom-out") {
+      opacity = String(clamp(t * 1.35));
+      transform = `scale(${(1.08 - 0.08 * eOut).toFixed(4)})`;
+      clipPath = "inset(0)";
+    } else if (kind === "blur") {
+      opacity = String(eInOut);
+      filter = `blur(${(7 * (1 - eInOut)).toFixed(2)}px)`;
+      clipPath = "inset(0)";
+    } else {
+      opacity = String(t);
+    }
+    slot.style.opacity = opacity;
+    slot.style.transform = transform;
+    slot.style.clipPath = clipPath;
+    slot.style.filter = filter;
   }
 
-  global.MgKit = { clamp, easing, progress, sample, evaluate, apply, presets, transition };
+  function transitionOut(slot, kind, p) {
+    const t = clamp(p);
+    const eOut = easing.outCubic(t);
+    const eInOut = easing.inOutCubic(t);
+    let opacity = "1";
+    let transform = "";
+    let clipPath = "";
+    let filter = "";
+    if (kind === "fade") {
+      opacity = String(1 - t * 0.35);
+    } else if (kind === "push-left") {
+      transform = `translateX(${-100 * eOut}%)`;
+      clipPath = `inset(0 0 0 ${100 * eOut}%)`;
+    } else if (kind === "slide") {
+      transform = `translateX(${-18 * t}%)`;
+      clipPath = `inset(0 0 0 ${18 * t}%)`;
+      opacity = String(1 - 0.35 * t);
+    } else if (kind === "slide-up") {
+      transform = `translateY(${-20 * eOut}%) scale(${(1 - 0.03 * eOut).toFixed(4)})`;
+      clipPath = `inset(${20 * eOut}% 0 0 0)`;
+      opacity = String(1 - 0.45 * eOut);
+    } else if (kind === "zoom-in") {
+      opacity = String(1 - eOut);
+      transform = `scale(${(1 + 0.06 * eOut).toFixed(4)})`;
+      clipPath = "inset(0)";
+    } else if (kind === "zoom-out") {
+      opacity = String(1 - eOut);
+      transform = `scale(${(1 - 0.06 * eOut).toFixed(4)})`;
+      clipPath = "inset(0)";
+    } else if (kind === "blur") {
+      opacity = String(1 - 0.65 * eInOut);
+      filter = `blur(${(7 * eInOut).toFixed(2)}px)`;
+      clipPath = "inset(0)";
+    }
+    slot.style.opacity = opacity;
+    slot.style.transform = transform;
+    slot.style.clipPath = clipPath;
+    slot.style.filter = filter;
+  }
+
+  global.MgKit = { clamp, easing, progress, sample, evaluate, apply, presets, transition, transitionOut };
 })(globalThis);

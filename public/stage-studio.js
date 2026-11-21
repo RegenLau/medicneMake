@@ -3428,6 +3428,11 @@ const StageStudio = (() => {
     else if (action === "stage-add" && p.shots.length < 12) {
       const nextKind = fixedKinds.includes(p.mode) ? p.mode : "image";
       const next = fromLegacy({name:`第 ${p.shots.length + 1} 幕`, line:"", seconds:5}, nextKind, p.shots.length);
+      const prevTrans = p.shots.at(-1)?.content?.transition;
+      const transPool = Object.keys(config.stageCatalog?.transitions || { fade: "淡入淡出" });
+      const preferred = ["push-left", "slide-up", "blur", "wipe", "fade"].filter(t => transPool.includes(t));
+      const pickedTrans = preferred.find(t => t !== prevTrans) || preferred[0] || "fade";
+      if (p.shots.length > 0) next.content.transition = pickedTrans;
       p.shots.push(next);
       const nextIdx = p.shots.length - 1;
       selected.set(w, nextIdx);

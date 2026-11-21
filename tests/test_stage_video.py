@@ -131,6 +131,10 @@ class StageVideoTests(unittest.TestCase):
         p["items"][0]["content"]["transition"] = "wipe"
         _, _, shots, _, _ = stage_video.stage_input(p, server.ASSETS, server.media_path)
         self.assertEqual("wipe", shots[0]["transition"])
+        for kind in stage_video.TRANSITIONS:
+            p["items"][0]["content"]["transition"] = kind
+            _, _, shots, _, _ = stage_video.stage_input(p, server.ASSETS, server.media_path)
+            self.assertEqual(kind, shots[0]["transition"])
         p["items"][0]["content"]["transition"] = "<style>"
         with self.assertRaisesRegex(ValueError, "幕间转场"):
             stage_video.stage_input(p, server.ASSETS, server.media_path)

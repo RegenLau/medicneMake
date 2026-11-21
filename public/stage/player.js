@@ -8,9 +8,15 @@
   addEventListener("resize", fit);
   fit();
 
-  let plan, deck, imgMap, mounted, content, stickerDom, lastSubtitle;
+  let plan, deck, imgMap, mounted, content, stickerDom, lastSubtitle, prevLayer;
+
+  function clearPrevLayer() {
+    if (prevLayer?.el?.parentNode) prevLayer.el.remove();
+    prevLayer = null;
+  }
 
   async function setPlan(input) {
+    clearPrevLayer();
     for (const shot of plan?.shots || []) Contents[shot.kind].dispose?.(shot);
     plan = input;
     deck = TemplateVideo.normalizeDeck(input.deck);
@@ -145,6 +151,7 @@
     };
     const mountKey = `${current}/${stage}/${keepMounted ? "keep" : progress}`;
     if (mounted !== mountKey) {
+      clearPrevLayer();
       root.innerHTML = LayoutEngine.render(plan.layout, deck, current, {
         focus: layoutFocus, cueFocus, stage, progress: keepMounted ? 1 : progress,
         chapterProgress, currentTime: time, totalDuration: plan.hideClock ? 0 : totalDuration,
@@ -163,7 +170,64 @@
     if (stickerDom && global.StageStickers) global.StageStickers.draw(stickerDom, shot, localTime, context);
     const slot = root.querySelector(".media-slot");
     if (slot && !plan.compatibility && current > 0) {
-      MgKit.transition(slot, shot.transition || "fade", transitionProgress(current, localTime));
+      const p = transitionProgress(current, localTime);
+      const transKind = shot.transition || "fade";
+      if (p < 1 && plan.shots[current - 1]) {
+        const prevIndex = current - 1;
+        const prevShot = plan.shots[prevIndex];
+        const prevSlide = deck.slides[prevIndex];
+        if (!prevLayer || prevLayer.shotIndex !== prevIndex || !prevLayer.el.isConnected) {
+          clearPrevLayer();
+          const prevEl = slot.cloneNode(false);
+          prevEl.classList.remove("media-slot");
+          prevEl.classList.add("stage-prev-slot");
+          prevEl.style.opacity = "";
+          prevEl.style.transform = "";
+          prevEl.style.clipPath = "";
+          prevEl.style.filter = "";
+          prevEl.style.pointerEvents = "none";
+          if (getComputedStyle(slot).position !== "absolute") {
+            prevEl.style.position = "absolute";
+            prevEl.style.left = `${slot.offsetLeft}px`;
+            prevEl.style.top = `${slot.offsetTop}px`;
+            prevEl.style.width = `${slot.offsetWidth}px`;
+            prevEl.style.height = `${slot.offsetHeight}px`;
+          }
+          const prevDur = Math.max(0, (Number(prevShot.end) || 0) - (Number(prevShot.start) || 0));
+          const prevEndLocal = Math.max(0, prevDur - 0.001);
+          const prevCue = Contents.activeCue(prevShot, prevEndLocal);
+          const prevIsPromptSvg = prevShot.kind === "svg" && Boolean(prevShot.svgCode && typeof prevShot.svgCode.svg === "string" && prevShot.svgCode.svg.trim());
+          const prevContext = {
+            size: context.size,
+            slotDesc: context.slotDesc,
+            layout: plan.layout,
+            stage,
+            theme: deck.theme,
+            compatibility: plan.compatibility,
+            focus: prevCue?.focus || "all",
+            slide: prevSlide,
+            imgMap,
+            mapSrc,
+            deck,
+            index: prevIndex,
+            total: plan.shots.length,
+            layoutTitle: prevShot.kind === "svg" && !prevIsPromptSvg && !plan.compatibility,
+          };
+          const prevRenderer = Contents[prevShot.kind];
+          const prevContent = prevRenderer ? prevRenderer.mount(prevEl, prevShot, prevContext) : null;
+          if (prevContent) prevRenderer.draw(prevContent, prevShot, prevEndLocal, prevContext);
+          const prevStickers = global.StageStickers ? global.StageStickers.mount(prevEl, prevShot, prevContext) : null;
+          if (prevStickers && global.StageStickers) global.StageStickers.draw(prevStickers, prevShot, prevEndLocal, prevContext);
+          slot.parentNode?.insertBefore(prevEl, slot);
+          prevLayer = { shotIndex: prevIndex, el: prevEl };
+        }
+        MgKit.transitionOut?.(prevLayer.el, transKind, p);
+      } else {
+        clearPrevLayer();
+      }
+      MgKit.transition(slot, transKind, p);
+    } else {
+      clearPrevLayer();
     }
     const fade = legacyImageFade(current, time, cue);
     if (fade) {

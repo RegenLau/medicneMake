@@ -1078,10 +1078,16 @@
         "checklist": "并列的核对要点"
       },
       "transitions": {
-        "fade": "淡入",
-        "wipe": "擦除",
-        "iris": "圆形展开",
-        "slide": "推移"
+        "fade": "淡入淡出",
+        "push-left": "左推切换",
+        "slide": "右侧滑入",
+        "slide-up": "上滑揭示",
+        "wipe": "横向擦除",
+        "wipe-up": "自下擦除",
+        "zoom-in": "推进聚焦",
+        "zoom-out": "拉远收拢",
+        "blur": "柔焦过渡",
+        "iris": "圆形展开"
       },
       "pointDefaults": {
         "cover": "scene",
