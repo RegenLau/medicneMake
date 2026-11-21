@@ -13,10 +13,8 @@ const StageStudio = (() => {
   const mgPanels = new WeakMap();
   const pendingAutoPlay = new WeakMap();
   const batchQueues = new WeakMap();
-  const reviewFilter = new WeakMap();
-  let reviewAudio = null;
-  let reviewPlayingWork = null;
-  let reviewPlayingIndex = null;
+  const reviewScrollTops = new WeakMap();
+  let reviewJumpLockUntil = 0;
   const STAGE_MODULES = [
     { id: "visual",    group: "shot",   label: "画面", title: "本幕画面",   icon: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 15l-5-5L5 20"/>' },
     { id: "points",    group: "shot",   label: "要点", title: "本幕要点",   icon: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>' },
@@ -33,6 +31,54 @@ const StageStudio = (() => {
   const HIGHLIGHT_ICON = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z" fill="currentColor" stroke="none"/></svg>';
   const REVIEW_ICON = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></svg>';
   const STUDIO_ICON = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>';
+  const MEDIA_IMG_ICON = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 15l-5-5L5 20"/></svg>';
+  const MEDIA_SPARK_ICON = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 1.7 4.6L18.3 9.3l-4.6 1.7L12 15.6l-1.7-4.6-4.6-1.7 4.6-1.7L12 3z"/><path d="M18 15l.9 2.1L21 18l-2.1.9L18 21l-.9-2.1L15 18l2.1-.9L18 15z"/></svg>';
+  const MEDIA_VIDEO_ICON = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><polygon points="10,9 16,12 10,15" fill="currentColor" stroke="none"/></svg>';
+  const SHOT_PURPOSE_MAP = {
+    cover:     { title: "黄金前3秒痛点开场", why: "先抛出患者疑问并直给核心结论，前几秒留住观众" },
+    explain:   { title: "原理机制通俗拆解", why: "用大白话讲清用药依据或原理，建立专业信任" },
+    compare:   { title: "正误情形对比辨析", why: "把常见误用和正确做法放在一起对比，一眼分清" },
+    steps:     { title: "用药步骤清晰拆解", why: "按先后顺序讲清具体怎么用，降低操作出错率" },
+    warning:   { title: "用药误区与风险警示", why: "点破最易踩坑的做法，明确禁忌与风险边界" },
+    timeline:  { title: "服药时机与节点判断", why: "说清最佳服药时间窗及漏服等情形的应对" },
+    checklist: { title: "关键要点逐条核对", why: "提炼拿药服药时的必查项，方便患者对照记忆" },
+    summary:   { title: "权威总结与安全收尾", why: "一句话收口重点，补齐遵医嘱与问药师提醒" },
+  };
+  function reviewShotPurpose(shot, index, total) {
+    const rawType = String(shot?.points?.type || "");
+    if (SHOT_PURPOSE_MAP[rawType]) return SHOT_PURPOSE_MAP[rawType];
+    if (index === 0) return SHOT_PURPOSE_MAP.cover;
+    if (total > 1 && index === total - 1) return SHOT_PURPOSE_MAP.summary;
+    return SHOT_PURPOSE_MAP.explain;
+  }
+  function formatClock(sec) {
+    const s = Math.max(0, Math.round(Number(sec) || 0));
+    return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+  }
+  function buildSvgThumbSrc(svgCode, themeDef) {
+    const raw = String(svgCode?.svg || "").trim();
+    if (!raw || !raw.includes("<svg")) return "";
+    let doc = raw;
+    if (!/\bxmlns=/.test(doc)) {
+      doc = doc.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
+    }
+    const defaults = {
+      "--v-primary": "#0d7680",
+      "--v-primary-soft": "#e0f2f1",
+      "--v-ink": "#122d4c",
+      "--v-ink-soft": "#5c7086",
+      "--v-green": "#0e9d65",
+      "--v-coral": "#e6592d",
+      "--v-coral-soft": "#fde8e0",
+      "--v-card-bg": "#ffffff",
+      "--v-card-border": "#d6e2ec",
+    };
+    const mergedVars = { ...defaults, ...(themeDef?.vars || {}) };
+    const varCss = `:root{${Object.entries(mergedVars).map(([k, v]) => `${k}:${v}`).join(";")}}`;
+    const extraCss = String(svgCode?.css || "").trim();
+    doc = doc.replace(/(<svg\b[^>]*>)/i, `$1<style>${varCss}${extraCss}</style>`);
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(doc)}`;
+  }
   const currentView = w => w?.stagePlan?.editorView === "review" ? "review" : "studio";
   const shotReadyState = s => s?.content?.kind === "image" ? (s.content.image ? "ok" : "pending")
     : s?.content?.kind === "clip" ? (s.content.clip ? "ok" : "pending")
@@ -41,60 +87,6 @@ const StageStudio = (() => {
     : ["asset", "mg"].includes(s?.content?.kind) ? (s.content.assetId ? "ok" : "pending")
     : "ok";
   const shotNeedsRegen = s => shotReadyState(s) === "ok" && Boolean(s?.presentationStale);
-
-  function stopReviewAudio() {
-    if (reviewAudio) {
-      try { reviewAudio.pause(); } catch {}
-      reviewAudio.src = "";
-      reviewAudio = null;
-    }
-    const prevIdx = reviewPlayingIndex;
-    reviewPlayingWork = null;
-    reviewPlayingIndex = null;
-    if (prevIdx !== null) {
-      const btnEl = app?.querySelector?.(`[data-action="stage-review-speech"][data-val="${prevIdx}"]`);
-      if (btnEl) {
-        btnEl.classList.remove("is-playing");
-        const cached = btnEl.classList.contains("is-cached");
-        btnEl.innerHTML = `${PLAY_ICON}<span>试听口播</span>${cached ? '<em class="stage-speech-tag">已缓存</em>' : ""}`;
-      }
-    }
-  }
-
-  function playReviewSpeech(w, index) {
-    const shot = w?.stagePlan?.shots?.[index];
-    const cached = shot?.speech;
-    if (!cached?.url || cached.line !== shot.line.trim() || cached.voice !== w.settings.voice) return false;
-    if (reviewPlayingWork === w && reviewPlayingIndex === index && reviewAudio && !reviewAudio.paused) {
-      stopReviewAudio();
-      return true;
-    }
-    stopReviewAudio();
-    const audio = new Audio(cached.url);
-    reviewAudio = audio;
-    reviewPlayingWork = w;
-    reviewPlayingIndex = index;
-    const syncBtn = playing => {
-      const btnEl = app?.querySelector?.(`[data-action="stage-review-speech"][data-val="${index}"]`);
-      if (!btnEl) return;
-      btnEl.classList.toggle("is-playing", playing);
-      btnEl.classList.add("is-cached");
-      btnEl.innerHTML = playing
-        ? `${PAUSE_ICON}<span>停止试听</span>`
-        : `${PLAY_ICON}<span>试听口播</span><em class="stage-speech-tag">已缓存</em>`;
-    };
-    syncBtn(true);
-    audio.addEventListener("ended", () => {
-      if (reviewAudio === audio) stopReviewAudio();
-    });
-    audio.addEventListener("error", () => {
-      if (reviewAudio === audio) stopReviewAudio();
-    });
-    audio.play().catch(() => {
-      if (reviewAudio === audio) stopReviewAudio();
-    });
-    return true;
-  }
 
   function usesDynamicAvatar(w) {
     const presenter = w.templatePresenter || "digital";
@@ -159,6 +151,7 @@ const StageStudio = (() => {
     return `步骤 ${stepNo}/${queue.totalSteps} · ${base}`;
   }
   let narrationCleanup = null;
+  let reviewOutlineCleanup = null;
   const pointVisual = () => config.stageCatalog.pointVisuals;
   const copy = value => structuredClone(value);
   const fixedKinds = ["image", "svg", "scene"];
@@ -822,19 +815,26 @@ const StageStudio = (() => {
     return authorize(w, 1, "draft", () => submitDraft(w), 1, {detail, image});
   }
 
+  function scrollReviewCard(card) {
+    if (!card) return;
+    const scroller = app.querySelector(".stage-review-main");
+    if (scroller && scroller.scrollHeight > scroller.clientHeight + 2) {
+      const scrollerRect = scroller.getBoundingClientRect();
+      const cardRect = card.getBoundingClientRect();
+      const top = scroller.scrollTop + (cardRect.top - scrollerRect.top) - 12;
+      scroller.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+      return;
+    }
+    card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
   function showShotIssue(w, index, message, focus) {
     selected.set(w, index);
-    if (currentView(w) === "review" && (focus?.includes('="line"') || focus?.includes('="name"'))) {
-      const reviewField = focus.includes('="name"') ? `review-name:${index}` : `review-line:${index}`;
-      let target = $(`[data-stage-field="${reviewField}"]`);
-      if (!target && getReviewFilter(w) !== "all") {
-        reviewFilter.set(w, index);
-        render(true);
-        target = $(`[data-stage-field="${reviewField}"]`);
-      }
+    if (currentView(w) === "review" && focus?.includes('="line"')) {
+      const target = $(`[data-stage-field="review-line:${index}"]`);
       if (target) {
-        target.scrollIntoView({ block: "center", behavior: "smooth" });
-        target.focus();
+        scrollReviewCard(target.closest("[data-review-shot]") || target);
+        target.focus({ preventScroll: true });
         notify(message, "warn");
         return;
       }
@@ -1518,6 +1518,16 @@ const StageStudio = (() => {
     app.querySelectorAll("[data-review-job]").forEach(el => {
       if (el !== area) { el.innerHTML = ""; el.hidden = true; }
     });
+    if (currentView(w) === "review") {
+      const busySet = new Set();
+      if (singleIdx !== undefined) busySet.add(singleIdx);
+      else if (Array.isArray(job.stageImageSlots)) job.stageImageSlots.forEach(idx => busySet.add(idx));
+      else if (Array.isArray(job.payload?.draft?.produceSvgBatch)) job.payload.draft.produceSvgBatch.forEach(e => busySet.add(e.index));
+      else if (Array.isArray(job.payload?.draft?.produceSceneBatch)) job.payload.draft.produceSceneBatch.forEach(e => busySet.add(e.index));
+      app.querySelectorAll("[data-review-media]").forEach(box => {
+        box.classList.toggle("is-busy", !job.error && busySet.has(Number(box.dataset.reviewMedia)));
+      });
+    }
     const picture = job.stageClipFrame ? "首帧" : job.stageArt ? "插画" : "配图";
     const subject = job.stageSpeechIndex !== undefined ? `第 ${job.stageSpeechIndex + 1} 幕口播配音`
       : job.stageClipShot !== undefined ? `第 ${job.stageClipShot + 1} 幕 AI 视频`
@@ -1579,13 +1589,6 @@ const StageStudio = (() => {
     return parts.join("、");
   }
 
-  function getReviewFilter(w) {
-    const val = reviewFilter.get(w);
-    const len = w?.stagePlan?.shots?.length || 0;
-    if (typeof val === "number" && val >= 0 && val < len) return val;
-    return "all";
-  }
-
   function reviewBatchPrimaryText(w, missingPlan, fullPlan) {
     if (!fullPlan.totalBatchShots) return "";
     const willAuto = Boolean(w.stagePlan.autoComposeAfterBatch && canAutoCompose(w, fullPlan));
@@ -1599,16 +1602,6 @@ const StageStudio = (() => {
     return hasSomeReady
       ? `生成剩余画面（${fullPlan.totalBatchShots} 幕）`
       : `确认内容，生成全部画面（${fullPlan.totalBatchShots} 幕）`;
-  }
-
-  function reviewSingleActionLabel(shot) {
-    const kind = shot?.content?.kind;
-    const ready = shotReadyState(shot) === "ok";
-    if (kind === "image") return ready ? "重新生成 AI 完整图" : "生成 AI 完整图";
-    if (kind === "svg") return ready ? "重新生成 SVG 动画" : "生成 SVG 动画";
-    if (kind === "scene") return ready ? "重新生成代码动效" : "生成代码动效";
-    if (kind === "clip") return `去精修页生成${shot.content.clipStyle === "mg" ? " AI MG 动画" : " AI 演示视频"}`;
-    return "精修此幕";
   }
 
   function refreshReviewSummaryDom(w) {
@@ -1650,19 +1643,179 @@ const StageStudio = (() => {
     });
   }
 
+  function bindReviewOutline(w) {
+    if (reviewOutlineCleanup) { reviewOutlineCleanup(); reviewOutlineCleanup = null; }
+    const scroller = app.querySelector(".stage-review-main");
+    const list = app.querySelector(".stage-review-list");
+    const outline = app.querySelector(".stage-review-outline");
+    if (!list || !outline) return;
+    if (scroller && reviewScrollTops.has(w)) {
+      scroller.scrollTop = reviewScrollTops.get(w);
+    }
+    const setActive = idx => {
+      outline.querySelectorAll(".stage-outline-item").forEach(btnEl => {
+        const hit = Number(btnEl.dataset.val) === idx;
+        btnEl.classList.toggle("is-active", hit);
+        btnEl.setAttribute("aria-current", hit ? "true" : "false");
+      });
+    };
+    const controller = new AbortController();
+    if (scroller) {
+      scroller.addEventListener("scroll", () => {
+        reviewScrollTops.set(w, scroller.scrollTop);
+      }, { passive: true, signal: controller.signal });
+    }
+    list.addEventListener("focusin", e => {
+      const card = e.target.closest("[data-review-shot]");
+      if (card) setActive(Number(card.dataset.reviewShot));
+    }, { signal: controller.signal });
+    let observer = null;
+    if (typeof IntersectionObserver !== "undefined") {
+      const usePaneRoot = Boolean(scroller && getComputedStyle(scroller).overflowY !== "visible");
+      const visible = new Map();
+      observer = new IntersectionObserver(entries => {
+        for (const entry of entries) {
+          const idx = Number(entry.target.dataset.reviewShot);
+          if (entry.isIntersecting) visible.set(idx, entry.intersectionRatio);
+          else visible.delete(idx);
+        }
+        if (Date.now() < reviewJumpLockUntil) return;
+        if (visible.size) {
+          const topIdx = [...visible.keys()].sort((a, b) => a - b)[0];
+          setActive(topIdx);
+        }
+      }, {
+        root: usePaneRoot ? scroller : null,
+        rootMargin: usePaneRoot ? "-6% 0px -60% 0px" : "-15% 0px -55% 0px",
+        threshold: [0, 0.25, 0.6],
+      });
+      list.querySelectorAll("[data-review-shot]").forEach(card => observer.observe(card));
+    }
+    reviewOutlineCleanup = () => {
+      controller.abort();
+      observer?.disconnect();
+    };
+  }
+
+  function renderReviewMediaSlot(w, shot, i, statusKind, isPortraitSlot, themeDef) {
+    const c = shot.content;
+    const kind = c.kind;
+    const portraitCls = isPortraitSlot ? " is-portrait" : "";
+    const jobHolder = `<div class="stage-review-media-job" data-review-job="${i}" hidden></div>`;
+
+    if (statusKind === "pending") {
+      const icon = kind === "clip" ? MEDIA_VIDEO_ICON
+        : (kind === "svg" || kind === "scene") ? MEDIA_SPARK_ICON : MEDIA_IMG_ICON;
+      const actionLabel = kind === "image" ? "点击生成 AI 完整图"
+        : kind === "svg" ? "点击生成 SVG 动画"
+        : kind === "scene" ? "点击生成代码动效"
+        : kind === "clip" ? (c.clipStyle === "mg" ? "去精修生成 AI MG 动画" : "去精修生成 AI 演示视频")
+        : kind === "asset" ? "点击选择图片或 SVG"
+        : kind === "mg" ? "点击选择 MG 动画"
+        : "点击生成本幕画面";
+      const subHint = kind === "clip"
+        ? "需在精修页确认首帧与动作描述"
+        : kind === "asset" || kind === "mg"
+          ? "从素材库挑选匹配画面"
+          : "按左侧口播内容原地生成";
+      const hasFirstFrame = kind === "clip" && c.clipFirstFrame;
+      return `<div class="stage-review-media-col">` +
+        `<button type="button" class="stage-review-media-box is-empty${portraitCls}" data-review-media="${i}" data-status="pending" data-action="stage-review-generate" data-val="${i}" aria-label="第 ${i + 1} 幕：${esc(actionLabel)}">` +
+          (hasFirstFrame
+            ? `<img class="stage-review-media-img is-dim" src="${esc(c.clipFirstFrame)}" alt="第 ${i + 1} 幕首帧预览">`
+            : "") +
+          `<span class="stage-review-placeholder-inner">` +
+            `<span class="stage-review-placeholder-icon">${icon}</span>` +
+            `<strong class="stage-review-placeholder-title">${esc(actionLabel)}</strong>` +
+            `<span class="stage-review-placeholder-sub">${esc(subHint)}</span>` +
+          `</span>` +
+        `</button>` +
+        jobHolder +
+      `</div>`;
+    }
+
+    const staleCls = statusKind === "stale" ? " is-stale" : "";
+    const staleBtn = `<button type="button" class="stage-review-stale-btn" data-review-stale-btn="${i}" data-action="stage-review-generate" data-val="${i}"${statusKind === "stale" ? "" : " hidden"}>台词已改 · 点此更新</button>`;
+    let visualHtml = "";
+    let actionsHtml = "";
+
+    if (kind === "image" && c.image) {
+      visualHtml =
+        `<button type="button" class="stage-review-media-hit" data-action="stage-review-zoom" data-val="${i}" aria-label="放大查看第 ${i + 1} 幕画面">` +
+          `<img class="stage-review-media-img" src="${esc(c.image)}" alt="第 ${i + 1} 幕画面预览">` +
+        `</button>`;
+      actionsHtml =
+        `<button type="button" class="stage-review-media-act" data-action="stage-review-zoom" data-val="${i}">放大</button>` +
+        `<button type="button" class="stage-review-media-act" data-action="stage-review-generate" data-val="${i}">重画</button>`;
+    } else if (kind === "svg" && c.svgCode) {
+      const svgSrc = buildSvgThumbSrc(c.svgCode, themeDef);
+      visualHtml = svgSrc
+        ? `<button type="button" class="stage-review-media-hit is-svg-bg" data-action="stage-review-zoom" data-val="${i}" aria-label="查看第 ${i + 1} 幕 SVG 预览">` +
+            `<img class="stage-review-media-img is-svg" src="${svgSrc}" alt="第 ${i + 1} 幕 SVG 动画预览">` +
+          `</button>`
+        : `<button type="button" class="stage-review-media-hit stage-review-code-thumb" data-action="stage-review-open" data-val="${i}">` +
+            `${MEDIA_SPARK_ICON}<strong>SVG 动画已就绪</strong><span>点此去精修看动效</span>` +
+          `</button>`;
+      visualHtml += `<span class="stage-review-media-tag">SVG 动画</span>`;
+      actionsHtml =
+        `<button type="button" class="stage-review-media-act" data-action="stage-review-open" data-val="${i}">播片</button>` +
+        `<button type="button" class="stage-review-media-act" data-action="stage-review-generate" data-val="${i}">重生成</button>`;
+    } else if (kind === "scene" && c.code) {
+      visualHtml =
+        `<button type="button" class="stage-review-media-hit stage-review-code-thumb" data-action="stage-review-open" data-val="${i}" aria-label="在逐幕精修查看第 ${i + 1} 幕代码动效">` +
+          `<span class="stage-review-code-bars" aria-hidden="true"><i></i><i></i><i></i></span>` +
+          `<strong>代码动效已就绪</strong>` +
+          `<span>${esc(shot.points?.headline || shot.name || "点此去精修预览动态效果")}</span>` +
+        `</button>` +
+        `<span class="stage-review-media-tag">代码动效</span>`;
+      actionsHtml =
+        `<button type="button" class="stage-review-media-act" data-action="stage-review-open" data-val="${i}">播片</button>` +
+        `<button type="button" class="stage-review-media-act" data-action="stage-review-generate" data-val="${i}">重生成</button>`;
+    } else if (kind === "clip" && c.clip) {
+      const poster = c.clipPoster || c.clipFirstFrame;
+      visualHtml = poster
+        ? `<button type="button" class="stage-review-media-hit" data-action="stage-review-open" data-val="${i}" aria-label="在逐幕精修播放第 ${i + 1} 幕 AI 视频">` +
+            `<img class="stage-review-media-img" src="${esc(poster)}" alt="第 ${i + 1} 幕 AI 视频封面">` +
+            `<span class="stage-review-play-badge" aria-hidden="true">${PLAY_ICON}</span>` +
+          `</button>`
+        : `<button type="button" class="stage-review-media-hit stage-review-code-thumb" data-action="stage-review-open" data-val="${i}">` +
+            `${MEDIA_VIDEO_ICON}<strong>AI 视频已就绪</strong><span>点此去精修播放</span>` +
+          `</button>`;
+      visualHtml += `<span class="stage-review-media-tag">${c.clipStyle === "mg" ? "AI MG" : "AI 视频"}</span>`;
+      actionsHtml = `<button type="button" class="stage-review-media-act" data-action="stage-review-open" data-val="${i}">精修播放</button>`;
+    } else {
+      visualHtml =
+        `<button type="button" class="stage-review-media-hit stage-review-code-thumb" data-action="stage-review-open" data-val="${i}">` +
+          `${MEDIA_SPARK_ICON}<strong>${esc(kindLabel(c) || "画面")}已就绪</strong>` +
+          `<span>${esc(c.assetName || "点此去精修查看")}</span>` +
+        `</button>`;
+      actionsHtml = `<button type="button" class="stage-review-media-act" data-action="stage-review-open" data-val="${i}">去精修</button>`;
+    }
+
+    return `<div class="stage-review-media-col">` +
+      `<div class="stage-review-media-box is-ready${staleCls}${portraitCls}" data-review-media="${i}" data-status="${statusKind}">` +
+        visualHtml +
+        staleBtn +
+        (actionsHtml ? `<div class="stage-review-media-actions">${actionsHtml}</div>` : "") +
+      `</div>` +
+      jobHolder +
+    `</div>`;
+  }
+
   function renderReviewEditor(w) {
     if (narrationCleanup) { narrationCleanup(); narrationCleanup = null; }
+    if (reviewOutlineCleanup) { reviewOutlineCleanup(); reviewOutlineCleanup = null; }
     const p = w.stagePlan;
     const shots = p.shots;
-    const activeFilter = getReviewFilter(w);
+    const activeIdx = Math.min(selected.get(w) ?? 0, Math.max(0, shots.length - 1));
     const layoutMeta = currentLayoutDef(w);
+    const themeDef = currentThemeDef(w);
+    const slotDesc = LayoutEngine.describeMediaSlot(layoutMeta);
+    const isPortraitSlot = slotDesc.aspect < 0.85;
     const support = layoutMeta?.supports;
     const layoutId = p.layout.id;
-    const layoutName = layoutMeta?.name || "信息图模板";
     const isQaLayout = layoutId === "builtin:layout/qa-chat" || layoutMeta?.regions?.header?.variant === "question" || Boolean(layoutMeta?.regions?.answer);
     const isHeadlineLayout = layoutId === "builtin:layout/headline" || Boolean(layoutMeta?.regions?.headline);
-    const isTakeawayLayout = layoutId === "builtin:layout/takeaway" || Boolean(layoutMeta?.regions?.keypoints);
-    const isBroadcastLayout = layoutId === "builtin:layout/broadcast" || layoutMeta?.regions?.header?.variant === "ticker";
     const totalSec = Math.round(shots.reduce((n, s) => n + (Number(s.seconds) || 0), 0));
     const totalChars = shots.reduce((n, s) => n + String(s.line || "").trim().length, 0);
     const missingPlan = collectBatchPlan(w, { includeStale: false });
@@ -1670,14 +1823,6 @@ const StageStudio = (() => {
     const allowAuto = canAutoCompose(w, fullPlan);
     const willAuto = Boolean(p.autoComposeAfterBatch && allowAuto);
     const hasAvatar = usesDynamicAvatar(w);
-    const voiceList = typeof voiceOptions !== "undefined"
-      ? voiceOptions.map(item => Array.isArray(item) ? item : [item, item])
-      : [[w.settings.voice || "无配音", w.settings.voice || "无配音"]];
-    const currentVoice = w.settings.voice || "无配音";
-    const presenterText = (w.templatePresenter || "digital") === "none"
-      ? "无出镜人物"
-      : hasAvatar ? `动态数字人（${resolveAvatarMode(w.settings.avatarMode) === "wan2.2-s2v" ? "Wan2.2" : "VideoRetalk"} · 定稿合成时生成）`
-      : "静态主讲肖像";
 
     const readinessHtml = missingPlan.totalBatchShots > 0
       ? `<span class="stage-review-pill is-pending" id="stage-review-readiness">待生成 ${missingPlan.totalBatchShots} 幕</span>`
@@ -1688,222 +1833,133 @@ const StageStudio = (() => {
     const batchActionMode = missingPlan.totalBatchShots > 0 ? "all" : "stale";
     const batchPrimaryLabel = reviewBatchPrimaryText(w, missingPlan, fullPlan);
 
-    const topActions = btn("全片配音与模型", "work-settings", "outline") +
+    const topActions = btn("配音与模型", "work-settings", "outline") +
       btn(batchPrimaryLabel || "重新生成已修改画面", "stage-batch-all", "primary", batchActionMode, fullPlan.totalBatchShots > 0 ? "" : "hidden") +
       (fullPlan.totalBatchShots > 0
         ? (missingPlan.totalBatchShots === 0 ? btn("合成视频", "stage-compose", "outline") : "")
-        : btn("进入逐幕精修", "stage-view", "outline", "studio") +
-          btn("合成视频", "stage-compose", "primary"));
+        : btn("合成视频", "stage-compose", "primary"));
 
-    const guideBanner = missingPlan.totalBatchShots > 0
-      ? `<div class="stage-review-guide" role="note">` +
-          `<strong>医学审校提示</strong>` +
-          `<span>请核对每幕的「口播台词」「屏显要点」与「画面构想」（重点确认药品通用名、用法用量条件、禁忌人群与就医指征）。确认一幕可直接单幕生成，也可全部核对完后一键统一生成。</span>` +
-        `</div>`
-      : fullPlan.staleCount > 0
-        ? `<div class="stage-review-guide is-stale" role="note">` +
-            `<strong>内容已更新</strong>` +
-            `<span>有 ${fullPlan.staleCount} 幕已修改口播或画面构想，可单幕重画，或一键仅重新生成改过的幕，其余画面自动保留不重复计费。</span>` +
-          `</div>`
-        : "";
-
-    const shotTabsHtml = `<div class="stage-review-tabs-bar" role="tablist" aria-label="按幕切换审稿">` +
-      `<button type="button" class="stage-review-tab${activeFilter === "all" ? " is-active" : ""}" data-action="stage-review-filter" data-val="all" role="tab" aria-selected="${activeFilter === "all"}">` +
-        `<span>全部</span><em class="stage-review-tab-count">${shots.length}</em>` +
-      `</button>` +
-      shots.map((s, idx) => {
-        const ready = shotReadyState(s) === "ok";
-        const stale = shotNeedsRegen(s);
-        const st = !ready ? "pending" : stale ? "stale" : "ok";
-        const stTitle = !ready ? "待生成画面" : stale ? "内容已改 · 建议重画" : "画面就绪";
-        return `<button type="button" class="stage-review-tab${activeFilter === idx ? " is-active" : ""}" data-action="stage-review-filter" data-val="${idx}" role="tab" aria-selected="${activeFilter === idx}" title="第 ${idx + 1} 幕 · ${esc(s.name || "未命名")}（${stTitle}）">` +
-          `<span class="stage-review-tab-dot is-${st}" data-review-tab-dot="${idx}"></span>` +
-          `<span class="stage-review-tab-num">第 ${idx + 1} 幕</span>` +
-          `<span class="stage-review-tab-name" data-review-tab-name="${idx}">${esc(s.name || "未命名")}</span>` +
+    const showOutlineChapters = p.chapters.length > 1 && new Set(shots.map(s => s.chapterIndex)).size > 1;
+    let lastChapter = -1;
+    const outlineItemsHtml = shots.map((shot, i) => {
+      const ready = shotReadyState(shot) === "ok";
+      const stale = shotNeedsRegen(shot);
+      const st = !ready ? "pending" : stale ? "stale" : "ok";
+      const stTitle = !ready ? "待生成" : stale ? "已改 · 待重画" : "已就绪";
+      let chapterHeading = "";
+      if (showOutlineChapters && shot.chapterIndex !== lastChapter) {
+        lastChapter = shot.chapterIndex;
+        const chName = p.chapters[shot.chapterIndex] || `章节 ${shot.chapterIndex + 1}`;
+        chapterHeading = `<div class="stage-outline-chapter">${esc(chName)}</div>`;
+      }
+      const active = i === activeIdx;
+      return chapterHeading +
+        `<button type="button" class="stage-outline-item${active ? " is-active" : ""}" data-action="stage-outline-jump" data-val="${i}" aria-current="${active}" title="第 ${i + 1} 幕 · ${esc(shot.name || "未命名")}（${stTitle}）">` +
+          `<span class="stage-outline-num">${i + 1}</span>` +
+          `<span class="stage-outline-name" data-outline-title="${i}">${esc(shot.name || "未命名")}</span>` +
+          `<span class="stage-outline-sec">${Math.round(shot.seconds)}s</span>` +
+          `<span class="stage-outline-dot is-${st}" data-outline-dot="${i}"></span>` +
         `</button>`;
-      }).join("") +
-    `</div>`;
+    }).join("");
 
-    const visibleIndices = activeFilter === "all"
-      ? shots.map((_, idx) => idx)
-      : [activeFilter];
-
-    const cardsHtml = visibleIndices.map((i) => {
-      const shot = shots[i];
+    let cursorSec = 0;
+    const cardsHtml = shots.map((shot, i) => {
       const c = shot.content;
       const kind = c.kind;
       const ready = shotReadyState(shot) === "ok";
       const stale = shotNeedsRegen(shot);
       const statusKind = !ready ? "pending" : stale ? "stale" : "ok";
-      const statusLabel = !ready ? "待生成画面" : stale ? "内容已改 · 建议重画" : "画面就绪";
       const lineText = formatLineByCues(shot);
-      const lineRows = Math.max(3, Math.min(8, lineText.split("\n").length + 1));
-      const hasCachedSpeech = Boolean(shot.speech && shot.speech.line === shot.line.trim() && shot.speech.voice === currentVoice);
-      const isPlaying = reviewPlayingWork === w && reviewPlayingIndex === i && reviewAudio && !reviewAudio.paused;
-      const speechBtn = `<button type="button" class="stage-review-speech-btn${hasCachedSpeech ? " is-cached" : ""}${isPlaying ? " is-playing" : ""}" data-action="stage-review-speech" data-val="${i}" title="${currentVoice === "无配音" ? "当前为无配音，请在上方选择音色" : "试听本幕口播，合成视频时自动复用不重复计费"}">${isPlaying ? `${PAUSE_ICON}<span>停止试听</span>` : `${PLAY_ICON}<span>试听口播</span>${hasCachedSpeech ? '<em class="stage-speech-tag">已缓存</em>' : ""}`}</button>`;
+      const lineRows = Math.max(3, Math.min(6, lineText.split("\n").length + 1));
+      const purpose = reviewShotPurpose(shot, i, shots.length);
+      const startSec = cursorSec;
+      const endSec = startSec + Math.max(1, Math.round(Number(shot.seconds) || 0));
+      cursorSec = endSec;
+      const timeRange = `${formatClock(startSec)} - ${formatClock(endSec)}`;
 
+      const currentKindVal = kind === "clip" ? `clip:${c.clipStyle || "demo"}` : kind;
       const modeChoices = [
-        ["image", "AI 完整图", kind === "image", !support || support.includes("image")],
-        ["svg", "SVG 动画", kind === "svg", !support || support.includes("svg")],
-        ["scene", "代码动效", kind === "scene", !support || support.includes("scene")],
-        ["clip:demo", "AI 演示视频", kind === "clip" && (c.clipStyle || "demo") === "demo", !support || support.includes("clip") || support.includes("image")],
-        ["clip:mg", "AI MG 动画", kind === "clip" && c.clipStyle === "mg", !support || support.includes("clip") || support.includes("image")],
-      ];
-      const kindChips = modeChoices.map(([val, label, active, allowed]) =>
-        btn(label, "stage-review-kind", "chip" + (active ? " selected" : ""), `${i}:${val}`, `aria-pressed="${active}" ${allowed ? "" : "disabled"}`)
-      ).join("") + (["card", "mg", "asset"].includes(kind) ? `<span class="stage-legacy-badge">${esc(kinds[kind] || "旧版")}</span>` : "");
+        ["image", "AI 完整图", !support || support.includes("image")],
+        ["svg", "SVG 动画", !support || support.includes("svg")],
+        ["scene", "代码动效", !support || support.includes("scene")],
+        ["clip:demo", "AI 演示视频", !support || support.includes("clip") || support.includes("image")],
+        ["clip:mg", "AI MG 动画", !support || support.includes("clip") || support.includes("image")],
+      ].filter(([, , allowed]) => allowed);
+      if (!modeChoices.some(([val]) => val === currentKindVal)) {
+        modeChoices.unshift([currentKindVal, kinds[kind] || "当前方式", true]);
+      }
+      const kindSelect = `<select class="stage-review-kind-select" data-stage-field="review-kind:${i}" aria-label="第 ${i + 1} 幕画面方式">${opts(modeChoices.map(([v, l]) => [v, l]), currentKindVal)}</select>`;
 
-      const previewStrip = kind === "image" && c.image
-        ? `<div class="stage-review-thumb-bar">` +
-            `<button type="button" class="stage-review-thumb-btn" data-action="stage-review-zoom" data-val="${i}" title="点击查看大图核对画面文字">` +
-              `<img src="${esc(c.image)}" alt="第 ${i + 1} 幕配图缩略图">` +
-            `</button>` +
-            `<div class="stage-review-thumb-info"><strong>已生成 AI 完整图</strong><span class="small">点击左侧缩略图可放大核对画面文字</span></div>` +
-            btn("查看大图", "stage-review-zoom", "textbtn stage-review-inline-btn", String(i)) +
-          `</div>`
-        : kind === "clip" && c.clipPoster
-          ? `<div class="stage-review-thumb-bar"><img src="${esc(c.clipPoster)}" alt="第 ${i + 1} 幕视频封面"><div class="stage-review-thumb-info"><strong>已生成 AI 视频片段</strong><span class="small">可在「精修此幕」中播放核对</span></div></div>`
-          : (kind === "svg" && c.svgCode?.svg) || (kind === "scene" && c.code?.html)
-            ? `<div class="stage-review-ready-note"><strong>已生成${kind === "svg" ? " SVG 动画" : "代码动效"}</strong><span class="small">点击「精修此幕」可播放逐帧效果</span></div>`
-            : "";
-
-      const hasCustomFullPrompt = (kind === "image" && Boolean(c.customFullImagePrompt?.trim()))
-        || (kind === "svg" && Boolean(c.customSvgPrompt?.trim()))
-        || (kind === "scene" && Boolean(c.customCodePrompt?.trim()));
-      const customNote = hasCustomFullPrompt ? `<span class="prompt-badge is-custom">精修页已手改提示词</span>` : "";
-
-      const visualIdeaField = kind === "image"
-        ? `<label class="field stage-review-field"><span class="stage-review-field-head"><span>画面构想 <em class="small">（描述希望画面画什么）</em></span>${customNote}</span><textarea data-stage-field="review-imagePrompt:${i}" rows="2" maxlength="400" placeholder="用大白话写希望画面突出什么，如：带刻度的滴管量取混悬液、药盒放大有效期…">${esc(c.imagePrompt || "")}</textarea></label>`
-        : kind === "svg" || kind === "scene"
-          ? `<label class="field stage-review-field"><span class="stage-review-field-head"><span>画面与动效构想 <em class="small">（描述主体与动态变化）</em></span>${customNote}</span><textarea data-stage-field="review-codePrompt:${i}" rows="2" maxlength="600" placeholder="用大白话描述想演示的动作或图示，如：胶囊缓慢溶解释放颗粒，突出不可掰开…">${esc(c.codePrompt || "")}</textarea></label>`
-          : kind === "clip"
-            ? `<label class="field stage-review-field"><span class="stage-review-field-head"><span>视频动作构想 <em class="small">（AI 视频按秒计费，请在精修页单独生成）</em></span></span><textarea data-stage-field="review-clipPrompt:${i}" rows="2" maxlength="400" placeholder="描述近景动作与镜头，不含文字、品牌与医生正面像…">${esc(c.clipPrompt || "")}</textarea></label>`
-            : "";
-
-      const qaFields = isQaLayout
-        ? `<div class="stage-review-subgrid">` +
-            `<label class="field stage-review-field"><span>患者提问（≤30 字）</span><input data-stage-field="review-question:${i}" value="${esc(shot.points.question || "")}" maxlength="30" placeholder="如：缓释片太大能不能掰半吃？"></label>` +
-            `<div class="stage-review-qa-row">` +
-              `<label class="field stage-review-field"><span>药师结论（≤16 字）</span><input data-stage-field="review-answer:${i}" value="${esc(shot.points.answer || "")}" maxlength="16" placeholder="如：不能掰开，需整片吞服"></label>` +
-              `<label class="field stage-review-field"><span>结论语气</span><select data-stage-field="review-verdictTone:${i}">${opts([["", "默认（正确 ✓）"], ["ok", "正确 / 推荐（✓）"], ["no", "否定 / 禁止（✗）"], ["warn", "提醒 / 注意（!）"]], shot.points.verdictTone || "")}</select></label>` +
+      const layoutCompactFields = isQaLayout
+        ? `<div class="stage-review-compact-qa">` +
+            `<input data-stage-field="review-question:${i}" value="${esc(shot.points.question || "")}" maxlength="30" aria-label="患者提问" placeholder="患者提问（≤30 字）">` +
+            `<div class="stage-review-compact-qa-ans">` +
+              `<input data-stage-field="review-answer:${i}" value="${esc(shot.points.answer || "")}" maxlength="16" aria-label="药师结论" placeholder="药师结论（≤16 字）">` +
+              `<select data-stage-field="review-verdictTone:${i}" aria-label="结论语气">${opts([["", "✓ 正确"], ["ok", "✓ 推荐"], ["no", "✗ 禁止"], ["warn", "! 注意"]], shot.points.verdictTone || "")}</select>` +
             `</div>` +
           `</div>`
-        : "";
-
-      const headlineFields = isHeadlineLayout
-        ? `<div class="stage-review-subgrid">` +
-            `<label class="field stage-review-field"><span>大标题</span><input data-stage-field="review-headline:${i}" value="${esc(shot.points.headline || "")}" maxlength="40"></label>` +
-            `<div class="stage-review-qa-row">` +
-              `<label class="field stage-review-field"><span>强调短语（须在标题内，≤8 字）</span><input data-stage-field="review-accentPhrase:${i}" value="${esc(shot.points.accentPhrase || "")}" maxlength="8"></label>` +
-              `<label class="field stage-review-field"><span>一句解释（≤30 字）</span><input data-stage-field="review-lead:${i}" value="${esc(shot.points.lead || "")}" maxlength="30"></label>` +
-            `</div>` +
-          `</div>`
-        : "";
-
-      const itemsText = (shot.points.items || []).map(item => [item.title, item.detail, item.tag].filter(Boolean).join("｜")).join("\n");
-      const itemsLabel = kind === "image"
-        ? "画面要点 <em class=\"small\">（每行一条，会融入配图文字）</em>"
-        : isTakeawayLayout
-          ? "右侧要点清单 <em class=\"small\">（每行一条，最多 4 条）</em>"
-          : "屏显要点 <em class=\"small\">（每行一条，可用「｜」补充说明）</em>";
-      const showTakeawayRow = isTakeawayLayout || ["card", "scene", "svg"].includes(kind) || Boolean(shot.points.takeaway?.trim());
-      const pointsSection =
-        `<label class="field stage-review-field"><span>${itemsLabel}</span><textarea data-stage-field="review-items:${i}" rows="${Math.max(2, Math.min(4, (shot.points.items?.length || 1) + 1))}" placeholder="每行一条核心要点…">${esc(itemsText)}</textarea></label>` +
-        (showTakeawayRow
-          ? `<label class="field stage-review-field"><span>${isTakeawayLayout ? "记住这一句" : "画面结语"}</span><input data-stage-field="review-takeaway:${i}" value="${esc(shot.points.takeaway || "")}" maxlength="40" placeholder="一句话收口提醒…"></label>`
-          : "");
-
-      const genLabel = reviewSingleActionLabel(shot);
-      const genBtnCls = (!ready || stale) ? "primary stage-review-gen-btn" : "outline stage-review-gen-btn";
-      const singleGenBar = ["image", "svg", "scene"].includes(kind)
-        ? `<div class="stage-review-shot-actions">` +
-            btn(genLabel, "stage-review-generate", genBtnCls, String(i), `data-review-gen-btn="${i}"`) +
-            (kind === "image" ? btn(ready ? "从素材库换图" : "从素材库选图", "stage-review-choose", "textbtn stage-review-inline-btn", String(i)) : "") +
-            `<span class="small stage-review-shot-hint">${!ready ? "确认本幕无误可直接生成" : stale ? "本幕文案已改，可单独重画" : "可随时微调后单独重做"}</span>` +
-          `</div>`
-        : kind === "clip"
-          ? `<div class="stage-review-shot-actions">` +
-              btn(genLabel, "stage-review-open", "outline stage-review-gen-btn", String(i)) +
-              `<span class="small stage-review-shot-hint">AI 视频按秒计费，在精修页确认首帧后生成</span>` +
+        : isHeadlineLayout
+          ? `<div class="stage-review-compact-qa">` +
+              `<input data-stage-field="review-headline:${i}" value="${esc(shot.points.headline || "")}" maxlength="40" aria-label="大标题" placeholder="大标题">` +
+              `<input data-stage-field="review-lead:${i}" value="${esc(shot.points.lead || "")}" maxlength="30" aria-label="一句解释" placeholder="一句解释（≤30 字）">` +
             `</div>`
           : "";
 
-      const chapterSelect = p.chapters.length > 1
-        ? `<select class="stage-review-chapter" data-stage-field="review-chapter:${i}" aria-label="第 ${i + 1} 幕所属章节">${opts(p.chapters.map((name, idx) => [String(idx), name]), String(shot.chapterIndex))}</select>`
-        : "";
+      const mediaSlotHtml = renderReviewMediaSlot(w, shot, i, statusKind, isPortraitSlot, themeDef);
 
-      return `<article class="sheet stage-review-card" data-review-shot="${i}">` +
-        `<div class="stage-review-card-head">` +
-          `<div class="stage-review-card-id">` +
-            `<span class="stage-review-num">第 ${i + 1} 幕</span>` +
-            `<input class="stage-review-title-input" data-stage-field="review-name:${i}" value="${esc(shot.name)}" maxlength="40" aria-label="第 ${i + 1} 幕标题" placeholder="输入本幕标题">` +
-            chapterSelect +
-          `</div>` +
-          `<div class="stage-review-card-ops">` +
-            `<span class="stage-review-sec" data-review-sec="${i}">约 ${Math.round(shot.seconds)} 秒</span>` +
-            `<span class="stage-review-status is-${statusKind}" data-review-status="${i}">${statusLabel}</span>` +
-            `<div class="stage-review-move-group">` +
-              btn(ico("up"), "stage-review-move", "icon-btn", `${i}:-1`, `title="上移一幕" aria-label="上移第 ${i + 1} 幕" ${i === 0 ? "disabled" : ""}`) +
-              btn(ico("down"), "stage-review-move", "icon-btn", `${i}:1`, `title="下移一幕" aria-label="下移第 ${i + 1} 幕" ${i === shots.length - 1 ? "disabled" : ""}`) +
-              btn(ico("trash"), "stage-review-remove", "icon-btn danger", String(i), `title="删除本幕" aria-label="删除第 ${i + 1} 幕" ${shots.length === 1 ? "disabled" : ""}`) +
-            `</div>` +
-            btn("精修此幕", "stage-review-open", "textbtn stage-review-open-btn", String(i)) +
-          `</div>` +
-        `</div>` +
-        `<div class="stage-review-card-body">` +
-          `<div class="stage-review-col-script">` +
-            `<div class="stage-review-col-head">` +
-              `<div><strong>口播台词</strong><span class="small"> · 换行即字幕断句</span></div>` +
-              `<div class="stage-review-script-tools">` +
-                `<span class="small" data-review-stats="${i}">${shot.cues.length} 句 · ${shot.line.trim().length} 字</span>` +
-                speechBtn +
+      return `<div class="stage-review-row" data-review-shot="${i}">` +
+        `<article class="sheet stage-review-card">` +
+          `<div class="stage-review-card-head">` +
+            `<div class="stage-review-card-id">` +
+              `<span class="stage-review-num">${i + 1}</span>` +
+              `<div class="stage-review-purpose">` +
+                `<strong class="stage-review-role">第 ${i + 1} 幕 · ${esc(purpose.title)}</strong>` +
+                `<span class="stage-review-why">${esc(purpose.why)}</span>` +
               `</div>` +
             `</div>` +
-            `<textarea class="stage-review-line" data-stage-field="review-line:${i}" maxlength="450" rows="${lineRows}" aria-label="第 ${i + 1} 幕口播台词" placeholder="输入本幕口播台词，按回车换行即可调整字幕断句…">${esc(lineText)}</textarea>` +
           `</div>` +
-          `<div class="stage-review-col-visual">` +
-            `<div class="stage-review-kinds"><span class="stage-review-sublabel">画面方式</span><div class="chips stage-review-kind-chips">${kindChips}</div></div>` +
-            previewStrip +
-            visualIdeaField +
-            qaFields +
-            headlineFields +
-            pointsSection +
-            singleGenBar +
+          `<div class="stage-review-card-body">` +
+            `<div class="stage-review-col-text">` +
+              `<textarea class="stage-review-line" data-stage-field="review-line:${i}" maxlength="450" rows="${lineRows}" aria-label="第 ${i + 1} 幕口播台词" placeholder="输入本幕口播台词，按回车换行可调整字幕断句…">${esc(lineText)}</textarea>` +
+              layoutCompactFields +
+              `<div class="stage-review-line-meta">` +
+                `<div class="stage-review-card-ops">` +
+                  `<span class="stage-review-timerange" data-review-sec="${i}">${timeRange}</span>` +
+                  `<div class="stage-review-move-group">` +
+                    btn(ico("up"), "stage-review-move", "icon-btn", `${i}:-1`, `title="上移" aria-label="上移第 ${i + 1} 幕" ${i === 0 ? "disabled" : ""}`) +
+                    btn(ico("down"), "stage-review-move", "icon-btn", `${i}:1`, `title="下移" aria-label="下移第 ${i + 1} 幕" ${i === shots.length - 1 ? "disabled" : ""}`) +
+                    btn(ico("trash"), "stage-review-remove", "icon-btn danger", String(i), `title="删除" aria-label="删除第 ${i + 1} 幕" ${shots.length === 1 ? "disabled" : ""}`) +
+                  `</div>` +
+                `</div>` +
+                `<span class="small" data-review-stats="${i}">${shot.cues.length} 句 · ${shot.line.trim().length} 字</span>` +
+              `</div>` +
+            `</div>` +
           `</div>` +
-        `</div>` +
-        `<div class="stage-review-shot-job" data-review-job="${i}" hidden></div>` +
-      `</article>`;
+        `</article>` +
+        `<aside class="sheet stage-review-visual-card" aria-label="第 ${i + 1} 幕画面">` +
+          `<div class="stage-review-visual-head">` +
+            `<span class="stage-review-visual-label">实现方式</span>` +
+            kindSelect +
+          `</div>` +
+          `<div class="stage-review-visual-body">${mediaSlotHtml}</div>` +
+        `</aside>` +
+      `</div>`;
     }).join("");
-
-    const singlePagerHtml = activeFilter !== "all"
-      ? `<div class="stage-review-pager">` +
-          btn(activeFilter > 0 ? `← 上一幕：${esc(shots[activeFilter - 1].name || `第 ${activeFilter} 幕`)}` : "← 已是第 1 幕",
-            "stage-review-filter", "outline", activeFilter > 0 ? String(activeFilter - 1) : "0", activeFilter === 0 ? "disabled" : "") +
-          `<div class="stage-review-pager-mid"><span class="small">第 ${activeFilter + 1} / ${shots.length} 幕</span>` +
-            btn("查看全部幕", "stage-review-filter", "textbtn stage-review-inline-btn", "all") + `</div>` +
-          btn(activeFilter < shots.length - 1 ? `下一幕：${esc(shots[activeFilter + 1].name || `第 ${activeFilter + 2} 幕`)} →` : "已是最后一幕 →",
-            "stage-review-filter", "outline", activeFilter < shots.length - 1 ? String(activeFilter + 1) : String(shots.length - 1), activeFilter === shots.length - 1 ? "disabled" : "") +
-        `</div>`
-      : "";
 
     const footerBreakdown = reviewBatchBreakdown(fullPlan);
     const footerGuard = hasAvatar && fullPlan.totalBatchShots > 0
-      ? `<p class="small stage-review-guard">当前已开启数字人对口型：为避免画面未确认即产生数字人费用，生成画面后将先进入逐幕精修核对，确认无误再合成。</p>`
+      ? `<p class="small stage-review-guard">已开启数字人对口型：生成画面后将先进入逐幕核对，确认无误再合成。</p>`
       : fullPlan.missingClips.length > 0
-        ? `<p class="small stage-review-guard">第 ${fullPlan.missingClips.map(idx => idx + 1).join("、")} 幕为 AI 视频片段，不参与一键批量生成，将在逐幕精修中单独确认后生成。</p>`
+        ? `<p class="small stage-review-guard">第 ${fullPlan.missingClips.map(idx => idx + 1).join("、")} 幕为 AI 视频，不参与批量生成，请在逐幕精修中单独生成。</p>`
         : "";
     const autoComposeToggle = fullPlan.totalBatchShots > 0 && allowAuto
-      ? `<label class="stage-review-autocompose"><input type="checkbox" data-stage-field="work-autoCompose" ${willAuto ? "checked" : ""}><span>画面全部生成后自动合成视频（静态肖像，省去手动点合成）</span></label>`
+      ? `<label class="stage-review-autocompose"><input type="checkbox" data-stage-field="work-autoCompose" ${willAuto ? "checked" : ""}><span>全部画面生成后自动合成视频</span></label>`
       : "";
 
     const footerActions = fullPlan.totalBatchShots > 0
-      ? btn("先去逐幕精修", "stage-view", "outline", "studio") +
-        btn(batchPrimaryLabel, "stage-batch-all", "primary", batchActionMode)
-      : btn("进入逐幕精修", "stage-view", "outline", "studio") +
-        btn("重新生成已修改画面", "stage-batch-all", "primary", "stale", "hidden") +
+      ? btn(batchPrimaryLabel, "stage-batch-all", "primary", batchActionMode)
+      : btn("重新生成已修改画面", "stage-batch-all", "primary", "stale", "hidden") +
         btn("合成视频", "stage-compose", "primary");
-
-    const showDrugTags = isBroadcastLayout || Boolean(p.drugTags?.length);
 
     shell(w, "编辑视频分镜", 1, `<div class="vstudio stage-review-shell">` +
       `<div class="sheet vstudio-bar">` +
@@ -1915,44 +1971,30 @@ const StageStudio = (() => {
         `<fieldset class="vstudio-actions stage-edit-fields" data-stage-production-lock>${topActions}</fieldset>` +
       `</div>` +
       `<div id="stage-production-job" hidden></div>` +
-      `<fieldset class="stage-edit-fields stage-review-fieldset" data-stage-production-lock>` +
-        `<section class="sheet stage-review-meta">` +
-          `<div class="stage-review-meta-grid">` +
-            `<label class="field stage-review-meta-title">视频标题<input data-stage-field="work-title" value="${esc(w.title || "")}" maxlength="40" placeholder="输入科普视频标题"></label>` +
-            `<label class="field">关联药品（选填）<input data-stage-field="work-drug" value="${esc(w.drug || "")}" maxlength="20" placeholder="如：硝苯地平缓释片"></label>` +
-            (showDrugTags ? `<label class="field">药品标签（最多 2 个）<input data-stage-field="work-drugTags" value="${esc((p.drugTags || []).join("，"))}" maxlength="20" placeholder="如：缓释片，处方药"></label>` : "") +
-            `<label class="field">配音音色<select data-stage-field="work-voice">${opts(voiceList, currentVoice)}</select></label>` +
+      `<div class="stage-review-layout">` +
+        `<aside class="sheet stage-review-outline" aria-label="脚本大纲">` +
+          `<div class="stage-outline-head"><strong>脚本大纲</strong><span class="small">${shots.length} 幕 · ${totalSec}s</span></div>` +
+          `<nav class="stage-outline-nav">${outlineItemsHtml}</nav>` +
+          `<div class="stage-outline-foot">${btn("+ 添加一幕", "stage-add", "outline", "", shots.length >= 12 ? "disabled" : "")}</div>` +
+        `</aside>` +
+        `<fieldset class="stage-edit-fields stage-review-main" data-stage-production-lock>` +
+          `<div class="stage-review-doc-bar">` +
+            `<input class="stage-review-doc-title" data-stage-field="work-title" value="${esc(w.title || "")}" maxlength="40" aria-label="视频标题" placeholder="输入科普视频标题">` +
+            (w.drug?.trim() ? `<span class="pill stage-review-drug-pill" title="关联药品">${esc(w.drug.trim())}</span>` : "") +
           `</div>` +
-          `<div class="stage-review-meta-bar">` +
-            `<div class="stage-review-meta-pills">` +
-              `<span class="pill">布局：${esc(layoutName)}</span>` +
-              `<span class="pill">主题：${esc(themeName(w))}</span>` +
-              `<span class="pill">主讲：${esc(presenterText)}</span>` +
-              btn("调整模板与主讲", "stage-goto-module", "textbtn stage-review-inline-btn", "template") +
+          `<div class="stage-review-list">${cardsHtml}</div>` +
+          `<section class="sheet stage-review-footer">` +
+            `<div class="stage-review-footer-info">` +
+              `<strong id="stage-review-footer-meta">${footerBreakdown ? `共 ${shots.length} 幕 · 约 ${totalSec} 秒 · 待生成：${footerBreakdown}` : `共 ${shots.length} 幕 · 约 ${totalSec} 秒 · 全部画面已就绪`}</strong>` +
+              autoComposeToggle +
+              footerGuard +
             `</div>` +
-            `<details class="stage-review-more"><summary>编辑章节名与免责声明</summary>` +
-              `<div class="stage-review-more-grid">` +
-                p.chapters.map((name, idx) => text(`章节 ${idx + 1}`, "work-chapter:" + idx, name, 10)).join("") +
-                `<label class="field stage-review-disclaimer-field">底部参考声明<input data-stage-field="work-disclaimer" value="${esc(p.disclaimer || "")}" maxlength="60"></label>` +
-              `</div>` +
-            `</details>` +
-          `</div>` +
-        `</section>` +
-        guideBanner +
-        shotTabsHtml +
-        `<div class="stage-review-list">${cardsHtml}</div>` +
-        singlePagerHtml +
-        `<div class="stage-review-add-row">${btn("+ 添加一幕（最多 12 幕）", "stage-add", "outline", "", shots.length >= 12 ? "disabled" : "")}</div>` +
-        `<section class="sheet stage-review-footer">` +
-          `<div class="stage-review-footer-info">` +
-            `<strong id="stage-review-footer-meta">${footerBreakdown ? `共 ${shots.length} 幕 · 约 ${totalSec} 秒 · 待生成：${footerBreakdown}` : `共 ${shots.length} 幕 · 约 ${totalSec} 秒 · 全部画面已就绪`}</strong>` +
-            autoComposeToggle +
-            footerGuard +
-          `</div>` +
-          `<div class="stage-review-footer-actions">${footerActions}</div>` +
-        `</section>` +
-      `</fieldset>` +
+            `<div class="stage-review-footer-actions">${footerActions}</div>` +
+          `</section>` +
+        `</fieldset>` +
+      `</div>` +
     `</div>`);
+    bindReviewOutline(w);
     updateProductionJob(w);
   }
 
@@ -1960,7 +2002,7 @@ const StageStudio = (() => {
     const shots = w.stagePlan.shots;
     if (!shots.length) return setup(w);
     if (currentView(w) === "review") return renderReviewEditor(w);
-    stopReviewAudio();
+    if (reviewOutlineCleanup) { reviewOutlineCleanup(); reviewOutlineCleanup = null; }
     return renderStudioEditor(w);
   }
 
@@ -2434,7 +2476,6 @@ const StageStudio = (() => {
     const index = Math.min(selected.get(w) || 0, shots.length - 1);
     const shot = shots[index];
     const voice = w.settings.voice || "无配音";
-    stopReviewAudio();
     $("#stage-preview")?.stopSpeech?.();
     app.querySelectorAll('[data-stage-field="work-voice"]').forEach(sel => {
       if (sel.value !== voice) sel.value = voice;
@@ -2449,18 +2490,6 @@ const StageStudio = (() => {
         : "试听本幕配音并同步预览，合成时自动复用不重复计费";
       speechBtn.innerHTML = `${PLAY_ICON}<span>试听口播</span>${hasCached ? '<em class="stage-speech-tag">已缓存</em>' : ""}`;
     }
-    app.querySelectorAll('[data-action="stage-review-speech"]').forEach(btnEl => {
-      const idx = Number(btnEl.dataset.val);
-      const row = shots[idx];
-      if (!row) return;
-      const hasCached = Boolean(row.speech && row.speech.line === row.line.trim() && row.speech.voice === voice);
-      btnEl.classList.toggle("is-cached", hasCached);
-      btnEl.classList.remove("is-playing");
-      btnEl.title = voice === "无配音"
-        ? "当前为无配音，请在上方选择音色"
-        : "试听本幕口播，合成视频时自动复用不重复计费";
-      btnEl.innerHTML = `${PLAY_ICON}<span>试听口播</span>${hasCached ? '<em class="stage-speech-tag">已缓存</em>' : ""}`;
-    });
   }
 
   function finishSpeechUi(w, index) {
@@ -2468,21 +2497,6 @@ const StageStudio = (() => {
     const shots = w.stagePlan.shots;
     const shot = shots[index];
     if (!shot) return false;
-    if (currentView(w) === "review") {
-      const area = $("#stage-production-job");
-      if (area) { area.innerHTML = ""; area.hidden = true; }
-      app.querySelectorAll("[data-review-job]").forEach(el => { el.innerHTML = ""; el.hidden = true; });
-      app.querySelectorAll('[data-stage-production-lock]').forEach(control => { control.disabled = false; });
-      const secEl = app.querySelector(`[data-review-sec="${index}"]`);
-      if (secEl) secEl.textContent = `约 ${Math.round(shot.seconds)} 秒`;
-      refreshReviewSummaryDom(w);
-      syncVoiceUi(w);
-      if (pendingAutoPlay.get(w) === index) {
-        pendingAutoPlay.delete(w);
-        playReviewSpeech(w, index);
-      }
-      return true;
-    }
     const iframe = $("#stage-preview");
     if (!iframe?.isReady?.() || (selected.get(w) || 0) !== index) return false;
     const area = $("#stage-production-job");
@@ -2518,65 +2532,52 @@ const StageStudio = (() => {
       if (!row) return true;
       const sub = key.slice(7);
       let marksStale = false;
+      if (sub === "kind") {
+        const [rawKind, clipStyle] = String(value || "").split(":");
+        if (!Object.hasOwn(kinds, rawKind)) return true;
+        const same = row.content.kind === rawKind && (rawKind !== "clip" || (row.content.clipStyle || "demo") === (clipStyle || "demo"));
+        if (same) return true;
+        const prevIdea = row.content.imagePrompt || row.content.codePrompt || row.content.clipPrompt || "";
+        selectKind(w, row, rawKind, clipStyle);
+        if (rawKind === "image" && !row.content.imagePrompt && prevIdea) row.content.imagePrompt = prevIdea.slice(0, 400);
+        else if ((rawKind === "svg" || rawKind === "scene") && !row.content.codePrompt && prevIdea) row.content.codePrompt = prevIdea.slice(0, 600);
+        else if (rawKind === "clip" && !row.content.clipPrompt && prevIdea) row.content.clipPrompt = prevIdea.slice(0, 400);
+        if (row.content.decidedBy !== "user") delete row.content.reason;
+        delete row.content.adjusted;
+        row.content.decidedBy = "user";
+        delete row.presentationStale;
+        touch(w, true);
+        render(true);
+        return true;
+      }
       if (sub === "line") {
         row.line = value;
         row.cues = authoredCues(value, row.points.highlightWords, row.cues);
         delete row.speech;
-        if (reviewPlayingWork === w && reviewPlayingIndex === idx) stopReviewAudio();
-        el.rows = Math.max(3, Math.min(8, value.split("\n").length + 1));
+        el.rows = Math.max(2, Math.min(6, value.split("\n").length + 1));
         const stats = app.querySelector(`[data-review-stats="${idx}"]`);
         if (stats) stats.textContent = `${row.cues.length} 句 · ${value.trim().length} 字`;
-        const speechBtn = app.querySelector(`[data-action="stage-review-speech"][data-val="${idx}"]`);
-        if (speechBtn) {
-          speechBtn.classList.remove("is-cached", "is-playing");
-          speechBtn.innerHTML = `${PLAY_ICON}<span>试听口播</span>`;
-        }
         marksStale = true;
       } else if (sub === "name") {
         row.name = value;
-        const tabName = app.querySelector(`[data-review-tab-name="${idx}"]`);
-        if (tabName) tabName.textContent = value.trim() || "未命名";
+        const outlineTitle = app.querySelector(`[data-outline-title="${idx}"]`);
+        if (outlineTitle) outlineTitle.textContent = value.trim() || "未命名";
         marksStale = true;
-      } else if (sub === "chapter") {
-        row.chapterIndex = Number(value);
-      } else if (sub === "imagePrompt") {
-        row.content.imagePrompt = value;
-        row.variants[row.content.kind] = row.content;
-        marksStale = true;
-      } else if (sub === "codePrompt") {
-        row.content.codePrompt = value;
-        row.variants[row.content.kind] = row.content;
-        marksStale = true;
-      } else if (sub === "clipPrompt") {
-        row.content.clipPrompt = value;
-        row.variants[`clip:${row.content.clipStyle || "demo"}`] = row.content;
-        marksStale = true;
-      } else if (sub === "items") {
-        row.points.items = value.split("\n").filter(Boolean).slice(0, 4).map(r => {
-          const [title, detail = "", tag = ""] = r.split("｜");
-          return { title, detail, tag };
-        });
-        for (const f of ["points", "steps", "warnings", "columns", "checks"]) delete row.points[f];
-        marksStale = true;
-      } else if (["takeaway", "headline", "accentPhrase", "lead", "question", "answer", "verdictTone"].includes(sub)) {
+      } else if (["headline", "lead", "question", "answer", "verdictTone"].includes(sub)) {
         row.points[sub] = value;
         marksStale = true;
       }
       if (marksStale && shotReadyState(row) === "ok") {
         row.presentationStale = true;
-        const stEl = app.querySelector(`[data-review-status="${idx}"]`);
-        if (stEl) {
-          stEl.className = "stage-review-status is-stale";
-          stEl.textContent = "内容已改 · 建议重画";
+        const mediaEl = app.querySelector(`[data-review-media="${idx}"]`);
+        if (mediaEl) {
+          mediaEl.classList.add("is-stale");
+          mediaEl.dataset.status = "stale";
         }
-        const dotEl = app.querySelector(`[data-review-tab-dot="${idx}"]`);
-        if (dotEl) dotEl.className = "stage-review-tab-dot is-stale";
-        const genBtn = app.querySelector(`[data-review-gen-btn="${idx}"]`);
-        if (genBtn) {
-          genBtn.classList.remove("outline");
-          genBtn.classList.add("primary");
-          genBtn.textContent = reviewSingleActionLabel(row);
-        }
+        const staleBtn = app.querySelector(`[data-review-stale-btn="${idx}"]`);
+        if (staleBtn) staleBtn.hidden = false;
+        const dotEl = app.querySelector(`[data-outline-dot="${idx}"]`);
+        if (dotEl) dotEl.className = "stage-outline-dot is-stale";
       }
       touch(w, true);
       refreshReviewSummaryDom(w);
@@ -3005,7 +3006,7 @@ const StageStudio = (() => {
       return runNextBatchStep(w);
     }
     const focusIndex = queue.firstShotIndex ?? 0;
-    const switchToStudio = queue.switchToStudio !== false;
+    const switchToStudio = queue.switchToStudio === true;
     const totalShots = queue.totalShots || 0;
     batchQueues.delete(w);
     if (switchToStudio) {
@@ -3014,6 +3015,11 @@ const StageStudio = (() => {
       save();
       if (current() === w) {
         notify(`已生成 ${totalShots} 幕画面，请快速核对各幕效果后合成视频`, "ok");
+      }
+    } else {
+      save();
+      if (current() === w) {
+        notify(`已生成 ${totalShots} 幕画面，可直接核对各幕图文后合成视频`, "ok");
       }
     }
     return false;
@@ -3079,7 +3085,7 @@ const StageStudio = (() => {
       : "";
     const nextHint = willAutoCompose
       ? `<p class="small">全部完成后将直接进入成品草稿页供您审片。</p>`
-      : `<p class="small">全部画面生成完成后，将自动进入「逐幕精修」页供您快速核对画面与合成视频。</p>`;
+      : `<p class="small">全部画面生成完成后，将留在当前页供您核对各幕图文效果；确认无误可直接合成视频，或切至「逐幕精修」调整细节。</p>`;
 
     const steps = [];
     if (plan.image.length) steps.push({ type: "images", indices: plan.image, layout, themeDef, settings: imgSettings });
@@ -3088,12 +3094,11 @@ const StageStudio = (() => {
     if (willAutoCompose) steps.push({ type: "compose" });
 
     retryPayload = () => {
-      stopReviewAudio();
       batchQueues.set(w, {
         totalSteps: steps.length,
         doneSteps: 0,
         steps: [...steps],
-        switchToStudio: !willAutoCompose,
+        switchToStudio: false,
         firstShotIndex: targetIndices[0] ?? 0,
         totalShots: plan.totalBatchShots,
       });
@@ -3114,81 +3119,23 @@ const StageStudio = (() => {
       "confirm");
   }
 
-  function prepareReviewShotGenerate(w, index) {
-    if (w.job) return;
-    const shot = w.stagePlan.shots[index];
-    if (!shot) return;
-    const kind = shot.content.kind;
-    if (kind === "image") {
-      selected.set(w, index);
-      return prepareImages(w, "one");
-    }
-    if (kind === "svg" || kind === "scene") {
-      if (!config.stageShotProduction || !checkShotText(w, [index])) return;
-      if (!config.deepseekKeyPresent) return openApiKeys("deepseek");
-      const isSvg = kind === "svg";
-      const label = isSvg ? "SVG 动画" : "代码动效";
-      const revisionCount = (shot.content._revCount || 0) + 1;
-      const previousParams = isSvg
-        ? (shot.content.svgCode ? { svgCode: shot.content.svgCode } : {})
-        : (shot.content.code ? { code: shot.content.code } : {});
-      selected.set(w, index);
-      retryPayload = () => {
-        const producePromptMeta = typeof resolveExtraPromptForSubmit === "function"
-          ? resolveExtraPromptForSubmit(w, "stage-produce") : null;
-        const shotPrompt = isSvg
-          ? renderSvgPromptForShot(w, shot, currentLayoutDef(w), currentThemeDef(w))
-          : renderCodePromptForShot(w, shot, currentLayoutDef(w), currentThemeDef(w));
-        return submitDraft(w, {
-          presentation: kind,
-          produceShot: {
-            shot: shotScript(shot),
-            previousParams,
-            revisionCount,
-            revision: "",
-            prompt: shotPrompt,
-            ...(isSvg && shot.content.customSvgPrompt?.trim() ? { customSvgPrompt: shot.content.customSvgPrompt.trim() } : {}),
-            ...(!isSvg && shot.content.customCodePrompt?.trim() ? { customCodePrompt: shot.content.customCodePrompt.trim() } : {}),
-          },
-          ...(producePromptMeta?.customPrompt ? { produceShotPrompt: producePromptMeta.customPrompt } : {}),
-        }, "produce", index);
-      };
-      const idea = shot.content.codePrompt?.trim();
-      openModal(`生成第 ${index + 1} 幕${label}`,
-        `<p>将按第 ${index + 1} 幕「${esc(shot.name || "未命名")}」的口播、要点与画面构想，调用 DeepSeek 生成${isSvg ? "纯矢量 SVG 动画" : "纯代码动效"}。</p>` +
-        (idea ? `<p class="small">画面构想：${esc(idea)}</p>` : "") +
-        `<p class="small">仅生成本幕（提交 1 次文本请求，按 Token 计费），完成后留在当前审稿页。</p>` +
-        `<div class="actions dialog-actions">${btn("取消", "close", "secondary")}${btn("确认生成并计费", "confirm-paid", "primary")}</div>`,
-        "confirm");
-      return;
-    }
-    if (kind === "clip") {
-      stopReviewAudio();
-      selected.set(w, index);
-      w.stagePlan.editorView = "studio";
-      changed(w);
-      render(false);
-    }
-  }
-
   function prepareSpeech(w, index) {
     if (w.job) return;
     const shot = w.stagePlan.shots[index];
     if (!shot) return;
     if (w.settings.voice === "无配音") {
-      notify("当前已设为「无配音」，请先选择配音音色。", "warn");
-      $('[data-stage-field="work-voice"]')?.focus();
+      notify("当前已设为「无配音」，请先在口播栏选择配音音色。", "warn");
+      $(".stage-voice-select")?.focus();
       return;
     }
     const line = shot.line.trim();
     const cached = shot.speech;
     if (cached?.line === line && cached.voice === w.settings.voice) {
-      if (currentView(w) === "review") return playReviewSpeech(w, index);
       return $("#stage-preview")?.toggleSpeech?.(cached);
     }
     if (!line || line.length > 450) {
       notify("逐幕试听口播须为 1–450 字。", "warn");
-      (currentView(w) === "review" ? $(`[data-stage-field="review-line:${index}"]`) : $("#stage-line-input"))?.focus();
+      $("#stage-line-input")?.focus();
       return;
     }
     if (!config.speechKeyPresent) return openApiKeys("speech");
@@ -3253,16 +3200,7 @@ const StageStudio = (() => {
     if (action === "stage-view") {
       const next = value === "review" ? "review" : "studio";
       if (currentView(w) === next) return true;
-      stopReviewAudio();
       p.editorView = next;
-      changed(w);
-      render(false);
-      return true;
-    }
-    if (action === "stage-goto-module") {
-      stopReviewAudio();
-      p.editorView = "studio";
-      inspector.set(w, normalizeModule(value));
       changed(w);
       render(false);
       return true;
@@ -3271,74 +3209,78 @@ const StageStudio = (() => {
       prepareBatchAll(w, value || "all");
       return true;
     }
-    if (action === "stage-review-filter") {
-      const next = value === "all" ? "all" : Math.max(0, Math.min(p.shots.length - 1, Number(value) || 0));
-      if (getReviewFilter(w) === next) return true;
-      reviewFilter.set(w, next);
-      if (typeof next === "number") selected.set(w, next);
-      render(true);
+    if (action === "stage-outline-jump") {
+      const targetIdx = Math.max(0, Math.min(p.shots.length - 1, Number(value) || 0));
+      selected.set(w, targetIdx);
+      reviewJumpLockUntil = Date.now() + 500;
+      app.querySelectorAll(".stage-outline-item").forEach(btnEl => {
+        const hit = Number(btnEl.dataset.val) === targetIdx;
+        btnEl.classList.toggle("is-active", hit);
+        btnEl.setAttribute("aria-current", hit ? "true" : "false");
+      });
+      const card = app.querySelector(`[data-review-shot="${targetIdx}"]`);
+      if (card) {
+        scrollReviewCard(card);
+        card.classList.remove("is-flash");
+        void card.offsetWidth;
+        card.classList.add("is-flash");
+        setTimeout(() => card.classList.remove("is-flash"), 950);
+      }
       return true;
     }
     if (action === "stage-review-generate") {
       const targetIdx = Math.max(0, Math.min(p.shots.length - 1, Number(value) || 0));
-      prepareReviewShotGenerate(w, targetIdx);
-      return true;
-    }
-    if (action === "stage-review-choose") {
-      const targetIdx = Math.max(0, Math.min(p.shots.length - 1, Number(value) || 0));
       const targetShot = p.shots[targetIdx];
-      if (!targetShot || targetShot.content.kind !== "image") return true;
-      const slot = LayoutEngine.describeMediaSlot(currentLayoutDef(w));
-      StudioAssets.pick(["image"], item => {
-        targetShot.content.image = item.url;
-        delete targetShot.content.imageMediaSize;
-        delete targetShot.presentationStale;
-        targetShot.variants.image = targetShot.content;
-        touch(w, true);
-        render(true);
-      }, { topic: w.topic, style: w.templateTheme || "medical", ratio: slot.ratioLabel });
+      if (!targetShot || w.job) return true;
+      selected.set(w, targetIdx);
+      const kind = targetShot.content.kind;
+      if (kind === "image") {
+        prepareImages(w, "one");
+        return true;
+      }
+      if (kind === "clip") {
+        p.editorView = "studio";
+        inspector.set(w, "visual");
+        changed(w);
+        render(false);
+        notify(`第 ${targetIdx + 1} 幕为 AI 视频，请在画面面板确认首帧与动作描述后生成。`, "info");
+        return true;
+      }
+      if (kind === "asset" || kind === "mg") {
+        handleAction(w, "stage-choose", kind);
+        return true;
+      }
+      if (config.stageShotProduction) {
+        produceShot(w, targetShot, targetIdx);
+        return true;
+      }
       return true;
     }
     if (action === "stage-review-zoom") {
       const targetIdx = Math.max(0, Math.min(p.shots.length - 1, Number(value) || 0));
       const targetShot = p.shots[targetIdx];
-      if (!targetShot?.content?.image) return true;
-      openModal(`第 ${targetIdx + 1} 幕 · ${targetShot.name || "AI 完整图"}`,
-        `<div class="stage-review-zoom-box"><img src="${esc(targetShot.content.image)}" alt="第 ${targetIdx + 1} 幕配图大图"></div>` +
-        `<div class="actions dialog-actions">${btn("精修此幕", "stage-review-open", "outline", String(targetIdx))}${btn("关闭", "close", "primary")}</div>`,
+      const c = targetShot?.content;
+      const src = c?.kind === "image" ? c.image
+        : c?.kind === "svg" && c.svgCode ? buildSvgThumbSrc(c.svgCode, currentThemeDef(w))
+        : "";
+      if (!src) return true;
+      const purpose = reviewShotPurpose(targetShot, targetIdx, p.shots.length);
+      openModal(`第 ${targetIdx + 1} 幕 · ${purpose.title}`,
+        `<div class="stage-review-zoom-box${c.kind === "svg" ? " is-svg" : ""}"><img src="${esc(src)}" alt="第 ${targetIdx + 1} 幕画面大图"></div>` +
+        `<div class="actions dialog-actions">` +
+          btn("去逐幕精修", "stage-review-open", "outline", String(targetIdx)) +
+          btn("关闭", "close", "primary") +
+        `</div>`,
         "info");
       return true;
     }
     if (action === "stage-review-open") {
       const targetIdx = Math.max(0, Math.min(p.shots.length - 1, Number(value) || 0));
       if (dialog?.open) dialog.close();
-      stopReviewAudio();
       selected.set(w, targetIdx);
       p.editorView = "studio";
       changed(w);
       render(false);
-      return true;
-    }
-    if (action === "stage-review-kind") {
-      const parts = String(value || "").split(":");
-      const targetIdx = Number(parts[0]);
-      const rawKind = parts[1];
-      const clipStyle = parts[2];
-      const targetShot = p.shots[targetIdx];
-      if (!targetShot || !Object.hasOwn(kinds, rawKind)) return true;
-      const same = targetShot.content.kind === rawKind && (rawKind !== "clip" || (targetShot.content.clipStyle || "demo") === (clipStyle || "demo"));
-      if (same) return true;
-      const prevIdea = targetShot.content.imagePrompt || targetShot.content.codePrompt || targetShot.content.clipPrompt || "";
-      selectKind(w, targetShot, rawKind, clipStyle);
-      if (rawKind === "image" && !targetShot.content.imagePrompt && prevIdea) targetShot.content.imagePrompt = prevIdea.slice(0, 400);
-      else if ((rawKind === "svg" || rawKind === "scene") && !targetShot.content.codePrompt && prevIdea) targetShot.content.codePrompt = prevIdea.slice(0, 600);
-      else if (rawKind === "clip" && !targetShot.content.clipPrompt && prevIdea) targetShot.content.clipPrompt = prevIdea.slice(0, 400);
-      if (targetShot.content.decidedBy !== "user") delete targetShot.content.reason;
-      delete targetShot.content.adjusted;
-      targetShot.content.decidedBy = "user";
-      delete targetShot.presentationStale;
-      touch(w, true);
-      render(true);
       return true;
     }
     if (action === "stage-review-move") {
@@ -3346,11 +3288,7 @@ const StageStudio = (() => {
       const from = Number(rawIdx);
       const to = from + Number(rawDelta);
       if (from >= 0 && from < p.shots.length && to >= 0 && to < p.shots.length) {
-        stopReviewAudio();
-        const curFilter = getReviewFilter(w);
         p.shots.splice(to, 0, p.shots.splice(from, 1)[0]);
-        if (curFilter === from) reviewFilter.set(w, to);
-        else if (curFilter === to) reviewFilter.set(w, from);
         selected.set(w, to);
         touch(w, true);
         render(true);
@@ -3360,22 +3298,11 @@ const StageStudio = (() => {
     if (action === "stage-review-remove" && p.shots.length > 1) {
       const targetIdx = Number(value);
       if (targetIdx >= 0 && targetIdx < p.shots.length) {
-        stopReviewAudio();
-        const curFilter = getReviewFilter(w);
         p.shots.splice(targetIdx, 1);
-        if (typeof curFilter === "number") {
-          if (curFilter === targetIdx) reviewFilter.set(w, Math.min(targetIdx, p.shots.length - 1));
-          else if (curFilter > targetIdx) reviewFilter.set(w, curFilter - 1);
-        }
         selected.set(w, Math.min(selected.get(w) || 0, p.shots.length - 1));
         touch(w, true);
         render(true);
       }
-      return true;
-    }
-    if (action === "stage-review-speech") {
-      const targetIdx = Number(value);
-      if (targetIdx >= 0 && targetIdx < p.shots.length) prepareSpeech(w, targetIdx);
       return true;
     }
     if (action === "stage-manage-layouts") { StudioAssets.manageLayouts(); return true; }
@@ -3502,11 +3429,10 @@ const StageStudio = (() => {
       selected.set(w, nextIdx);
       touch(w,true);
       if (currentView(w) === "review") {
-        if (getReviewFilter(w) !== "all") reviewFilter.set(w, nextIdx);
         render(true);
         const addedCard = app.querySelector(`[data-review-shot="${nextIdx}"]`);
-        addedCard?.scrollIntoView({ block: "center", behavior: "smooth" });
-        addedCard?.querySelector(`[data-stage-field="review-line:${nextIdx}"]`)?.focus();
+        scrollReviewCard(addedCard);
+        addedCard?.querySelector(`[data-stage-field="review-line:${nextIdx}"]`)?.focus({ preventScroll: true });
         return true;
       }
     } else if (action === "stage-remove" && p.shots.length > 1) {
@@ -3609,5 +3535,5 @@ const StageStudio = (() => {
     return true;
   }
 
-  return {applies,isActive,normalizeWork,initWork,setupControls,themeName,samplePlan,requestDraft,installDraft,installImages,installClip,installSpeech,syncVoiceUi,finishSpeechUi,editor,hasProductionJob,updateProductionJob,handleInput,handleAction,defaultImagePromptTemplate,defaultArtPromptTemplate,renderImagePromptForShot,renderArtPromptForShot,renderSvgPromptForShot,renderCodePromptForShot,currentProduceKind,onJobFinished,clearBatchQueue,formatJobProgress,stopReviewAudio};
+  return {applies,isActive,normalizeWork,initWork,setupControls,themeName,samplePlan,requestDraft,installDraft,installImages,installClip,installSpeech,syncVoiceUi,finishSpeechUi,editor,hasProductionJob,updateProductionJob,handleInput,handleAction,defaultImagePromptTemplate,defaultArtPromptTemplate,renderImagePromptForShot,renderArtPromptForShot,renderSvgPromptForShot,renderCodePromptForShot,currentProduceKind,onJobFinished,clearBatchQueue,formatJobProgress};
 })();

@@ -243,106 +243,110 @@ try {
   await dialog.locator('[data-action="confirm-paid"]').click();
 
   await page.locator(".stage-review-card").first().waitFor();
-  assert.equal(await page.locator(".stage-review-card").count(), 3, "Should display all 3 shots on one page");
+  assert.equal(await page.locator(".stage-review-card").count(), 3, "Should display all 3 script cards on one page");
+  assert.equal(await page.locator(".stage-review-visual-card").count(), 3, "Should display 3 separate right-side visual cards");
+  const layoutGeometry = await page.evaluate(() => {
+    const main = document.querySelector("main").getBoundingClientRect();
+    const outline = document.querySelector(".stage-review-outline").getBoundingClientRect();
+    const card = document.querySelector(".stage-review-card").getBoundingClientRect();
+    const visual = document.querySelector(".stage-review-visual-card").getBoundingClientRect();
+    const kind = document.querySelector('[data-stage-field="review-kind:0"]').getBoundingClientRect();
+    const media = document.querySelector('[data-review-media="0"]').getBoundingClientRect();
+    return { mainW: main.width, outlineR: outline.right, cardL: card.left, cardR: card.right, visualL: visual.left, kindB: kind.bottom, mediaT: media.top };
+  });
+  assert(layoutGeometry.outlineR < layoutGeometry.cardL, "Outline should be left of script card");
+  assert(layoutGeometry.cardR < layoutGeometry.visualL, "Visual card should be separated to the right of script card");
+  assert(layoutGeometry.kindB <= layoutGeometry.mediaT + 1, "Visual mode select should sit above the visual media box");
   assert.equal(
     await page.locator('.stage-view-tab[data-action="stage-view"][data-val="review"]').getAttribute("aria-selected"),
     "true",
     "Review tab should be active after script generation",
   );
   assert.equal(await page.locator("#stage-preview").count(), 0, "Review view should not render heavy preview iframe");
+  assert.equal(await page.locator(".stage-review-outline").count(), 1, "Review view should show left script outline");
+  assert.equal(await page.locator(".stage-outline-item").count(), 3, "Outline should list all 3 shots");
+  assert.equal(await page.locator('[data-stage-field^="review-name:"]').count(), 0, "Card header should omit editable outline title input");
+  assert.equal(await page.locator(".stage-review-role").count(), 3, "Each card should show narrative role purpose");
+  assert((await page.locator(".stage-review-role").nth(0).innerText()).includes("痛点开场"), "Shot 1 should show opening role");
+  assert((await page.locator(".stage-review-why").nth(0).innerText()).length > 4, "Shot 1 should explain why this shot is structured this way");
+  assert.equal(await page.locator('[data-review-sec="0"]').innerText(), "00:00 - 00:06", "Shot 1 time range");
+  assert.equal(await page.locator('[data-review-sec="1"]').innerText(), "00:06 - 00:13", "Shot 2 time range");
+  assert.equal(await page.locator('[data-review-sec="2"]').innerText(), "00:13 - 00:19", "Shot 3 time range");
+  assert.equal(await page.locator('[data-action="stage-review-speech"]').count(), 0, "Review view should omit speech audition buttons");
+  assert.equal(await page.locator('[data-action="stage-review-open"]').count(), 0, "Pending review cards should omit per-shot refine links");
+  assert.equal(await page.locator('[data-stage-field^="review-imagePrompt:"]').count(), 0, "Review view should omit visual idea textareas");
+  assert.equal(await page.locator('.stage-review-media-box.is-empty[data-action="stage-review-generate"]').count(), 3, "All 3 pending shots should show clickable right-side media placeholder");
   assert.equal(await page.locator('[data-stage-field="review-question:0"]').count(), 1, "QA layout should surface question field");
   assert.equal(await page.locator('[data-stage-field="review-answer:0"]').count(), 1, "QA layout should surface answer field");
 
-  // 2. Doctor edits inline without losing focus & mixes presentation modes (image + svg + scene)
+  // 2. Doctor edits inline, checks outline jump (only right pane scrolls), and clicks shot 1 placeholder to generate just shot 1 in place
   const line0 = page.locator('[data-stage-field="review-line:0"]');
   await line0.fill("看到药名带缓释二字，\n千万别掰开或嚼碎服用。");
   assert(await page.locator('[data-review-stats="0"]').innerText().then((t) => t.includes("2 句")), "Live cue stats should update");
-  await page.locator('[data-stage-field="review-imagePrompt:0"]').fill("画一盒硝苯地平缓释片与禁止掰开标识");
-
-  // Switch shot 2 to SVG 动画 & shot 3 to 代码动效, fill human-readable visual ideas
-  await page.locator('[data-action="stage-review-kind"][data-val="1:svg"]').click();
-  await page.locator('[data-stage-field="review-codePrompt:1"]').fill("扁平矢量演示完整缓释骨架匀速释放，掰开后药物瞬间涌出");
-  await page.locator('[data-action="stage-review-kind"][data-val="2:scene"]').click();
-  await page.locator('[data-stage-field="review-codePrompt:2"]').fill("清晰展示医生药师换剂型建议三步流程");
-
-  // 3. Inline speech audition stays in Review view & caches audio
-  await page.locator('[data-action="stage-review-speech"][data-val="0"]').click();
-  await page.waitForFunction(() =>
-    document.querySelector('[data-action="stage-review-speech"][data-val="0"]')?.classList.contains("is-cached"),
-  );
-  assert.equal(await page.locator(".stage-review-card").count(), 3, "Speech preview should keep user in Review view");
-
-  // 3b. Per-shot Tab bar: defaults to 全部 (3 cards), click shot 1 tab -> shows single card + pager, live title sync
+  await page.locator('[data-action="stage-outline-jump"][data-val="2"]').click();
+  await page.waitForTimeout(350);
+  const scrollState = await page.evaluate(() => ({
+    winY: window.scrollY,
+    paneTop: document.querySelector(".stage-review-main")?.scrollTop || 0,
+    paneScrollable: (document.querySelector(".stage-review-main")?.scrollHeight || 0) > (document.querySelector(".stage-review-main")?.clientHeight || 0),
+  }));
+  assert.equal(scrollState.winY, 0, "Clicking outline item must NOT scroll the outer window");
+  if (scrollState.paneScrollable) {
+    assert(scrollState.paneTop > 0, "Clicking lower outline item should scroll the right content pane");
+  }
   assert.equal(
-    await page.locator('.stage-review-tab[data-val="all"]').getAttribute("aria-selected"),
+    await page.locator('[data-action="stage-outline-jump"][data-val="2"]').getAttribute("aria-current"),
     "true",
-    "Shot filter tabs should default to 全部",
+    "Clicking outline item should highlight active shot",
   );
-  await page.locator('.stage-review-tab[data-val="0"]').click();
-  assert.equal(await page.locator(".stage-review-card").count(), 1, "Selecting shot 1 tab should show only 1 card");
-  assert.equal(await page.locator(".stage-review-pager").count(), 1, "Single-shot filter should show prev/next pager");
-  await page.locator('[data-stage-field="review-name:0"]').fill("开头先看药盒");
-  assert.equal(await page.locator('[data-review-tab-name="0"]').innerText(), "开头先看药盒", "Tab title should sync live");
+  await page.locator('[data-action="stage-outline-jump"][data-val="0"]').click();
 
-  // 3c. Per-shot direct generation inside Review view: generate shot 1 AI 完整图 -> stays in Review view & shows thumb + zoom modal
-  const shot1GenBtn = page.locator('[data-action="stage-review-generate"][data-val="0"]');
-  assert.equal(await shot1GenBtn.innerText(), "生成 AI 完整图");
-  await shot1GenBtn.click();
+  // Click shot 0 right-side placeholder -> generates ONLY shot 0 in place and stays in 「总览审稿」
+  await page.locator('[data-review-media="0"]').click();
   await dialog.locator('[data-action="confirm-paid"]').click();
-  await page.locator(".stage-review-thumb-bar").waitFor();
-  assert.equal(await page.locator('[data-review-status="0"]').innerText(), "画面就绪");
-  assert.equal(await page.locator(".stage-review-card").count(), 1, "Single-shot generate should stay in Review view & keep current tab");
-  assert((await page.locator('[data-action="stage-batch-all"]').first().innerText()).includes("生成剩余画面（2 幕）"), "Batch button should switch to remaining 2 shots");
+  await page.locator('[data-review-media="0"].is-ready img.stage-review-media-img').waitFor();
+  assert.equal(captured.filter((c) => c.kind === "images").length, 1, "Clicking shot 0 placeholder should submit 1 single-shot image job");
+  assert.equal(
+    await page.locator('.stage-view-tab[data-action="stage-view"][data-val="review"]').getAttribute("aria-selected"),
+    "true",
+    "Single-shot generation should stay in 总览审稿",
+  );
+  assert.equal(await page.locator('[data-review-media="0"]').getAttribute("data-status"), "ok");
 
-  // Click thumbnail zoom button -> opens zoom modal -> close
-  await page.locator('[data-action="stage-review-zoom"][data-val="0"]').first().click();
-  await dialog.locator(".stage-review-zoom-box img").waitFor();
-  await dialog.locator('[data-action="close"]').first().click();
-
-  // Switch via pager to shot 2 (SVG) and test per-shot SVG generation inside Review view
-  await page.locator('.stage-review-pager [data-action="stage-review-filter"][data-val="1"]').click();
-  assert.equal(await page.locator('[data-review-shot="1"]').count(), 1, "Pager should navigate to shot 2");
-  const shot2GenBtn = page.locator('[data-action="stage-review-generate"][data-val="1"]');
-  assert.equal(await shot2GenBtn.innerText(), "生成 SVG 动画");
-  await shot2GenBtn.click();
-  await dialog.locator('[data-action="confirm-paid"]').click();
-  await page.locator(".stage-review-ready-note").waitFor();
-  assert.equal(await page.locator('[data-review-status="1"]').innerText(), "画面就绪");
-  assert(captured.at(-1).draft.produceShot.prompt.includes("扁平矢量演示完整缓释骨架匀速释放"), "Single SVG gen should carry doctor's visual idea");
-
-  // Return to 全部 tab -> verify remaining batch generation (only shot 3 code scene left!) & auto-transition to 逐幕精修
-  await page.locator('.stage-review-tab[data-val="all"]').click();
-  assert.equal(await page.locator(".stage-review-card").count(), 3, "Clicking 全部 tab should show all 3 cards again");
-
-  // 4. Unified batch generation for remaining shot (shot 3 code scene) -> auto-switches to 「逐幕精修」
+  // 3. Switch shot 2 -> SVG, shot 3 -> code scene; batch-generate remaining 2 shots -> stays in 「总览审稿」 with previews visible!
+  await page.locator('[data-stage-field="review-kind:1"]').selectOption("svg");
+  await page.locator('[data-stage-field="review-kind:2"]').selectOption("scene");
   await page.locator('[data-action="stage-batch-all"]').first().click();
   const batchModalText = await dialog.innerText();
-  assert(!batchModalText.includes("AI 完整图"), "Already-generated shot 1 image should not be re-submitted");
-  assert(!batchModalText.includes("SVG 动画"), "Already-generated shot 2 SVG should not be re-submitted");
-  assert(batchModalText.includes("代码动效（1 幕）"), "Unified batch modal should list remaining code scene");
+  assert(!batchModalText.includes("AI 完整图"), "Already-generated shot 1 should be skipped by remaining batch");
+  assert(batchModalText.includes("SVG 动画（1 幕）"), "Unified batch modal should list remaining SVG shot");
+  assert(batchModalText.includes("代码动效（1 幕）"), "Unified batch modal should list remaining code scene shot");
   await dialog.locator('[data-action="confirm-paid"]').click();
 
-  // Wait for automatic transition to 「逐幕精修」 after remaining step finishes
-  await page.locator("#stage-preview").waitFor();
+  // Wait for both remaining shots to become ready right in 「总览审稿」
+  await page.locator('[data-review-media="1"].is-ready img.is-svg').waitFor();
+  await page.locator('[data-review-media="2"].is-ready .stage-review-code-thumb').waitFor();
   assert.equal(
-    await page.locator('.stage-view-tab[data-action="stage-view"][data-val="studio"]').getAttribute("aria-selected"),
+    await page.locator('.stage-view-tab[data-action="stage-view"][data-val="review"]').getAttribute("aria-selected"),
     "true",
-    "Should auto-switch to 逐幕精修 after all visuals finish",
+    "Batch completion should stay in 总览审稿 so doctor can inspect all visuals together",
   );
-  const sceneReq = captured.find((c) => c.draft?.produceSceneBatch);
-  assert(sceneReq?.draft.produceSceneBatch[0].prompt.includes("医生药师换剂型建议三步流程"), "Scene prompt should inherit doctor's review visual idea");
+  assert.equal(captured.filter((c) => c.draft?.produceSvgBatch).length, 1);
+  assert.equal(captured.filter((c) => c.draft?.produceSceneBatch).length, 1);
 
-  // 5. Switch back to 「总览审稿」 -> verify ready states, edit shot 1 -> verify stale badge & targeted regen (only 1 shot!)
-  await page.locator('[data-action="stage-view"][data-val="review"]').click();
-  await page.locator(".stage-review-thumb-bar").first().waitFor();
-  assert.equal(await page.locator('[data-review-status="0"]').innerText(), "画面就绪");
-  assert.equal(await page.locator('[data-review-status="1"]').innerText(), "画面就绪");
-  assert.equal(await page.locator('[data-review-status="2"]').innerText(), "画面就绪");
+  // 4. Verify zoom modal on shot 1 image, edit shot 1 narration -> live stale pill appears -> targeted regen updates shot 1 in place
+  await page.locator('[data-review-media="0"] .stage-review-media-hit').click();
+  await dialog.locator(".stage-review-zoom-box img").waitFor();
+  await dialog.locator('[data-action="close"]').first().click();
+  assert.equal(await page.locator('[data-review-media="0"]').getAttribute("data-status"), "ok");
+  assert.equal(await page.locator('[data-review-media="1"]').getAttribute("data-status"), "ok");
+  assert.equal(await page.locator('[data-review-media="2"]').getAttribute("data-status"), "ok");
 
   const imgJobsBefore = captured.filter((c) => c.kind === "images").length;
   await page.locator('[data-stage-field="review-line:0"]').fill("拿到硝苯地平缓释片，\n请整片吞服切勿掰开。");
-  assert.equal(await page.locator('[data-review-status="0"]').innerText(), "内容已改 · 建议重画");
-  assert.equal(await page.locator('[data-review-status="1"]').innerText(), "画面就绪");
+  assert.equal(await page.locator('[data-review-media="0"]').getAttribute("data-status"), "stale");
+  await page.locator('[data-review-stale-btn="0"]').waitFor({ state: "visible" });
+  assert.equal(await page.locator('[data-review-media="1"]').getAttribute("data-status"), "ok");
 
   const staleBtn = page.locator('[data-action="stage-batch-all"]').first();
   await staleBtn.waitFor({ state: "visible" });
@@ -352,12 +356,11 @@ try {
   assert(staleModal.includes("AI 完整图（1 张）"), "Targeted regen should only submit 1 modified image");
   assert(!staleModal.includes("SVG 动画"), "Unmodified SVG shot must not be regenerated");
   await dialog.locator('[data-action="confirm-paid"]').click();
-  await page.locator("#stage-preview").waitFor();
+  await page.waitForFunction(() => document.querySelector('[data-review-media="0"]')?.dataset?.status === "ok");
   const imgJobsAfter = captured.filter((c) => c.kind === "images").length;
   assert.equal(imgJobsAfter, imgJobsBefore + 1, "Only 1 targeted image job should have run");
 
-  // 6. Verify dynamic avatar protection hides auto-compose checkbox, while static allows auto-compose straight to draft
-  await page.locator('[data-action="stage-view"][data-val="review"]').click();
+  // 5. Verify dynamic avatar protection hides auto-compose checkbox, while static allows auto-compose straight to draft
   await page.locator('[data-stage-field="review-line:0"]').fill("再次微调第 1 幕口播以测试自动合成保护。");
   // Enable dynamic avatar -> autoCompose checkbox should be hidden & guard message shown
   await page.evaluate(() => {
@@ -426,6 +429,8 @@ try {
   await page.goto(`${origin}/#work/33333333-3333-4333-8333-333333333333`);
   await page.reload();
   await page.locator("#stage-preview").waitFor();
+  const studioMainW = await page.evaluate(() => document.querySelector("main").getBoundingClientRect().width);
+  assert(Math.abs(studioMainW - layoutGeometry.mainW) < 1, `Review (${layoutGeometry.mainW}) and Studio (${studioMainW}) main widths must match`);
   assert.equal(
     await page.locator('.stage-view-tab[data-action="stage-view"][data-val="studio"]').getAttribute("aria-selected"),
     "true",

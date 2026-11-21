@@ -4644,7 +4644,6 @@ function render(preserveScroll = false) {
     }
   }
   if (route()[0] === "library") {
-    StageStudio.stopReviewAudio?.();
     updateTopbar();
     StudioAssets.page();
     if (!preserveScroll) window.scrollTo(0, 0);
@@ -4652,7 +4651,6 @@ function render(preserveScroll = false) {
   }
   const w = current();
   if (route()[0] !== "work" || !w) {
-    StageStudio.stopReviewAudio?.();
     home();
     if (!preserveScroll) window.scrollTo(0, 0);
     return;
