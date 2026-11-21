@@ -1961,11 +1961,16 @@ const StageStudio = (() => {
       : btn("重新生成已修改画面", "stage-batch-all", "primary", "stale", "hidden") +
         btn("合成视频", "stage-compose", "primary");
 
+    const drugPillHtml = w.drug?.trim()
+      ? `<span class="stage-review-drug-pill" title="关联药品">${esc(w.drug.trim())}</span>`
+      : "";
+
     shell(w, "编辑视频分镜", 1, `<div class="vstudio stage-review-shell">` +
       `<div class="sheet vstudio-bar">` +
         `<div class="vstudio-summary">` +
           viewSwitchHtml(w, "review") +
           `<span class="vstudio-metric" id="stage-review-summary">共 ${shots.length} 幕 · 约 ${totalSec} 秒 · ${totalChars} 字</span>` +
+          drugPillHtml +
           readinessHtml +
         `</div>` +
         `<fieldset class="vstudio-actions stage-edit-fields" data-stage-production-lock>${topActions}</fieldset>` +
@@ -1980,7 +1985,6 @@ const StageStudio = (() => {
         `<fieldset class="stage-edit-fields stage-review-main" data-stage-production-lock>` +
           `<div class="stage-review-doc-bar">` +
             `<input class="stage-review-doc-title" data-stage-field="work-title" value="${esc(w.title || "")}" maxlength="40" aria-label="视频标题" placeholder="输入科普视频标题">` +
-            (w.drug?.trim() ? `<span class="pill stage-review-drug-pill" title="关联药品">${esc(w.drug.trim())}</span>` : "") +
           `</div>` +
           `<div class="stage-review-list">${cardsHtml}</div>` +
           `<section class="sheet stage-review-footer">` +
