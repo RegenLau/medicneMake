@@ -112,7 +112,7 @@
         dom.form.animate(dom.slot, dom.data, time, { ...dom.fctx, ...ctx, shot });
         return;
       }
-      if (dom.artShot) return scene.draw(dom, dom.artShot, time);
+      if (dom.artShot) return scene.draw(dom, dom.artShot, time, ctx);
       const { slide } = ctx;
       const focus = activeCue(shot, time)?.focus || "all";
       if (dom.focus !== focus) {
@@ -122,7 +122,7 @@
         dom.tipBar = dom.slot.querySelector(".pt-fb-tip-bar");
         dom.focus = focus;
       }
-      StageSceneContent.animateTemplateCard(dom, slide, time, focus, Math.max(0.5, shot.end - shot.start));
+      StageSceneContent.animateTemplateCard(dom, slide, time, focus, Math.max(0.5, shot.end - shot.start), ctx);
     },
     events(shot, ctx) {
       const form = resolveForm(shot);
@@ -596,7 +596,7 @@
         dom.form.animate(dom.slot, dom.data, time, { ...dom.fctx, ...ctx, shot });
         return;
       }
-      StageSceneContent.animateDynamicScene(dom, shot, dom.meta, time);
+      StageSceneContent.animateDynamicScene(dom, shot, dom.meta, time, ctx);
     },
     events(shot, ctx) {
       if (shot?.code && typeof shot.code.html === "string" && shot.code.html.trim()) {

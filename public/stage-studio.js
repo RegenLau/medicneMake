@@ -2094,12 +2094,24 @@ const StageStudio = (() => {
       '<p class="small" id="stage-stale"' + (shot.presentationStale ? "" : " hidden") + '>口播或要点已更新，可重做画面。</p>' +
       '</div>' : "";
 
+    const LEGACY_TRANSITION_LABELS = {
+      "push-left": "左推切换（旧版）",
+      "slide-up": "上滑揭示（旧版）",
+      "wipe-up": "自下擦除（旧版）",
+      blur: "柔焦过渡（旧版）",
+      iris: "圆形展开（旧版）",
+    };
+    const transitionEntries = Object.entries(config.stageCatalog.transitions || { fade: "柔和淡入" });
+    const currentTransition = shot.content.transition || "fade";
+    if (currentTransition && !transitionEntries.some(([k]) => k === currentTransition)) {
+      transitionEntries.push([currentTransition, LEGACY_TRANSITION_LABELS[currentTransition] || currentTransition]);
+    }
     const panels = {
       visual: '<span class="label">本幕制作方式</span><div class="chips">' + kindButtons + '</div>' +
         productionButtons(w, shot, shot.content, slotDesc) + decision +
         '<div id="stage-mg-panel" hidden></div>' +
         contentFields(w, shot, slotDesc) +
-        (index ? select("幕间转场", "transition", Object.entries(config.stageCatalog.transitions || {fade:"淡入"}), shot.content.transition || "fade") : ""),
+        (index ? select("幕间转场", "transition", transitionEntries, currentTransition) : ""),
       points: text("本幕标题", "name", shot.name) +
         '<div class="tpl-two-col">' + text("预览时长（秒）", "seconds", shot.seconds, 4) +
         select("所属章节", "chapterIndex", w.stagePlan.chapters.map((name,i) => [String(i), name]), String(shot.chapterIndex)) + '</div>' +
@@ -3440,11 +3452,7 @@ const StageStudio = (() => {
     else if (action === "stage-add" && p.shots.length < 12) {
       const nextKind = fixedKinds.includes(p.mode) ? p.mode : "image";
       const next = fromLegacy({name:`第 ${p.shots.length + 1} 幕`, line:"", seconds:5}, nextKind, p.shots.length);
-      const prevTrans = p.shots.at(-1)?.content?.transition;
-      const transPool = Object.keys(config.stageCatalog?.transitions || { fade: "淡入淡出" });
-      const preferred = ["push-left", "slide-up", "blur", "wipe", "fade"].filter(t => transPool.includes(t));
-      const pickedTrans = preferred.find(t => t !== prevTrans) || preferred[0] || "fade";
-      if (p.shots.length > 0) next.content.transition = pickedTrans;
+      if (p.shots.length > 0) next.content.transition = "fade";
       p.shots.push(next);
       const nextIdx = p.shots.length - 1;
       selected.set(w, nextIdx);

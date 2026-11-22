@@ -601,18 +601,20 @@
   }
 
   /* ===== Apply 6 Distinct Motion Choreographies to Dynamic Scene ===== */
-  function animateDynamicScene(dom, shot, meta, localTime) {
+  function animateDynamicScene(dom, shot, meta, localTime, ctx) {
     const { visual, motion, motif, items } = meta;
     const itemCount = items.length;
     const { focus, secondBeatStart, focusedIndices, duration } = resolveActiveFocus(shot, localTime, itemCount, motion);
+    const hasTransition = Boolean(ctx?.hasTransition);
+    const leadT = hasTransition ? localTime + 0.18 : localTime;
 
-    // 1. Scene-level crisp entrance
-    const sceneEnter = easeOutExpo(localTime / 0.34);
+    // 1. Scene-level crisp entrance (skip redundant fade when incoming shot already has a stage transition)
+    const sceneEnter = hasTransition ? 1 : easeOutExpo(localTime / 0.34);
     dom.scene.style.opacity = String(sceneEnter.toFixed(3));
 
     // Illustration: slide in, settle from a slight zoom, then drift slowly so the frame never freezes.
     if (dom.art) {
-      const aEnter = easeOutExpo(localTime / 0.75);
+      const aEnter = easeOutExpo(leadT / 0.75);
       dom.art.style.opacity = String(aEnter.toFixed(3));
       dom.art.style.transform = `translateX(${((1 - aEnter) * -28).toFixed(2)}px)`;
       if (dom.artImage) {
@@ -625,7 +627,7 @@
 
     // 2. Motif animation (continuous + entrance)
     if (dom.motif) {
-      const mEnter = easeOutExpo((localTime - 0.05) / 0.55);
+      const mEnter = easeOutExpo((leadT - 0.05) / 0.55);
       dom.motif.style.opacity = String(mEnter.toFixed(3));
       const mScale = 0.9 + 0.1 * mEnter;
       dom.motif.style.transform = `scale(${mScale.toFixed(3)})`;
@@ -634,7 +636,7 @@
 
     // 3. Heading entrance tailored to motion
     if (dom.heading) {
-      const hEnter = easeOutExpo(localTime / 0.46);
+      const hEnter = easeOutExpo(leadT / 0.46);
       if (motion === "reveal") {
         const rightClip = (100 * (1 - hEnter)).toFixed(1);
         dom.heading.style.clipPath = `inset(0 ${rightClip}% 0 0)`;
@@ -813,10 +815,11 @@
     }
   }
 
-  function animateTemplateCard(dom, slide, localTime, focus, duration) {
+  function animateTemplateCard(dom, slide, localTime, focus, duration, ctx) {
     const motion = resolveTemplateMotion(slide);
+    const leadT = ctx?.hasTransition ? localTime + 0.18 : localTime;
     if (dom.headline) {
-      const h = easeOutExpo(localTime / 0.45);
+      const h = easeOutExpo(leadT / 0.45);
       dom.headline.style.opacity = String(h.toFixed(3));
       if (motion === "reveal") {
         dom.headline.style.clipPath = `inset(0 ${(100 * (1 - h)).toFixed(1)}% 0 0)`;

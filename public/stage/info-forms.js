@@ -114,17 +114,19 @@
   }
 
   function animateCommon(dom, t, ctx) {
+    const hasTransition = Boolean(ctx?.hasTransition);
+    const leadT = hasTransition ? t + 0.18 : t;
     const stage = dom.querySelector("[data-if-stage]");
-    if (stage) stage.style.opacity = String(easeOutExpo(t / 0.28).toFixed(3));
+    if (stage) stage.style.opacity = hasTransition ? "1" : String(easeOutExpo(t / 0.28).toFixed(3));
     const heading = dom.querySelector("[data-if-heading]");
     if (heading) {
-      const hp = easeOutExpo(t / 0.42);
+      const hp = easeOutExpo(leadT / 0.42);
       heading.style.opacity = String(hp.toFixed(3));
       heading.style.transform = `translateY(${((1 - hp) * 10).toFixed(2)}px)`;
     }
     const art = dom.querySelector("[data-if-art]");
     if (art) {
-      const ap = easeOutExpo(t / 0.65);
+      const ap = easeOutExpo(leadT / 0.65);
       art.style.opacity = String(ap.toFixed(3));
       art.style.transform = `translateX(${((1 - ap) * -22).toFixed(2)}px)`;
     }

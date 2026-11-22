@@ -22,6 +22,7 @@ CLASSIC_LAYOUT = "builtin:layout/info-classic"
 CONTENT_KINDS = asset_library.LAYOUT_CONTENTS
 LEGACY_KINDS = frozenset(("image", "card", "scene", "svg"))
 FOCUSES = frozenset(("all", "0", "1", "2", "3", "top", "bottom", "question", "answer", "action", "outro"))
+RECOMMENDED_TRANSITIONS = ("fade", "slide", "zoom-in", "zoom-out", "wipe")
 TRANSITIONS = ("fade", "push-left", "slide", "slide-up", "wipe", "wipe-up", "zoom-in", "zoom-out", "blur", "iris")
 POINT_TYPES = frozenset(("cover", "explain", "compare", "steps", "warning", "summary", "timeline", "checklist"))
 VERDICT_TONES = frozenset(("ok", "no", "warn"))

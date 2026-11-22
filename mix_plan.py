@@ -720,9 +720,9 @@ def build_arrange_prompt(item, library=None, mode=None):
         "reason 用一句话，逐字引用本幕 name，再具体说明这幕的对象、动作或信息结构为什么适合该方式。"
         "若某幕非常适合用真实动作演示或连续原理视频，可额外输出 clipSuggestion（不超过 160 字的建议说明），"
         "同时仍把 kind 设为当前可直接渲染的 svg/scene/image。"
-        "必须为第 2 幕及之后的每幕在 transition 中从 transitions 清单挑选贴合前后幕关系的入场转场，不要全片固定用同一种："
-        "同章延续用 fade/blur，步骤与时间推进用 push-left/slide，开场转解析或展开要点用 slide-up/wipe-up，"
-        "正误对比用 wipe，风险警示聚焦用 zoom-in/iris，总结收尾用 zoom-out/fade，相邻幕尽量避免重复以保证连贯节奏。"
+        "为第 2 幕及之后的每幕在 transition 中从 transitions 清单挑选贴合前后幕关系的克制微动效转场："
+        "以柔和淡入（fade）作为同章节连讲的默认主力，不要为了追求花样而每幕强行更换；"
+        "仅在叙事边界按语义搭配轻方向感转场：跨章节或步骤/时间推进用 slide，正误对比用 wipe，风险警示聚焦用 zoom-in，总结收尾用 zoom-out。"
         "只返回 targetIndices 对应的 JSON。"
         '{"shots":[{"index":0,"kind":"方式","reason":"具体原因","fallback":"备用方式","transition":"转场","params":{}}]}'
     )
@@ -1131,31 +1131,23 @@ def _transition_candidates(prev_row, cur_row, index, total):
     cur_text = f"{cur_row.get('name') or ''} {cur_row.get('line') or ''}"
     is_last = index == total - 1
 
+    # Calm medical-explainer pacing: fade is the primary within-chapter glue;
+    # reserve subtle directional cues for real narrative boundaries.
     if cur_type == "summary" or (is_last and total >= 3):
-        return ["zoom-out", "fade", "blur"] if not chapter_changed else ["zoom-out", "blur", "fade"]
+        return ["zoom-out", "fade"]
     if cur_type == "warning" or _RISK_RE.search(cur_text):
-        if prev_type == "compare" or _COMPARE_RE.search(cur_text):
-            return ["wipe", "zoom-in", "iris", "blur"]
-        return ["zoom-in", "iris", "wipe", "blur"]
+        return ["zoom-in", "fade"]
     if cur_type == "compare" or _COMPARE_RE.search(cur_text):
-        return ["wipe", "slide", "push-left", "blur"]
-    if cur_type in ("steps", "timeline"):
-        if prev_type in ("steps", "timeline"):
-            return ["push-left", "slide", "wipe", "slide-up"]
-        if prev_type == "cover":
-            return ["push-left", "slide-up", "slide", "blur"]
-        return ["push-left", "slide", "blur", "wipe"]
-    if cur_type == "checklist":
-        return ["wipe-up", "slide-up", "push-left", "fade"]
-    if prev_type == "cover":
-        return ["slide-up", "blur", "push-left", "fade"]
+        return ["wipe", "slide", "fade"]
     if chapter_changed:
-        return ["blur", "slide", "wipe-up", "push-left", "fade"]
-    return ["fade", "blur", "slide-up", "wipe"]
+        return ["slide", "fade"]
+    if cur_type in ("steps", "timeline") and prev_type not in ("steps", "timeline"):
+        return ["slide", "fade"]
+    return ["fade"]
 
 
 def plan_shot_transitions(rows, catalog=None):
-    """Assign varied, relationship-matched transitions across shots for coherent pacing."""
+    """Assign restrained, narrative-boundary-aware transitions across shots."""
     if len(rows) <= 1:
         return rows
     allowed_set = set(stage_video.TRANSITIONS)
@@ -1165,7 +1157,6 @@ def plan_shot_transitions(rows, catalog=None):
         allowed_set = {"fade"}
 
     prev_trans = None
-    assigned = []
     for i in range(1, len(rows)):
         content = rows[i].get("content")
         if not isinstance(content, dict):
@@ -1173,27 +1164,16 @@ def plan_shot_transitions(rows, catalog=None):
         existing = content.get("transition")
         if existing in allowed_set:
             prev_trans = existing
-            assigned.append((i, existing))
             continue
         cands = [t for t in _transition_candidates(rows[i - 1], rows[i], i, len(rows)) if t in allowed_set]
         if not cands:
-            cands = [t for t in stage_video.TRANSITIONS if t in allowed_set]
-        chosen = next((t for t in cands if t != prev_trans), cands[0])
+            cands = ["fade"] if "fade" in allowed_set else [t for t in stage_video.TRANSITIONS if t in allowed_set]
+        # Allow consecutive `fade` freely; avoid back-to-back identical directional transitions.
+        chosen = cands[0]
+        if chosen != "fade" and chosen == prev_trans:
+            chosen = next((t for t in cands if t != prev_trans), "fade" if "fade" in allowed_set else chosen)
         content["transition"] = chosen
         prev_trans = chosen
-        assigned.append((i, chosen))
-
-    # Avoid flat monotony on 3+ shot videos when every shot happened to pick the same transition.
-    if len(assigned) >= 2 and len({t for _, t in assigned}) == 1 and len(allowed_set) >= 2:
-        last_idx, only_t = assigned[-1]
-        alt_cands = [
-            t for t in _transition_candidates(rows[last_idx - 1], rows[last_idx], last_idx, len(rows))
-            if t in allowed_set and t != only_t
-        ]
-        if not alt_cands:
-            alt_cands = [t for t in stage_video.TRANSITIONS if t in allowed_set and t != only_t]
-        if alt_cands:
-            rows[last_idx]["content"]["transition"] = alt_cands[0]
     return rows
 
 

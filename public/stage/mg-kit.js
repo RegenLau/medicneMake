@@ -2,9 +2,11 @@
 
 (function (global) {
   const clamp = n => Math.min(1, Math.max(0, n));
+  const TRANSITION_DURATION = 0.42;
   const easing = {
     linear: clamp,
     outCubic: n => 1 - (1 - clamp(n)) ** 3,
+    outQuart: n => 1 - (1 - clamp(n)) ** 4,
     outExpo: n => {
       const x = clamp(n);
       return x >= 1 ? 1 : 1 - 2 ** (-10 * x);
@@ -93,98 +95,93 @@
     if (state.count !== undefined) el.textContent = String(Math.round(state.count));
   }
 
-  function transition(slot, kind, p) {
+  function transition(layer, kind, p) {
     const t = clamp(p);
     if (t >= 1) {
-      slot.style.opacity = kind === "fade" ? "1" : "";
-      slot.style.transform = "";
-      slot.style.clipPath = "";
-      slot.style.filter = "";
+      layer.style.opacity = "";
+      layer.style.transform = "";
+      layer.style.clipPath = "";
+      layer.style.filter = "";
+      if (layer.getAttribute("style") === "") layer.removeAttribute("style");
       return;
     }
-    const eOut = easing.outCubic(t);
+    const eOut = easing.outQuart(t);
     const eInOut = easing.inOutCubic(t);
     let opacity = "";
     let transform = "";
     let clipPath = "";
     let filter = "";
     if (kind === "fade") {
-      opacity = String(t);
-    } else if (kind === "wipe") {
-      clipPath = `inset(0 ${100 * (1 - t)}% 0 0)`;
-    } else if (kind === "wipe-up") {
-      clipPath = `inset(${100 * (1 - eInOut)}% 0 0 0)`;
-    } else if (kind === "iris") {
-      clipPath = `circle(${80 * t}% at 50% 50%)`;
+      opacity = eInOut.toFixed(4);
     } else if (kind === "slide") {
-      transform = `translateX(${100 * (1 - t)}%)`;
-      clipPath = `inset(0 ${100 * (1 - t)}% 0 0)`;
-    } else if (kind === "push-left") {
-      transform = `translateX(${100 * (1 - eOut)}%)`;
-      clipPath = `inset(0 ${100 * (1 - eOut)}% 0 0)`;
-    } else if (kind === "slide-up") {
-      transform = `translateY(${100 * (1 - eOut)}%)`;
-      clipPath = `inset(0 0 ${100 * (1 - eOut)}% 0)`;
+      opacity = eInOut.toFixed(4);
+      transform = `translate3d(${(44 * (1 - eOut)).toFixed(2)}px, 0, 0)`;
     } else if (kind === "zoom-in") {
-      opacity = String(clamp(t * 1.35));
-      transform = `scale(${(0.92 + 0.08 * eOut).toFixed(4)})`;
-      clipPath = "inset(0)";
+      opacity = eInOut.toFixed(4);
+      transform = `scale(${(0.965 + 0.035 * eOut).toFixed(4)})`;
     } else if (kind === "zoom-out") {
-      opacity = String(clamp(t * 1.35));
-      transform = `scale(${(1.08 - 0.08 * eOut).toFixed(4)})`;
-      clipPath = "inset(0)";
+      opacity = eInOut.toFixed(4);
+      transform = `scale(${(1.035 - 0.035 * eOut).toFixed(4)})`;
+    } else if (kind === "wipe") {
+      opacity = clamp(t * 2.2).toFixed(4);
+      clipPath = `inset(0 ${(100 * (1 - eInOut)).toFixed(2)}% 0 0)`;
+      transform = `translate3d(${(14 * (1 - eOut)).toFixed(2)}px, 0, 0)`;
+    } else if (kind === "push-left") {
+      opacity = eInOut.toFixed(4);
+      transform = `translate3d(${(56 * (1 - eOut)).toFixed(2)}px, 0, 0)`;
+    } else if (kind === "slide-up") {
+      opacity = eInOut.toFixed(4);
+      transform = `translate3d(0, ${(32 * (1 - eOut)).toFixed(2)}px, 0)`;
+    } else if (kind === "wipe-up") {
+      opacity = clamp(t * 2.2).toFixed(4);
+      clipPath = `inset(${(100 * (1 - eInOut)).toFixed(2)}% 0 0 0)`;
+      transform = `translate3d(0, ${(12 * (1 - eOut)).toFixed(2)}px, 0)`;
     } else if (kind === "blur") {
-      opacity = String(eInOut);
-      filter = `blur(${(7 * (1 - eInOut)).toFixed(2)}px)`;
-      clipPath = "inset(0)";
+      opacity = eInOut.toFixed(4);
+      filter = `blur(${(3.5 * (1 - eInOut)).toFixed(2)}px)`;
+    } else if (kind === "iris") {
+      opacity = clamp(t * 2.2).toFixed(4);
+      clipPath = `circle(${(78 * eInOut).toFixed(2)}% at 50% 50%)`;
     } else {
-      opacity = String(t);
+      opacity = eInOut.toFixed(4);
     }
-    slot.style.opacity = opacity;
-    slot.style.transform = transform;
-    slot.style.clipPath = clipPath;
-    slot.style.filter = filter;
+    layer.style.opacity = opacity;
+    layer.style.transform = transform;
+    layer.style.clipPath = clipPath;
+    layer.style.filter = filter;
   }
 
-  function transitionOut(slot, kind, p) {
+  function transitionOut(layer, kind, p) {
     const t = clamp(p);
-    const eOut = easing.outCubic(t);
     const eInOut = easing.inOutCubic(t);
-    let opacity = "1";
+    // Keeps composite alpha rich at mid-dissolve (>= 0.875) while reaching exact 0 at t=1 (zero pop on removal).
+    const outFade = Math.max(0, 1 - eInOut * eInOut);
+    let opacity = outFade.toFixed(4);
     let transform = "";
     let clipPath = "";
     let filter = "";
-    if (kind === "fade") {
-      opacity = String(1 - t * 0.35);
-    } else if (kind === "push-left") {
-      transform = `translateX(${-100 * eOut}%)`;
-      clipPath = `inset(0 0 0 ${100 * eOut}%)`;
-    } else if (kind === "slide") {
-      transform = `translateX(${-18 * t}%)`;
-      clipPath = `inset(0 0 0 ${18 * t}%)`;
-      opacity = String(1 - 0.35 * t);
-    } else if (kind === "slide-up") {
-      transform = `translateY(${-20 * eOut}%) scale(${(1 - 0.03 * eOut).toFixed(4)})`;
-      clipPath = `inset(${20 * eOut}% 0 0 0)`;
-      opacity = String(1 - 0.45 * eOut);
+    if (kind === "slide") {
+      transform = `translate3d(${(-36 * eInOut).toFixed(2)}px, 0, 0)`;
     } else if (kind === "zoom-in") {
-      opacity = String(1 - eOut);
-      transform = `scale(${(1 + 0.06 * eOut).toFixed(4)})`;
-      clipPath = "inset(0)";
+      transform = `scale(${(1 + 0.03 * eInOut).toFixed(4)})`;
     } else if (kind === "zoom-out") {
-      opacity = String(1 - eOut);
-      transform = `scale(${(1 - 0.06 * eOut).toFixed(4)})`;
-      clipPath = "inset(0)";
+      transform = `scale(${(1 - 0.03 * eInOut).toFixed(4)})`;
+    } else if (kind === "wipe") {
+      transform = `translate3d(${(-10 * eInOut).toFixed(2)}px, 0, 0)`;
+    } else if (kind === "push-left") {
+      transform = `translate3d(${(-48 * eInOut).toFixed(2)}px, 0, 0)`;
+    } else if (kind === "slide-up") {
+      transform = `translate3d(0, ${(-24 * eInOut).toFixed(2)}px, 0)`;
+    } else if (kind === "wipe-up") {
+      transform = `translate3d(0, ${(-10 * eInOut).toFixed(2)}px, 0)`;
     } else if (kind === "blur") {
-      opacity = String(1 - 0.65 * eInOut);
-      filter = `blur(${(7 * eInOut).toFixed(2)}px)`;
-      clipPath = "inset(0)";
+      filter = `blur(${(3.5 * eInOut).toFixed(2)}px)`;
     }
-    slot.style.opacity = opacity;
-    slot.style.transform = transform;
-    slot.style.clipPath = clipPath;
-    slot.style.filter = filter;
+    layer.style.opacity = opacity;
+    layer.style.transform = transform;
+    layer.style.clipPath = clipPath;
+    layer.style.filter = filter;
   }
 
-  global.MgKit = { clamp, easing, progress, sample, evaluate, apply, presets, transition, transitionOut };
+  global.MgKit = { TRANSITION_DURATION, clamp, easing, progress, sample, evaluate, apply, presets, transition, transitionOut };
 })(globalThis);

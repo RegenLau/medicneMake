@@ -484,7 +484,7 @@ class MixPlanningTests(unittest.TestCase):
         payload = json.loads(client.call_args.args[1]["messages"][1]["content"])
         self.assertEqual(CATALOG["transitions"], payload["transitions"])
 
-    def test_fixed_mode_arrange_plans_varied_coherent_transitions(self):
+    def test_fixed_mode_arrange_plans_restrained_boundary_transitions(self):
         five_shot_script = {
             "title": "感冒药和退烧药别乱搭",
             "shortTitle": "小心成分重叠",
@@ -513,13 +513,33 @@ class MixPlanningTests(unittest.TestCase):
         self.assertIsNone(transitions[0])
         assigned = transitions[1:]
         self.assertTrue(all(t in CATALOG["transitions"] for t in assigned), assigned)
-        self.assertGreaterEqual(len(set(assigned)), 3, f"Expected varied transitions, got {assigned}")
-        for a, b in zip(assigned, assigned[1:]):
-            self.assertNotEqual(a, b, f"Adjacent shots should not repeat the same transition: {assigned}")
-        self.assertEqual("slide-up", assigned[0])
-        self.assertEqual("zoom-in", assigned[1])
-        self.assertEqual("wipe-up", assigned[2])
-        self.assertEqual("zoom-out", assigned[3])
+        # Same-chapter explain uses calm fade; warning -> zoom-in; chapter change -> slide; summary -> zoom-out.
+        self.assertEqual(["fade", "zoom-in", "slide", "zoom-out"], assigned)
+
+    def test_same_chapter_consecutive_shots_allow_calm_fade_continuity(self):
+        same_chapter_script = {
+            "title": "温水服药要点",
+            "shortTitle": "温水服药",
+            "chapters": ["正确做法", "总结"],
+            "shots": [
+                {"name": "开头", "line": "吃药配什么水更合适。", "seconds": 4, "chapterIndex": 0,
+                 "points": {"type": "cover", "headline": "配温水", "items": []},
+                 "cues": [{"text": "吃药配什么水更合适。", "focus": "all", "weight": 10}]},
+                {"name": "原理一", "line": "温开水对药片崩解更友好。", "seconds": 5, "chapterIndex": 0,
+                 "points": {"type": "explain", "headline": "温开水", "items": []},
+                 "cues": [{"text": "温开水对药片崩解更友好。", "focus": "all", "weight": 12}]},
+                {"name": "原理二", "line": "水量充足有助于吞咽顺畅。", "seconds": 5, "chapterIndex": 0,
+                 "points": {"type": "explain", "headline": "喝够水", "items": []},
+                 "cues": [{"text": "水量充足有助于吞咽顺畅。", "focus": "all", "weight": 12}]},
+                {"name": "收尾", "line": "按说明书温水送服更稳妥。", "seconds": 5, "chapterIndex": 1,
+                 "points": {"type": "summary", "headline": "记住温水", "items": []},
+                 "cues": [{"text": "按说明书温水送服更稳妥。", "focus": "all", "weight": 12}]},
+            ],
+        }
+        item = {**self.item, "presentation": "image"}
+        result = mix_plan.arrange(Mock(), "deepseek-flash", item, same_chapter_script, self.library)
+        transitions = [row["content"].get("transition") for row in result["shots"]]
+        self.assertEqual([None, "fade", "fade", "zoom-out"], transitions)
 
     def test_invalid_non_image_fallback_uses_point_default(self):
         rows = [choice(self.script, i, "unavailable", fallback="image") for i in range(3)]

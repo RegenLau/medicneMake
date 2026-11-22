@@ -8,7 +8,7 @@
   addEventListener("resize", fit);
   fit();
 
-  let plan, deck, imgMap, mounted, content, stickerDom, lastSubtitle, prevLayer;
+  let plan, deck, imgMap, mounted, content, currLayer, stickerDom, lastSubtitle, prevLayer;
 
   function clearPrevLayer() {
     prevLayer?.content?.dispose?.();
@@ -20,6 +20,7 @@
     clearPrevLayer();
     content?.dispose?.();
     content = null;
+    currLayer = null;
     for (const shot of plan?.shots || []) Contents[shot.kind].dispose?.(shot);
     plan = input;
     deck = TemplateVideo.normalizeDeck(input.deck);
@@ -67,7 +68,12 @@
   }
 
   function transitionProgress(index, localTime) {
-    return plan.compatibility || index === 0 ? 1 : MgKit.progress(localTime, 0, .3);
+    if (plan.compatibility || index === 0) return 1;
+    const shot = plan.shots[index];
+    const shotDur = shot ? Math.max(0.5, (Number(shot.end) || 0) - (Number(shot.start) || 0)) : 4;
+    const baseDur = MgKit.TRANSITION_DURATION || 0.42;
+    const dur = Math.min(baseDur, Math.max(0.2, shotDur * 0.25));
+    return MgKit.progress(localTime, 0, dur);
   }
 
   function legacyImageFade(index, time, cue) {
@@ -127,8 +133,9 @@
     const renderer = Contents[shot.kind];
     const isPromptSvg = shot.kind === "svg" && Boolean(shot.svgCode && typeof shot.svgCode.svg === "string" && shot.svgCode.svg.trim());
     const code = shot.kind === "card" || shot.kind === "scene" || isPromptSvg;
-    const keepMounted = code || shot.kind === "clip";
-    const layoutFocus = plan.previewStage === "outro" ? "outro" : keepMounted ? "all" : focus;
+    const isRichContent = code || shot.kind === "clip";
+    const keepMounted = !plan.compatibility || isRichContent;
+    const layoutFocus = plan.previewStage === "outro" ? "outro" : isRichContent ? "all" : focus;
     const cueFocus = plan.previewStage === "outro" ? "outro" : focus;
     const stage = plan.previewStage || (layoutFocus === "outro" && !slide.outroImage ? "outro"
       : slide.layoutMode === "hook" && !slide.contentImage ? "hook" : "explain");
@@ -151,12 +158,18 @@
       compatibility: plan.compatibility,
       focus, slide, imgMap, mapSrc, deck, index: current, total: plan.shots.length,
       layoutTitle: shot.kind === "svg" && !isPromptSvg && !plan.compatibility,
+      hasTransition: !plan.compatibility && current > 0,
     };
-    const mountKey = `${current}/${stage}/${keepMounted ? "keep" : progress}`;
+    const outroKey = cueFocus === "outro" ? "1" : "0";
+    const hookKey = stage === "hook" ? (cueFocus === "question" ? "q" : "a") : "";
+    const mountKey = plan.compatibility
+      ? `${current}/${stage}/${keepMounted ? "keep" : progress}`
+      : `${current}/${stage}/${outroKey}/${hookKey}`;
     if (mounted !== mountKey) {
       clearPrevLayer();
       content?.dispose?.();
       content = null;
+      currLayer = null;
       root.innerHTML = LayoutEngine.render(plan.layout, deck, current, {
         focus: layoutFocus, cueFocus, stage, progress: keepMounted ? 1 : progress,
         chapterProgress, currentTime: time, totalDuration: plan.hideClock ? 0 : totalDuration,
@@ -166,15 +179,26 @@
         renderMedia: () => "",
       });
       const slot = root.querySelector(".media-slot");
-      content = slot ? renderer.mount(slot, shot, context) : null;
-      stickerDom = slot && global.StageStickers ? global.StageStickers.mount(slot, shot, context) : null;
+      let targetEl = slot;
+      if (slot && !plan.compatibility) {
+        const inner = document.createElement("div");
+        inner.className = "stage-curr-slot";
+        const titleEl = slot.querySelector(".stage-media-title");
+        if (titleEl) inner.append(titleEl);
+        slot.append(inner);
+        currLayer = inner;
+        targetEl = inner;
+      }
+      content = targetEl ? renderer.mount(targetEl, shot, context) : null;
+      stickerDom = targetEl && global.StageStickers ? global.StageStickers.mount(targetEl, shot, context) : null;
       mounted = mountKey;
       lastSubtitle = null;
     }
     if (content) renderer.draw(content, shot, localTime, context);
     if (stickerDom && global.StageStickers) global.StageStickers.draw(stickerDom, shot, localTime, context);
     const slot = root.querySelector(".media-slot");
-    if (slot && !plan.compatibility && current > 0) {
+    const transTarget = currLayer || slot;
+    if (slot && transTarget && !plan.compatibility && current > 0) {
       const p = transitionProgress(current, localTime);
       const transKind = shot.transition || "fade";
       if (p < 1 && plan.shots[current - 1]) {
@@ -183,21 +207,8 @@
         const prevSlide = deck.slides[prevIndex];
         if (!prevLayer || prevLayer.shotIndex !== prevIndex || !prevLayer.el.isConnected) {
           clearPrevLayer();
-          const prevEl = slot.cloneNode(false);
-          prevEl.classList.remove("media-slot");
-          prevEl.classList.add("stage-prev-slot");
-          prevEl.style.opacity = "";
-          prevEl.style.transform = "";
-          prevEl.style.clipPath = "";
-          prevEl.style.filter = "";
-          prevEl.style.pointerEvents = "none";
-          if (getComputedStyle(slot).position !== "absolute") {
-            prevEl.style.position = "absolute";
-            prevEl.style.left = `${slot.offsetLeft}px`;
-            prevEl.style.top = `${slot.offsetTop}px`;
-            prevEl.style.width = `${slot.offsetWidth}px`;
-            prevEl.style.height = `${slot.offsetHeight}px`;
-          }
+          const prevEl = document.createElement("div");
+          prevEl.className = "stage-prev-slot";
           const prevDur = Math.max(0, (Number(prevShot.end) || 0) - (Number(prevShot.start) || 0));
           const prevEndLocal = Math.max(0, prevDur - 0.001);
           const prevCue = Contents.activeCue(prevShot, prevEndLocal);
@@ -217,11 +228,18 @@
             index: prevIndex,
             total: plan.shots.length,
             layoutTitle: prevShot.kind === "svg" && !prevIsPromptSvg && !plan.compatibility,
+            hasTransition: false,
           };
-          slot.parentNode?.insertBefore(prevEl, slot);
+          slot.append(prevEl);
           const prevRenderer = Contents[prevShot.kind];
           const prevContent = prevRenderer ? prevRenderer.mount(prevEl, prevShot, prevContext) : null;
           if (prevContent) prevRenderer.draw(prevContent, prevShot, prevEndLocal, prevContext);
+          if (prevContext.layoutTitle && prevSlide?.name) {
+            const prevTitle = document.createElement("h2");
+            prevTitle.className = "stage-media-title";
+            prevTitle.textContent = prevSlide.name;
+            prevEl.append(prevTitle);
+          }
           const prevStickers = global.StageStickers ? global.StageStickers.mount(prevEl, prevShot, prevContext) : null;
           if (prevStickers && global.StageStickers) global.StageStickers.draw(prevStickers, prevShot, prevEndLocal, prevContext);
           prevLayer = { shotIndex: prevIndex, el: prevEl, content: prevContent };
@@ -230,9 +248,10 @@
       } else {
         clearPrevLayer();
       }
-      MgKit.transition(slot, transKind, p);
+      MgKit.transition(transTarget, transKind, p);
     } else {
       clearPrevLayer();
+      if (transTarget && !plan.compatibility) MgKit.transition(transTarget, "fade", 1);
     }
     const fade = legacyImageFade(current, time, cue);
     if (fade) {
@@ -243,6 +262,7 @@
       if (fade.alpha === 1) {
         root.innerHTML = previous;
         mounted = null;
+        currLayer = null;
         stickerDom = null;
       } else {
         const fallback = deck.theme === "warm" ? "#fdf5e7" : "#edf6fe";

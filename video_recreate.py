@@ -486,7 +486,7 @@ def generate_blueprint(client, model, base_dir, req):
         f"- 主题 ID（6 套）：{', '.join(VALID_THEMES)}（medical 医疗白蓝、warm 暖色手绘、mint 薄荷清新、night 夜间深色、illustration 插画背景、glass 实景毛玻璃）。\n"
         f"- 信息结构 pointType：{', '.join(sorted(stage_video.POINT_TYPES))}。\n"
         "- 每幕制作方式 kind：scene（纯 HTML/CSS/SVG + GSAP 代码动效，最适合卡片/步骤/时间轴/对比/收口）、svg（纯矢量 SVG + DrawSVG 动画）、image（AI 完整图，适合开场吸睛或具象身体/生活场景）。\n"
-        f"- 幕间转场 transition：{', '.join(stage_video.TRANSITIONS)}。\n"
+        f"- 幕间转场 transition（克制微动效，同章延续默认用 fade，仅在章节/警示/对比/收尾节点按语义使用）：{', '.join(stage_video.RECOMMENDED_TRANSITIONS)}。\n"
         f"- 可用医疗矢量图标：{', '.join(motion_recipes.AVAILABLE_ICONS)}。\n"
         "【拆解纪律】\n"
         "1. 若输入给出了 videoShots（FFmpeg 实测的各幕起止秒数），拆解后的 shots 数量与每幕时长须紧贴实测节奏；若没有视频分幕，则按 4–6 幕（总计约 25–45 秒）合理划分。\n"

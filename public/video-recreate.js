@@ -17,10 +17,16 @@ const StudioRecreate = (() => {
     image: "AI 完整图",
   };
   const TRANS_LABELS = {
-    fade: "淡入",
-    wipe: "擦除",
+    fade: "柔和淡入",
+    slide: "轻推左移",
+    "zoom-in": "微幅推进",
+    "zoom-out": "微幅拉远",
+    wipe: "柔和擦除",
+    "push-left": "左推切换",
+    "slide-up": "上滑揭示",
+    "wipe-up": "自下擦除",
+    blur: "柔焦过渡",
     iris: "圆形展开",
-    slide: "推移",
   };
 
   let historyItems = [];
