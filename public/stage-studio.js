@@ -1294,8 +1294,8 @@ const StageStudio = (() => {
       items.length ? `本幕要点：\n${items.map((row, i) => `${i + 1}. ${row}`).join("\n")}` : "",
       shot?.points?.takeaway ? `画面结语：${shot.points.takeaway}` : "",
       w.drug ? `关联药品：${w.drug}` : "",
-      desc ? `画面与动效要求：${desc}` : "画面与动效要求：用扁平医学科普纯矢量 <svg> 绘制核心主体与关键动作（含路径描边、部件位移或状态变化），按口播节拍与时间 t 逐帧演进，少而精的简短标注。",
-      "硬性要求：纯矢量 SVG + JS 逐帧实现，禁止使用位图/插图/外部链接，配色继承主题 CSS 变量。",
+      desc ? `画面与动效要求：${desc}` : "画面与动效要求：用扁平医学科普纯矢量 <svg> 绘制核心主体与关键动作（善用 DrawSVG 路径描边、MotionPath 路径运动与部件缓动），优先通过 api.setup((tl, gsap) => ...) 按口播节拍编排，少而精的简短标注。",
+      "硬性要求：纯矢量 SVG + 内置离线 GSAP 时间轴实现，静态 SVG 保持终态可见，禁止使用位图/插图/外部链接，配色继承主题 CSS 变量。",
     ].filter(Boolean).join("\n").slice(0, 4000);
   }
 
@@ -1314,8 +1314,8 @@ const StageStudio = (() => {
       items.length ? `本幕要点：\n${items.map((row, i) => `${i + 1}. ${row}`).join("\n")}` : "",
       shot?.points?.takeaway ? `画面结语：${shot.points.takeaway}` : "",
       w.drug ? `关联药品：${w.drug}` : "",
-      desc ? `画面与动效要求：${desc}` : "画面与动效要求：结合内联 SVG 矢量医学图示与清晰排版，按口播节拍和进度条 t 逐帧呈现重点变化。",
-      "硬性要求：纯 HTML + CSS + 内联 SVG + JS 代码实现，禁止使用任何插图/图片/外部链接，配色继承主题 CSS 变量。",
+      desc ? `画面与动效要求：${desc}` : "画面与动效要求：结合内联 SVG 矢量医学图示与清晰排版，优先通过 api.setup((tl, gsap) => ...) 按口播节拍呈现交错入场、路径描边与重点变化。",
+      "硬性要求：纯 HTML + CSS + 内联 SVG + 内置离线 GSAP 时间轴实现，静态 DOM 保持终态可见，禁止使用任何插图/图片/外部链接，配色继承主题 CSS 变量。",
     ].filter(Boolean).join("\n").slice(0, 4000);
   }
 
@@ -1341,12 +1341,12 @@ const StageStudio = (() => {
         ? `<details class="shot-options stage-code-source-box"><summary>查看并编辑生成的 SVG 代码（SVG / CSS / JS）</summary>` +
           `<label class="field">SVG 矢量代码（根节点须为 &lt;svg&gt;，禁止 img/foreignObject/script）<textarea data-stage-field="svgCode:svg" rows="5" maxlength="24000">${esc(c.svgCode.svg || "")}</textarea></label>` +
           `<label class="field">CSS（可选，自动隔离在内容区）<textarea data-stage-field="svgCode:css" rows="3" maxlength="12000">${esc(c.svgCode.css || "")}</textarea></label>` +
-          `<label class="field">JS 逐帧驱动（function(root, t, duration, api) 函数体）<textarea data-stage-field="svgCode:js" rows="5" maxlength="24000">${esc(c.svgCode.js || "")}</textarea></label>` +
+          `<label class="field">JS 动效驱动（function(root, t, duration, api)，支持 api.setup((tl, gsap) => ...) 时间轴）<textarea data-stage-field="svgCode:js" rows="5" maxlength="24000">${esc(c.svgCode.js || "")}</textarea></label>` +
           `</details>`
         : `<details class="shot-options stage-code-source-box"><summary>查看并编辑生成的纯代码（HTML / CSS / JS）</summary>` +
           `<label class="field">HTML（支持内联 SVG，禁止 img/script）<textarea data-stage-field="code:html" rows="5" maxlength="24000">${esc(c.code.html || "")}</textarea></label>` +
           `<label class="field">CSS（自动隔离在内容区，可使用 --v-* 主题变量）<textarea data-stage-field="code:css" rows="4" maxlength="16000">${esc(c.code.css || "")}</textarea></label>` +
-          `<label class="field">JS 逐帧驱动（function(root, t, duration, api) 函数体）<textarea data-stage-field="code:js" rows="5" maxlength="24000">${esc(c.code.js || "")}</textarea></label>` +
+          `<label class="field">JS 动效驱动（function(root, t, duration, api)，支持 api.setup((tl, gsap) => ...) 时间轴）<textarea data-stage-field="code:js" rows="5" maxlength="24000">${esc(c.code.js || "")}</textarea></label>` +
           `</details>`
       : "";
     const statusText = hasGenerated

@@ -92,18 +92,27 @@ class StageVideoTests(unittest.TestCase):
             {"html": '<div onclick="alert(1)">x</div>'},
             {"html": "<div>x</div>", "css": "div{background:url(https://evil.example/a.png);}"},
             {"html": "<div>x</div>", "js": "requestAnimationFrame(() => {});"},
+            {"html": "<div>x</div>", "js": "gsap.ticker.add(() => {});"},
+            {"html": "<div>x</div>", "js": "gsap.delayedCall(1, () => {});"},
             {"html": "<div>x</div>", "js": "fetch('/api/config');"},
             {"html": "<div>x</div>", "js": "const broken = (;"},
         ):
             with self.subTest(bad_code=bad_code), self.assertRaises(ValueError):
                 stage_video.validate_scene_code(bad_code)
 
+        gsap_code = stage_video.validate_scene_code({
+            "html": '<div class="sc"><h2 class="t">缓释片</h2><svg viewBox="0 0 100 100"><path class="p" d="M10 50 L90 50"/></svg></div>',
+            "css": ".sc{width:100%;height:100%;}",
+            "js": 'api.setup((tl, gsap) => { tl.from(".t", { y: 20, opacity: 0, duration: 0.4 }, 0).fromTo(".p", { drawSVG: "0%" }, { drawSVG: "100%", duration: 0.6 }, 0.2); });',
+        })
+        self.assertIn("api.setup", gsap_code["js"])
+
         # Prompt-driven pure SVG animation validates cleanly and rejects non-SVG / foreignObject / timers.
         svg_p = self.payload("svg")
         svg_p["items"][0]["content"]["svgCode"] = {
             "svg": '<svg viewBox="0 0 800 450" xmlns="http://www.w3.org/2000/svg"><circle cx="400" cy="225" r="50" fill="var(--v-primary)"/></svg>',
             "css": "",
-            "js": "const c = root.querySelector('circle'); if (c) c.setAttribute('r', String(40 + 20 * api.progress));",
+            "js": 'api.setup((tl) => { tl.from("circle", { scale: 0.5, opacity: 0, transformOrigin: "50% 50%", duration: 0.5 }, 0); });',
         }
         _, _, svg_shots, _, _ = stage_video.stage_input(svg_p, server.ASSETS, server.media_path)
         self.assertIn("svgCode", svg_shots[0])
@@ -112,6 +121,8 @@ class StageVideoTests(unittest.TestCase):
             {"svg": '<svg viewBox="0 0 100 100"><foreignObject>x</foreignObject></svg>'},
             {"svg": '<svg viewBox="0 0 100 100"><img src="/a.png"/></svg>'},
             {"svg": '<svg viewBox="0 0 100 100"></svg>', "js": "setInterval(() => {}, 10);"},
+            {"svg": '<svg viewBox="0 0 100 100"></svg>', "js": "gsap.ticker.add(() => {});"},
+            {"svg": '<svg viewBox="0 0 100 100"></svg>', "js": "gsap.delayedCall(0.5, () => {});"},
         ):
             with self.subTest(bad_svg=bad_svg), self.assertRaises(ValueError):
                 stage_video.validate_svg_code(bad_svg)

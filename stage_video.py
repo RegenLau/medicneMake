@@ -320,6 +320,8 @@ _CODE_FORBIDDEN_JS_RE = re.compile(
     r"|\brequestAnimationFrame\b"
     r"|\bsetInterval\b"
     r"|\bsetTimeout\b"
+    r"|\bgsap\s*\.\s*(?:ticker|delayedCall)\b"
+    r"|\bdelayedCall\s*\("
     r")"
 )
 
@@ -340,8 +342,8 @@ def _validate_motion_js(js, label="代码动效", *, check_syntax=True):
         bad = _CODE_FORBIDDEN_JS_RE.search(js)
         if bad:
             token = bad.group(0)
-            if token in ("requestAnimationFrame", "setInterval", "setTimeout"):
-                raise ValueError(f"{label} JS 须由 t / api.progress 逐帧驱动，禁止使用 requestAnimationFrame 或定时器。")
+            if token in ("requestAnimationFrame", "setInterval", "setTimeout") or "ticker" in token or "delayedCall" in token:
+                raise ValueError(f"{label} JS 须由 api.setup((tl, gsap) => ...) 时间轴或 t / api.progress 确定性驱动，禁止使用 requestAnimationFrame、定时器或 gsap.ticker / delayedCall。")
             raise ValueError(f"{label} JS 包含受限调用：{token}")
         if check_syntax:
             node = shutil.which("node")

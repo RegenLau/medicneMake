@@ -132,9 +132,128 @@
   };
 
   const CUSTOM_CODE_BASE_CSS = `
-    :host { display: block; width: 100%; height: 100%; overflow: hidden; box-sizing: border-box; font-family: inherit; color: var(--v-ink, #122d4c); }
+    :host {
+      display: block; width: 100%; height: 100%; overflow: hidden; box-sizing: border-box; font-family: inherit;
+      --v-muted: var(--v-ink-soft, #44607d);
+      --v-accent: var(--v-primary, #1466cc);
+      --v-red: var(--v-coral, #e6592d);
+      color: var(--v-ink, #122d4c);
+    }
     *, *::before, *::after { box-sizing: border-box; }
   `;
+
+  let gsapRegistered = false;
+  function ensureGsap() {
+    const g = global.gsap;
+    if (!g) return null;
+    if (!gsapRegistered) {
+      const plugins = [global.DrawSVGPlugin, global.MotionPathPlugin, global.MorphSVGPlugin].filter(Boolean);
+      if (plugins.length) g.registerPlugin(...plugins);
+      if (g.ticker?.lagSmoothing) g.ticker.lagSmoothing(0);
+      gsapRegistered = true;
+    }
+    return g;
+  }
+
+  function resolveShadowTargets(gsapLib, target, scope) {
+    if (typeof target === "string") return gsapLib.utils.toArray(target, scope);
+    if (Array.isArray(target)) return target.flatMap((item) => (typeof item === "string" ? gsapLib.utils.toArray(item, scope) : item));
+    return target;
+  }
+
+  function resolveShadowElement(val, scope) {
+    if (typeof val !== "string" || !scope) return val;
+    const trimmed = val.trim();
+    if (!trimmed || trimmed === "self" || /^[Mm]\s*[-+]?\d/.test(trimmed)) return val;
+    try {
+      return scope.querySelector(trimmed) || val;
+    } catch {
+      return val;
+    }
+  }
+
+  function resolveShadowVars(vars, scope) {
+    if (!vars || typeof vars !== "object" || !scope) return vars;
+    let next = vars;
+    if (vars.motionPath !== undefined) {
+      const mp = vars.motionPath;
+      if (typeof mp === "string") {
+        const el = resolveShadowElement(mp, scope);
+        if (el !== mp) next = { ...next, motionPath: el };
+      } else if (mp && typeof mp === "object" && !Array.isArray(mp)) {
+        const rPath = typeof mp.path === "string" ? resolveShadowElement(mp.path, scope) : mp.path;
+        const rAlign = typeof mp.align === "string" ? resolveShadowElement(mp.align, scope) : mp.align;
+        if (rPath !== mp.path || rAlign !== mp.align) {
+          next = { ...next, motionPath: { ...mp, path: rPath, align: rAlign } };
+        }
+      }
+    }
+    if (typeof vars.morphSVG === "string") {
+      const el = resolveShadowElement(vars.morphSVG, scope);
+      if (el !== vars.morphSVG) next = { ...next, morphSVG: el };
+    } else if (vars.morphSVG && typeof vars.morphSVG === "object" && typeof vars.morphSVG.shape === "string") {
+      const el = resolveShadowElement(vars.morphSVG.shape, scope);
+      if (el !== vars.morphSVG.shape) next = { ...next, morphSVG: { ...vars.morphSVG, shape: el } };
+    }
+    return next;
+  }
+
+  function patchShadowTimeline(tl, gsapLib, scope) {
+    if (!tl || tl._shadowPatched) return tl;
+    const origTo = tl.to.bind(tl);
+    const origFrom = tl.from.bind(tl);
+    const origFromTo = tl.fromTo.bind(tl);
+    const origSet = tl.set.bind(tl);
+    tl.to = (target, vars, position) => origTo(resolveShadowTargets(gsapLib, target, scope), resolveShadowVars(vars, scope), position);
+    tl.from = (target, vars, position) => origFrom(resolveShadowTargets(gsapLib, target, scope), resolveShadowVars(vars, scope), position);
+    tl.fromTo = (target, fromVars, toVars, position) => origFromTo(
+      resolveShadowTargets(gsapLib, target, scope),
+      resolveShadowVars(fromVars, scope),
+      resolveShadowVars(toVars, scope),
+      position,
+    );
+    tl.set = (target, vars, position) => origSet(resolveShadowTargets(gsapLib, target, scope), resolveShadowVars(vars, scope), position);
+    tl._shadowPatched = true;
+    return tl;
+  }
+
+  function createScopedGsap(gsapLib, dom) {
+    if (!gsapLib) return null;
+    const scope = dom.wrapper;
+    const safeTimeline = (vars) => patchShadowTimeline(
+      gsapLib.timeline({ ...(vars && typeof vars === "object" ? vars : {}), paused: true }),
+      gsapLib,
+      scope,
+    );
+    const facade = Object.create(gsapLib);
+    facade.timeline = safeTimeline;
+    facade.to = (target, vars) => gsapLib.to(resolveShadowTargets(gsapLib, target, scope), resolveShadowVars(vars, scope));
+    facade.from = (target, vars) => gsapLib.from(resolveShadowTargets(gsapLib, target, scope), resolveShadowVars(vars, scope));
+    facade.fromTo = (target, fromVars, toVars) => gsapLib.fromTo(
+      resolveShadowTargets(gsapLib, target, scope),
+      resolveShadowVars(fromVars, scope),
+      resolveShadowVars(toVars, scope),
+    );
+    facade.set = (target, vars) => gsapLib.set(resolveShadowTargets(gsapLib, target, scope), resolveShadowVars(vars, scope));
+    facade.quickSetter = (target, property, unit) => gsapLib.quickSetter(resolveShadowTargets(gsapLib, target, scope), property, unit);
+    facade.q = (sel) => [...dom.shadow.querySelectorAll(sel)];
+    facade.delayedCall = () => {
+      throw new Error("代码动效禁止使用 gsap.delayedCall，请在 api.setup((tl) => ...) 中用时间轴偏移量编排。");
+    };
+    return facade;
+  }
+
+  function quarantineStrayAnimations(ctx, tl, gsapLib) {
+    if (!ctx?.data?.length) return;
+    const rootTl = gsapLib.globalTimeline;
+    for (const item of [...ctx.data]) {
+      if (!item || item === tl || typeof item.pause !== "function" || typeof item.totalTime !== "function") continue;
+      if (item.parent === rootTl) {
+        item.paused(false);
+        tl.add(item, 0);
+      }
+    }
+  }
 
   function customEaseApi(localTime, duration) {
     const clampVal = (v, min = 0, max = 1) => Math.max(min, Math.min(max, Number(v) || 0));
@@ -149,6 +268,16 @@
       },
       progress: clampVal(localTime / Math.max(0.1, duration)),
     };
+  }
+
+  function disposeCustomCode(dom) {
+    if (!dom) return;
+    try { dom.tl?.kill(); } catch {}
+    try { dom.gsapCtx?.revert(); } catch {}
+    dom.tl = null;
+    dom.gsapCtx = null;
+    dom.setupRan = false;
+    dom.hasSeeked = false;
   }
 
   function mountCustomCode(slot, shot) {
@@ -183,13 +312,25 @@
         compileError = String(err?.message || err);
       }
     }
-    return { slot, customCode: true, host, shadow, wrapper, fn, compileError, runtimeError: null };
+    const dom = {
+      slot, customCode: true, host, shadow, wrapper, fn, compileError, runtimeError: null,
+      gsapCtx: null, tl: null, setupRan: false, hasSeeked: false, scopedGsap: null,
+    };
+    dom.dispose = () => disposeCustomCode(dom);
+    return dom;
+  }
+
+  function seekCustomTimeline(dom, time, duration) {
+    if (!dom.tl || !dom.gsapCtx) return;
+    const clamped = Math.max(0, Math.min(duration, Number(time) || 0));
+    dom.gsapCtx.seek(clamped);
   }
 
   function drawCustomCode(dom, shot, time, ctx) {
     if (dom.compileError || dom.runtimeError) {
       if (!dom.errorShown) {
         dom.errorShown = true;
+        disposeCustomCode(dom);
         const msg = attr(dom.compileError || dom.runtimeError);
         dom.wrapper.innerHTML = `<div style="display:flex;flex-direction:column;justify-content:center;align-items:center;height:100%;padding:24px;text-align:center;color:var(--v-muted,#475569);font-size:16px;gap:8px;"><strong style="color:var(--v-red,#dc2626);">代码动效运行出错</strong><span style="max-width:85%;word-break:break-word;">${msg}</span><span style="font-size:13px;">可调整提示词后点击「重新生成代码动画」或直接编辑代码</span></div>`;
       }
@@ -204,6 +345,37 @@
     let cueIndex = cues.findIndex((c) => time < c.end);
     if (cueIndex < 0) cueIndex = Math.max(0, cues.length - 1);
     const helpers = customEaseApi(time, duration);
+    const gsapLib = ensureGsap();
+    if (gsapLib && !dom.scopedGsap) dom.scopedGsap = createScopedGsap(gsapLib, dom);
+    let seekedThisFrame = false;
+    const ensureContext = () => {
+      if (!gsapLib) throw new Error("离线 GSAP 动效引擎未加载。");
+      if (!dom.gsapCtx) {
+        const gCtx = gsapLib.context(() => {}, dom.wrapper);
+        const tl = patchShadowTimeline(gsapLib.timeline({ paused: true }), gsapLib, dom.wrapper);
+        gCtx.data.push(tl);
+        gCtx.add("runBuilder", (builder) => {
+          const ret = builder(tl, dom.scopedGsap);
+          if (ret && ret !== tl && typeof ret.pause === "function" && typeof ret.totalTime === "function") {
+            if (ret.parent !== tl) {
+              ret.paused(false);
+              tl.add(ret, 0);
+            }
+          }
+          quarantineStrayAnimations(gCtx, tl, gsapLib);
+        });
+        gCtx.add("seek", (targetTime) => {
+          tl.pause();
+          tl.totalTime(targetTime, false);
+          if (!dom.hasSeeked && targetTime === 0) {
+            tl.render(0, false, true);
+          }
+          dom.hasSeeked = true;
+        });
+        dom.gsapCtx = gCtx;
+        dom.tl = tl;
+      }
+    };
     const api = {
       ...helpers,
       width: ctx?.size?.w || 960,
@@ -211,10 +383,30 @@
       cueIndex,
       cues,
       theme: ctx?.theme || "medical",
+      gsap: dom.scopedGsap,
+      q: (sel) => [...dom.shadow.querySelectorAll(sel)],
+      timeline: (vars) => {
+        if (!gsapLib) throw new Error("离线 GSAP 动效引擎未加载。");
+        return dom.scopedGsap.timeline(vars);
+      },
+      setup: (builder) => {
+        if (typeof builder !== "function") return dom.tl;
+        if (!dom.setupRan) {
+          ensureContext();
+          dom.gsapCtx.runBuilder(builder);
+        }
+        seekCustomTimeline(dom, time, duration);
+        seekedThisFrame = true;
+        return dom.tl;
+      },
     };
     if (dom.fn) {
       try {
         dom.fn(dom.shadow, time, duration, api);
+        if (dom.tl) {
+          dom.setupRan = true;
+          if (!seekedThisFrame) seekCustomTimeline(dom, time, duration);
+        }
       } catch (err) {
         dom.runtimeError = String(err?.message || err);
         drawCustomCode(dom, shot, time, ctx);
