@@ -30,17 +30,18 @@ const posterFrame = Math.min(frames - 1, Math.round(fps * 1.4));
 const startedAt = Date.now();
 
 async function openStagePage(browser) {
-  const page = await browser.newPage({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
+  const page = await context.newPage();
   page.setDefaultTimeout(15000);
   await page.route(/^https?:/, route => route.abort());
   await page.goto(stageUrl);
   await page.evaluate(input => setPlan(input), plan);
-  const cdp = await page.context().newCDPSession(page);
-  return { page, cdp };
+  const cdp = await context.newCDPSession(page);
+  return { context, page, cdp };
 }
 
 async function renderRange(browser, startFrame, endFrame, { collectEvents = false } = {}) {
-  const { page, cdp } = await openStagePage(browser);
+  const { context, page, cdp } = await openStagePage(browser);
   const runs = [];
   let signature = null;
   let imageWrite = Promise.resolve();
@@ -61,6 +62,7 @@ async function renderRange(browser, startFrame, endFrame, { collectEvents = fals
           if (!image.complete) await image.decode();
           if (!image.naturalWidth) throw Error("分镜素材未加载。");
         }));
+        void document.body.offsetWidth;
         if (!dedupeEnabled) {
           globalThis.stageCaptureMarkup = null;
           return { key: null, reused: false, snapshot: null };
@@ -118,7 +120,7 @@ async function renderRange(browser, startFrame, endFrame, { collectEvents = fals
     }
     return { runs, events };
   } finally {
-    await page.close();
+    await context.close();
   }
 }
 

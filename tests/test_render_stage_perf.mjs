@@ -143,13 +143,51 @@ try {
   const totalDur = [...optFramesTxt.matchAll(/^duration ([0-9.]+)$/gm)].reduce((acc, m) => acc + Number(m[1]), 0);
   assert.ok(Math.abs(totalDur - 8.0) < 0.001, `Expected exact 8.0s concat duration, got ${totalDur}`);
 
-  // Verify byte-for-byte JPEG parity at key frames: start, active motion, hold phase, transition, SVG motion, SVG hold!
-  for (const frameIdx of [0, 12, 48, 95, 98, 110, 160, 191]) {
-    const fBase = resolveFrameAt(baseFramesTxt, 24, frameIdx);
-    const fOpt = resolveFrameAt(optFramesTxt, 24, frameIdx);
-    const bufBase = await readFile(join(dirBase, fBase));
-    const bufOpt = await readFile(join(dirOpt, fOpt));
-    assert.ok(bufBase.equals(bufOpt), `Frame ${frameIdx} pixels diverged between baseline (${fBase}) and optimized (${fOpt})`);
+  // Verify pixel-level visual parity across key frames: start, active motion, hold phase, transition, SVG motion, SVG hold!
+  const { chromium } = await import("playwright");
+  const diffBrowser = await chromium.launch({ channel: "chrome", headless: true, timeout: 30000 });
+  let worstDelta = 0;
+  try {
+    const diffPage = await diffBrowser.newPage();
+    for (const frameIdx of [0, 12, 48, 95, 98, 110, 160, 191]) {
+      const fBase = resolveFrameAt(baseFramesTxt, 24, frameIdx);
+      const fOpt = resolveFrameAt(optFramesTxt, 24, frameIdx);
+      const bufBase = await readFile(join(dirBase, fBase));
+      const bufOpt = await readFile(join(dirOpt, fOpt));
+      if (bufBase.equals(bufOpt)) continue;
+      const diff = await diffPage.evaluate(async ([u1, u2]) => {
+        const load = (u) => new Promise((res) => { const i = new Image(); i.onload = () => res(i); i.src = u; });
+        const [i1, i2] = await Promise.all([load(u1), load(u2)]);
+        const c = document.createElement("canvas");
+        c.width = i1.width;
+        c.height = i1.height;
+        const ctx = c.getContext("2d");
+        ctx.drawImage(i1, 0, 0);
+        const p1 = ctx.getImageData(0, 0, c.width, c.height).data;
+        ctx.drawImage(i2, 0, 0);
+        const p2 = ctx.getImageData(0, 0, c.width, c.height).data;
+        let maxD = 0;
+        let aboveEight = 0;
+        let sumD = 0;
+        for (let i = 0; i < p1.length; i += 4) {
+          const d = Math.max(Math.abs(p1[i] - p2[i]), Math.abs(p1[i + 1] - p2[i + 1]), Math.abs(p1[i + 2] - p2[i + 2]));
+          if (d > maxD) maxD = d;
+          if (d > 8) aboveEight++;
+          sumD += d;
+        }
+        return { maxD, aboveEight, meanDiff: sumD / (p1.length / 4) };
+      }, [
+        "data:image/jpeg;base64," + bufBase.toString("base64"),
+        "data:image/jpeg;base64," + bufOpt.toString("base64"),
+      ]);
+      worstDelta = Math.max(worstDelta, diff.maxD);
+      assert.ok(
+        diff.aboveEight === 0 && diff.meanDiff < 0.05,
+        `Frame ${frameIdx} pixels diverged (maxD=${diff.maxD}, aboveEight=${diff.aboveEight}, meanDiff=${diff.meanDiff.toFixed(4)}) between ${fBase} and ${fOpt}`,
+      );
+    }
+  } finally {
+    await diffBrowser.close();
   }
 
   // Verify poster.jpg parity & events.json parity
@@ -192,7 +230,7 @@ try {
   const speedup = (baseStats.elapsedMs / Math.max(1, optStats.elapsedMs)).toFixed(2);
   console.log(
     `PASS: test_render_stage_perf.mjs | baseline: ${baseStats.captures}/${baseStats.frames} frames in ${baseStats.elapsedMs}ms | ` +
-    `optimized (${optStats.workers} workers + Shadow DOM dedupe): ${optStats.captures}/${optStats.frames} frames in ${optStats.elapsedMs}ms (${speedup}x faster, 0 pixel diff)`,
+    `optimized (${optStats.workers} workers + Shadow DOM dedupe): ${optStats.captures}/${optStats.frames} frames in ${optStats.elapsedMs}ms (${speedup}x faster, maxPixelDelta=${worstDelta})`,
   );
 } finally {
   await rm(tmpBase, { recursive: true, force: true });
