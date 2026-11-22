@@ -81,6 +81,9 @@ const plan = {
             }, 0.5);
           // Even an accidental unpaused gsap.to() must be auto-quarantined into paused tl.
           gsap.to('.stray', { x: 200, duration: 1.0, ease: 'none' });
+          api.sfx(0.25, 'pop');
+          api.sfx(1.5, 'count');
+          api.sfx(1.8, 'unknown-ignored');
         });`,
       },
     },
@@ -103,6 +106,8 @@ const plan = {
           tl.fromTo('#track', { drawSVG: '0%' }, { drawSVG: '100%', duration: 1.0, ease: 'none' }, 0)
             .to('#pill', { motionPath: { path: '#track', align: '#track', alignOrigin: [0.5, 0.5] }, duration: 1.0, ease: 'none' }, 0)
             .to('#morphSrc', { morphSVG: '#morphDst', duration: 1.0, ease: 'none' }, 0);
+          api.sfx(0.45, 'draw');
+          api.sfx(1.0, 'check');
         });`,
       },
     },
@@ -141,6 +146,29 @@ try {
   });
 
   await page.evaluate((p) => setPlan(p), plan);
+
+  // 0. Verify collectStageEvents() captures api.sfx() from BOTH custom scene & unmounted custom SVG shots!
+  const preMountEvents = await page.evaluate(() => collectStageEvents());
+  assert.ok(
+    preMountEvents.some((e) => e.shot === 0 && e.type === "item-focus" && Math.abs(e.t - 0.25) < 0.01),
+    `Expected shot 0 api.sfx('pop' -> 'item-focus') at t=0.25, got ${JSON.stringify(preMountEvents)}`,
+  );
+  assert.ok(
+    preMountEvents.some((e) => e.shot === 0 && e.type === "count" && Math.abs(e.t - 1.5) < 0.01),
+    `Expected shot 0 api.sfx('count') at t=1.5, got ${JSON.stringify(preMountEvents)}`,
+  );
+  assert.ok(
+    preMountEvents.some((e) => e.shot === 1 && e.type === "draw" && Math.abs(e.t - 2.45) < 0.01),
+    `Expected unmounted shot 1 api.sfx('draw') at t=2.45, got ${JSON.stringify(preMountEvents)}`,
+  );
+  assert.ok(
+    preMountEvents.some((e) => e.shot === 1 && e.type === "check" && Math.abs(e.t - 3.0) < 0.01),
+    `Expected unmounted shot 1 api.sfx('check') at t=3.0, got ${JSON.stringify(preMountEvents)}`,
+  );
+  assert.ok(
+    !preMountEvents.some((e) => e.type === "unknown-ignored"),
+    "Unknown api.sfx types must be silently ignored",
+  );
 
   // 1. Test Scene GSAP timeline, reverse scrubbing determinism, counter onUpdate, stray tween quarantine, and Shadow DOM isolation.
   const readScene = () => page.evaluate(() => {
@@ -261,6 +289,12 @@ try {
   assert.ok(poster.size > 1000, "poster.jpg should be non-empty");
   const framesList = await readFile(join(tempDir, "frames.txt"), "utf8");
   assert.ok(framesList.includes("ffconcat version 1.0"), "frames.txt should be generated");
+  const exportedEvents = JSON.parse(await readFile(join(tempDir, "events.json"), "utf8"));
+  assert.ok(
+    exportedEvents.some((e) => e.shot === 0 && e.type === "item-focus") &&
+    exportedEvents.some((e) => e.shot === 1 && e.type === "check"),
+    `render-stage.mjs events.json should contain custom api.sfx events, got ${JSON.stringify(exportedEvents)}`,
+  );
 } finally {
   await rm(tempDir, { recursive: true, force: true });
 }

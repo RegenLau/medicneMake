@@ -279,6 +279,7 @@
       const duration = shot.end - shot.start;
       const local = [...Contents[shot.kind].events(shot, {
         slide, theme: deck.theme, index, total: deck.slides.length, layout: plan.layout,
+        size: LayoutEngine.mediaSize(plan.layout, "explain"),
         slotDesc: LayoutEngine.describeMediaSlot ? LayoutEngine.describeMediaSlot(plan.layout, "explain") : null,
       })];
       if (index > 0) local.push({t:0, type:"scene-in"});

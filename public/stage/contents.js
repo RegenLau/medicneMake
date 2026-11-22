@@ -359,6 +359,26 @@
     }
   }
 
+  const CUSTOM_SFX_TYPES = new Set([
+    "item-focus", "check", "warning", "cross", "count", "draw", "flip", "beat-in", "outro",
+  ]);
+  const CUSTOM_SFX_ALIAS = {
+    pop: "item-focus",
+    tick: "item-focus",
+    ok: "check",
+    confirm: "check",
+    alert: "warning",
+    error: "cross",
+    line: "draw",
+  };
+  const customEventsCache = new WeakMap();
+
+  function normalizeSfxType(type) {
+    const raw = String(type || "item-focus").trim().toLowerCase();
+    const mapped = CUSTOM_SFX_ALIAS[raw] || raw;
+    return CUSTOM_SFX_TYPES.has(mapped) ? mapped : null;
+  }
+
   function customEaseApi(localTime, duration) {
     const clampVal = (v, min = 0, max = 1) => Math.max(min, Math.min(max, Number(v) || 0));
     return {
@@ -420,6 +440,7 @@
     const dom = {
       slot, customCode: true, host, shadow, wrapper, fn, compileError, runtimeError: null,
       gsapCtx: null, tl: null, setupRan: false, hasSeeked: false, scopedGsap: null,
+      sfxEvents: [], sfxSeen: new Set(),
     };
     dom.dispose = () => disposeCustomCode(dom);
     return dom;
@@ -492,6 +513,16 @@
       q: (sel) => [...dom.shadow.querySelectorAll(sel)],
       icon: (name, attrs = "") => (global.StageIcons ? global.StageIcons.svg(name, attrs) : ""),
       icons: global.StageIcons ? [...global.StageIcons.names] : [],
+      sfx: (atSeconds, type = "item-focus") => {
+        const tVal = Number(atSeconds);
+        const normType = normalizeSfxType(type);
+        if (!normType || !Number.isFinite(tVal) || tVal < 0 || tVal >= duration) return;
+        const key = `${Math.round(tVal * 1000)}:${normType}`;
+        if (dom.sfxSeen.has(key) || dom.sfxEvents.length >= 12) return;
+        dom.sfxSeen.add(key);
+        dom.sfxEvents.push({ t: Number(tVal.toFixed(4)), type: normType });
+        customEventsCache.set(shot, [...dom.sfxEvents]);
+      },
       timeline: (vars) => {
         if (!gsapLib) throw new Error("离线 GSAP 动效引擎未加载。");
         return dom.scopedGsap.timeline(vars);
@@ -568,12 +599,43 @@
       StageSceneContent.animateDynamicScene(dom, shot, dom.meta, time);
     },
     events(shot, ctx) {
-      if (shot?.code && typeof shot.code.html === "string" && shot.code.html.trim()) return [];
+      if (shot?.code && typeof shot.code.html === "string" && shot.code.html.trim()) {
+        return collectCustomCodeEvents(shot, ctx, false);
+      }
       const form = resolveForm(shot);
       if (form) return form.events(formDataFor(form, shot), formContext(shot, ctx));
       return StageSceneContent.sceneEvents(shot, ctx.index, ctx.total);
     },
   };
+
+  function collectCustomCodeEvents(shot, ctx, isSvg) {
+    if (customEventsCache.has(shot)) return [...customEventsCache.get(shot)];
+    const js = isSvg ? shot?.svgCode?.js : shot?.code?.js;
+    if (typeof js !== "string" || !js.includes("sfx")) return [];
+    const doc = global.document;
+    if (!doc?.body) return [];
+    const w = ctx?.size?.w || 960;
+    const h = ctx?.size?.h || 540;
+    const holder = doc.createElement("div");
+    holder.style.cssText = `position:fixed;left:-9999px;top:0;width:${w}px;height:${h}px;visibility:hidden;pointer-events:none;overflow:hidden;`;
+    doc.body.append(holder);
+    let dom = null;
+    try {
+      const mountShot = isSvg
+        ? { ...shot, code: { html: shot.svgCode.svg, css: `svg { display: block; width: 100%; height: 100%; }\n${shot.svgCode.css || ""}`, js: shot.svgCode.js || "" } }
+        : shot;
+      dom = mountCustomCode(holder, mountShot, ctx);
+      drawCustomCode(dom, shot, 0, ctx);
+      const list = [...dom.sfxEvents];
+      customEventsCache.set(shot, list);
+      return [...list];
+    } catch {
+      return [];
+    } finally {
+      try { dom?.dispose?.(); } catch {}
+      holder.remove();
+    }
+  }
 
   const svg = {
     html(shot, progress, theme, includeHeading = true, deck = null, size = null) { return StageSvgContent.content(shot, clamp(progress), theme, includeHeading, deck, size); },
@@ -596,7 +658,11 @@
       const duration = shot.motionSeconds ?? shot.end - shot.start;
       dom.slot.innerHTML = svg.html(slide, duration > 0 ? time / duration : 1, theme, dom.includeHeading, deck, size);
     },
-    events: shot => (shot?.svgCode && typeof shot.svgCode.svg === "string" && shot.svgCode.svg.trim() ? [] : StageSvgContent.events(shot)),
+    events: (shot, ctx) => (
+      shot?.svgCode && typeof shot.svgCode.svg === "string" && shot.svgCode.svg.trim()
+        ? collectCustomCodeEvents(shot, ctx, true)
+        : StageSvgContent.events(shot)
+    ),
   };
 
   const asset = {

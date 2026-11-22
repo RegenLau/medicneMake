@@ -43,3 +43,9 @@
    - 静态 HTML/SVG 默认处于完整可见的终态排版（不要把主卡片在 CSS 里写死为 `opacity: 0`），入场隐藏统一交给 `tl.from(...)`。
 5. **只用真实主题 CSS 变量**：
    - `--v-primary` / `--v-primary-deep` / `--v-primary-soft` / `--v-ink` / `--v-ink-soft` / `--v-card-bg` / `--v-card-border` / `--v-green` / `--v-green-soft` / `--v-amber` / `--v-amber-soft` / `--v-coral` / `--v-coral-soft`。
+
+## 4. 语义音效同步（`api.sfx`）
+
+- 在 `api.setup((tl, gsap) => { ... })` 中可调用 `api.sfx(秒数, 类型)`，让关键视觉节点在导出 MP4 时自动对齐素材库音效包（`soft` / `kenney`）：
+  - 支持类型：`item-focus`（要点弹出，别名 `pop`）、`check`（勾选确认）、`warning`（警示提醒）、`cross`（错误划叉）、`count`（数值定格）、`draw`（路径描边）、`flip`（翻转切换）。
+- 遵循克制原则：每幕点缀 `1–3` 个真正需要强调的节拍，工作台合成阶段会自动按优先级去重（相邻间隔 `≥ 0.35s`，每幕最多 4 个）。

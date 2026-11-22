@@ -115,6 +115,7 @@ class ArticlePromptTests(unittest.TestCase):
         self.assertIn("DrawSVGPlugin", produce_svg["prompt"])
         self.assertIn("Motion.md", produce_svg["prompt"])
         self.assertIn("data-icon", produce_svg["prompt"])
+        self.assertIn("api.sfx", produce_svg["prompt"])
 
         produce_scene = server.default_prompt_template({"kind": "stage-produce", "layoutId": "builtin:layout/info-classic", "presentation": "scene"})
         self.assertIn("JSON", produce_scene["prompt"])
@@ -124,6 +125,7 @@ class ArticlePromptTests(unittest.TestCase):
         self.assertIn("Motion.md", produce_scene["prompt"])
         self.assertIn(".mc-canvas", produce_scene["prompt"])
         self.assertIn("data-icon", produce_scene["prompt"])
+        self.assertIn("api.sfx", produce_scene["prompt"])
 
         with self.assertRaisesRegex(ValueError, "提示词类型"):
             server.default_prompt_template({"kind": "unknown"})

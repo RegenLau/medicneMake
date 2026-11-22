@@ -101,7 +101,7 @@ try {
   await page.waitForSelector(".bar");
 
   // 1. Setup screen mode chips: AI 完整图（推荐）, SVG 动画, 代码动效场景 (no 信息图动效)
-  await page.locator('[data-action="new"][data-val="video"]').click();
+  await page.locator('.entry[data-action="new"][data-val="video"]').click();
   await page.locator('[data-action="tpl-video-mode"][data-val="template"]').waitFor();
   const setupModes = await page.locator('[data-action="stage-mode"]').allTextContents();
   assert.deepEqual(setupModes, ["AI 完整图（推荐）", "SVG 动画", "代码动效场景"]);
