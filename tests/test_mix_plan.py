@@ -240,6 +240,94 @@ class MixPlanningTests(unittest.TestCase):
         self.assertIn("validationFeedback", retry_payload)
         self.assertIn("img", retry_payload["validationFeedback"])
 
+    def test_produce_scene_and_svg_auto_repair_visual_qa_and_fact_grounding(self):
+        from unittest.mock import patch
+        import stage_video
+
+        shot = self.script["shots"][1]
+        # 1. Visual QA layout overlap on attempt 1 triggers retry with feedback; attempt 2 passes clean.
+        overlap_reply = {
+            "reason": "初版有图标压字。",
+            "svgCode": {
+                "svg": '<svg viewBox="0 0 960 540" xmlns="http://www.w3.org/2000/svg"><text x="100" y="100">打包随身药</text></svg>',
+                "css": "",
+                "js": "",
+            },
+        }
+        clean_reply = {
+            "reason": "修复间距后的清晰版式。",
+            "svgCode": {
+                "svg": '<svg viewBox="0 0 960 540" xmlns="http://www.w3.org/2000/svg"><text x="100" y="100">把原包装药盒放进随身包</text></svg>',
+                "css": "",
+                "js": "",
+            },
+        }
+        qa_side_effects = [
+            {"ok": False, "fatalIssues": [], "layoutIssues": ["前景图形（<circle>）遮挡了文字「打包随身药」（重叠约 12×20px）"], "renderedTexts": ["打包随身药"]},
+            {"ok": True, "fatalIssues": [], "layoutIssues": [], "renderedTexts": ["把原包装药盒放进随身包"]},
+        ]
+        client = Mock(side_effect=[model_response(overlap_reply), model_response(clean_reply)])
+        with patch.object(stage_video, "run_visual_motion_qa", side_effect=qa_side_effects):
+            out = mix_plan.produce_svg_code(client, "deepseek-flash", self.item, self.library, shot)
+        self.assertEqual(2, client.call_count)
+        self.assertNotIn("qaWarnings", out)
+        retry_payload = json.loads(client.call_args.args[1]["messages"][1]["content"])
+        self.assertIn("遮挡了文字", retry_payload["validationFeedback"])
+
+        # 2. Fabricated medical number in dynamic renderedTexts triggers hard rejection after retries.
+        bad_fact_reply = {
+            "reason": "动态计数显示了未核实剂量。",
+            "code": {"html": '<div class="sc"><span class="n">打包随身药</span></div>', "css": "", "js": ""},
+        }
+        client_fact = Mock(return_value=model_response(bad_fact_reply))
+        with patch.object(stage_video, "run_visual_motion_qa", return_value={
+            "ok": True, "fatalIssues": [], "layoutIssues": [], "renderedTexts": ["每次 500mg"],
+        }):
+            with self.assertRaisesRegex(ValueError, "500"):
+                mix_plan.produce_scene_code(client_fact, "deepseek-flash", self.item, self.library, shot)
+        self.assertEqual(3, client_fact.call_count)
+
+        # 3. Undefined theme CSS variable triggers automatic repair.
+        bad_var_reply = {
+            "reason": "误用未定义变量。",
+            "code": {"html": '<div style="color:var(--v-muted)">打包随身药</div>', "css": "", "js": ""},
+        }
+        good_var_reply = {
+            "reason": "改用真实变量。",
+            "code": {"html": '<div style="color:var(--v-ink-soft)">打包随身药</div>', "css": "", "js": ""},
+        }
+        client_var = Mock(side_effect=[model_response(bad_var_reply), model_response(good_var_reply)])
+        with patch.object(stage_video, "run_visual_motion_qa", return_value={
+            "ok": True, "fatalIssues": [], "layoutIssues": [], "renderedTexts": ["打包随身药"],
+        }):
+            out_var = mix_plan.produce_scene_code(client_var, "deepseek-flash", self.item, self.library, shot)
+        self.assertEqual(2, client_var.call_count)
+        self.assertIn("--v-ink-soft", out_var["code"]["html"])
+
+        # 4. If all 3 attempts only have non-fatal layout warnings, returns the best candidate with qaWarnings.
+        client_soft = Mock(return_value=model_response(overlap_reply))
+        soft_qas = [
+            {"ok": False, "fatalIssues": [], "layoutIssues": ["问题1", "问题2"], "renderedTexts": ["打包随身药"]},
+            {"ok": False, "fatalIssues": [], "layoutIssues": ["仅剩1个轻微溢出"], "renderedTexts": ["打包随身药"]},
+            {"ok": False, "fatalIssues": [], "layoutIssues": ["问题A", "问题B", "问题C"], "renderedTexts": ["打包随身药"]},
+        ]
+        with patch.object(stage_video, "run_visual_motion_qa", side_effect=soft_qas):
+            out_soft = mix_plan.produce_svg_code(client_soft, "deepseek-flash", self.item, self.library, shot)
+        self.assertEqual(3, client_soft.call_count)
+        self.assertEqual(["仅剩1个轻微溢出"], out_soft["qaWarnings"])
+
+        # 5. designRecipe is injected according to shot points.type & kind for all 8 point types.
+        import motion_recipes
+        for ptype in ("cover", "explain", "compare", "steps", "timeline", "warning", "checklist", "summary"):
+            for k in ("scene", "svg"):
+                rec = motion_recipes.recipe_for(k, {"points": {"type": ptype}}, {"shape": "shallow-wide"})
+                self.assertEqual(ptype, rec["pointType"])
+                self.assertIn("structure", rec)
+                self.assertIn("choreography", rec)
+                self.assertIn("横向", rec["aspectTip"])
+        sent_payload = json.loads(client.call_args.args[1]["messages"][1]["content"])
+        self.assertEqual("steps", sent_payload["designRecipe"]["pointType"])
+
     def test_produce_scene_batch_generates_multiple_shots(self):
         valid = lambda label: model_response({
             "reason": f"纯代码渲染{label}。",

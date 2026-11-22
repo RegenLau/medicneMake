@@ -1,9 +1,14 @@
 """Validated workbench input for the shared video stage."""
 
+import json
 import math
+import os
 import re
 import shutil
 import subprocess
+import tempfile
+from html.parser import HTMLParser
+from pathlib import Path
 from urllib.parse import unquote
 
 import asset_library
@@ -417,6 +422,200 @@ def validate_svg_code(svg_code, *, check_syntax=True):
             raise ValueError(f"SVG 动画 {label} 禁止引用外部链接或内嵌位图，请使用纯矢量图形。")
     clean_js = _validate_motion_js(js, "SVG 动画", check_syntax=check_syntax)
     return {"svg": svg.strip(), "css": css.strip(), "js": clean_js}
+
+
+VALID_THEME_VARS = frozenset((
+    "--v-amber", "--v-amber-soft", "--v-band", "--v-band-ink", "--v-bg",
+    "--v-card-bg", "--v-card-blur", "--v-card-border", "--v-card-border-w",
+    "--v-card-radius", "--v-card-shadow", "--v-coral", "--v-coral-soft",
+    "--v-green", "--v-green-soft", "--v-ink", "--v-ink-soft",
+    "--v-primary", "--v-primary-deep", "--v-primary-soft",
+    "--v-rail-bg", "--v-rail-ink", "--v-rail-line",
+    "--v-ring-inner", "--v-ring-outer", "--v-ring-track",
+    "--v-serif", "--v-sub-hl",
+))
+_THEME_VAR_USE_RE = re.compile(r"var\(\s*(--v-[a-z0-9-]+)\b", re.IGNORECASE)
+_ORDINAL_ONLY_RE = re.compile(
+    r"^(?:第\s*[0-9一二三四五六七八九十]+\s*[步条点项幕]?|step\s*0?\d+|0?\d+[.)、]?|[①②③④⑤⑥⑦⑧⑨⑩])$",
+    re.IGNORECASE,
+)
+_LEADING_ORDINAL_RE = re.compile(
+    r"^\s*(?:0?([1-9])[.、:：\s]+|第\s*([1-9一二三四五六七八九])\s*[步条点项][：:\s]*)"
+)
+_ROOT_DIR = Path(__file__).resolve().parent
+
+
+def check_undefined_theme_vars(*snippets):
+    """Reject undefined var(--v-...) tokens in newly generated custom code/SVG."""
+    bad = []
+    seen = set()
+    for text in snippets:
+        if not isinstance(text, str) or not text:
+            continue
+        for match in _THEME_VAR_USE_RE.finditer(text):
+            name = match.group(1)
+            if name not in VALID_THEME_VARS and name not in seen:
+                seen.add(name)
+                bad.append(name)
+    if bad:
+        joined = "、".join(bad[:4])
+        raise ValueError(
+            f"使用了未定义的主题 CSS 变量（{joined}），请改用真实存在的变量"
+            "（如 --v-ink-soft、--v-primary、--v-primary-soft、--v-coral、--v-green、--v-amber）。"
+        )
+
+
+class _VisibleTextExtractor(HTMLParser):
+    _SKIP_TAGS = frozenset(("style", "script", "defs", "title", "desc", "metadata"))
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self._skip_depth = 0
+        self._buf = []
+        self.texts = []
+
+    def _flush(self):
+        if self._buf:
+            text = re.sub(r"\s+", " ", "".join(self._buf)).strip()
+            if text:
+                self.texts.append(text)
+            self._buf.clear()
+
+    def handle_starttag(self, tag, attrs):
+        t = tag.lower()
+        if t in self._SKIP_TAGS:
+            self._flush()
+            self._skip_depth += 1
+        elif t in ("div", "p", "li", "h1", "h2", "h3", "h4", "span", "strong", "text", "tspan", "br"):
+            self._flush()
+
+    def handle_endtag(self, tag):
+        t = tag.lower()
+        if t in self._SKIP_TAGS and self._skip_depth > 0:
+            self._skip_depth -= 1
+        elif t in ("div", "p", "li", "h1", "h2", "h3", "h4", "span", "strong", "text", "tspan"):
+            self._flush()
+
+    def handle_data(self, data):
+        if self._skip_depth == 0 and data:
+            self._buf.append(data)
+
+    def finish(self):
+        self._flush()
+        return self.texts
+
+
+def extract_visible_markup_texts(markup):
+    """Extract visible text runs from HTML or SVG markup, ignoring <style>/<defs>."""
+    if not isinstance(markup, str) or not markup.strip():
+        return []
+    parser = _VisibleTextExtractor()
+    parser.feed(markup)
+    parser.close()
+    return parser.finish()
+
+
+def check_motion_facts(texts, shot, *, drug="", extra_source=""):
+    """Verify numbers and drug names displayed in custom code/SVG are grounded in shot script."""
+    if not texts or not isinstance(shot, dict):
+        return
+    base_source = stage_forms._source_text_for(shot, drug)
+    source = f"{base_source}\n{extra_source or ''}"
+    source_nums = stage_forms.extract_numbers(source)
+    items = (shot.get("points") or {}).get("items") or []
+    max_ordinal = max(4, len(items) if isinstance(items, list) else 0)
+
+    # Allow standard 4-cardinal clock dial labels (12, 3, 6, 9) only when all 4 appear as bare numbers.
+    bare_set = {str(t).strip() for t in texts if str(t).strip()}
+    allow_clock_cardinals = {"12", "3", "6", "9"}.issubset(bare_set)
+
+    for raw in texts:
+        text = re.sub(r"\s+", " ", str(raw or "")).strip()
+        if not text:
+            continue
+        if allow_clock_cardinals and text in ("12", "3", "6", "9"):
+            continue
+        if _ORDINAL_ONLY_RE.match(text):
+            ord_nums = stage_forms.extract_numbers(text)
+            if ord_nums and all(1 <= n <= max_ordinal and n == int(n) for n in ord_nums):
+                continue
+
+        # Strip a benign leading list index like "1. 看药盒" or "第2步：核对" when within item range.
+        cleaned = text
+        lead = _LEADING_ORDINAL_RE.match(cleaned)
+        if lead:
+            lead_tok = lead.group(1) or lead.group(2)
+            lead_nums = stage_forms.extract_numbers(lead_tok)
+            if lead_nums and all(1 <= n <= max_ordinal for n in lead_nums):
+                cleaned = cleaned[lead.end():].strip()
+
+        for num in sorted(stage_forms.extract_numbers(cleaned)):
+            if num not in source_nums:
+                raise ValueError(
+                    f"画面文字「{text[:24]}」包含未在口播或要点中出现的数字 {num:g}，"
+                    "严禁编造剂量、温度、时间或比例，请删除该数字或改为口播原文表述。"
+                )
+
+        for drug_match in stage_forms._DRUG_SUFFIX_RE.finditer(text):
+            token = drug_match.group(0)
+            if token not in source:
+                raise ValueError(
+                    f"画面文字中出现未在口播或要点里核实的药品/剂型「{token}」，请删除或替换为本幕关联药品。"
+                )
+
+
+def _qa_subprocess_env():
+    env = dict(os.environ)
+    if os.name == "nt":
+        for key in ("TMPDIR", "TEMP", "TMP"):
+            val = env.get(key)
+            if val and not (Path(val).is_dir() and os.access(val, os.W_OK | os.X_OK)):
+                env.pop(key, None)
+        return env
+    fallback = "/tmp" if Path("/tmp").is_dir() and os.access("/tmp", os.W_OK | os.X_OK) else tempfile.gettempdir()
+    for key in ("TMPDIR", "TEMP", "TMP"):
+        val = env.get(key, "")
+        if not val or "antigravity-tmp" in val or not (Path(val).is_dir() and os.access(val, os.W_OK | os.X_OK)):
+            env[key] = fallback
+    return env
+
+
+def run_visual_motion_qa(kind, payload, *, layout=None, theme="medical", theme_vars=None, shot=None, timeout=18):
+    """Run headless keyframe DOM QA via scripts/check-custom-motion.mjs. Returns None if disabled/unavailable."""
+    if os.environ.get("STUDIO_VISUAL_QA", "1") == "0":
+        return None
+    node = shutil.which("node")
+    script = _ROOT_DIR / "scripts" / "check-custom-motion.mjs"
+    if not node or not script.is_file():
+        return None
+    valid_layout = layout if isinstance(layout, dict) and isinstance(layout.get("regions"), dict) else None
+    duration = float((shot or {}).get("seconds") or 5.0)
+    req = {
+        "kind": kind,
+        "payload": payload,
+        "layout": valid_layout,
+        "theme": theme or "medical",
+        "themeVars": theme_vars if isinstance(theme_vars, dict) else None,
+        "shot": shot or {},
+        "duration": max(1.0, min(30.0, duration)),
+    }
+    try:
+        proc = subprocess.run(
+            [node, str(script)],
+            input=json.dumps(req, ensure_ascii=False).encode("utf-8"),
+            cwd=_ROOT_DIR,
+            env=_qa_subprocess_env(),
+            capture_output=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        return json.loads(proc.stdout.decode("utf-8", "replace"))
+    except ValueError:
+        return None
 
 
 def illustration(value, library, media_path, used):

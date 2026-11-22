@@ -6,6 +6,7 @@ import re
 
 import asset_library
 import draft_content
+import motion_recipes
 import stage_forms
 import stage_video
 import svg_motion
@@ -608,6 +609,9 @@ def build_scene_code_prompt(spec):
         "- 构图需适配当前宽高，严禁文字裁切、重叠或溢出；保持留白呼吸感、层次分明、字号清晰（正文不小于 16px，标题不小于 24px）。外框已有药师头像，严禁用简陋几何图形徒手拼凑人物头像、五官或火柴人。\n"
         "- 静态 HTML/SVG 默认保持完整可见的终态构图（不要在 CSS 中把主体写死为 opacity:0），入场隐藏与位移动效统一交给 GSAP `tl.from(...)` 控制。\n"
         "- 避免单调的纯文字列表：结合内联 <svg> 绘制干净克制的几何医学图示（如胶囊/药片、时间轴刻度、剂量对比天平、勾选清单、路径描边动画 drawSVG 等）与重点卡片联动；背景保持干净通透，不要随意堆砌大面积色块圆斑。\n"
+        f"{motion_recipes.MOTION_MD_CORE}\n"
+        f"{motion_recipes.SCENE_DESIGN_KIT_HINT}\n"
+        "- 请参考输入中的 `designRecipe`（按本幕信息类型匹配的版式与动效节奏配方）进行构图，但不要照搬无关示例文案。\n"
         "【GSAP 时间轴与逐帧驱动协议】\n"
         "- 字段 js 是函数体：function(root, t, duration, api) { /* 你的代码 */ }。\n"
         "- **优先使用内置离线 GSAP 暂停时间轴**：调用 `api.setup((tl, gsap) => { ... })`（每幕仅初始化一次，后续每帧由引擎按 t 确定性 seek，支持任意前进/倒拖与 24fps 离线逐帧导出）：\n"
@@ -634,6 +638,9 @@ def build_svg_animation_prompt(spec):
         "- 静态 <svg> 默认保持完整可见的终态构图（不要在 SVG/CSS 中将主体写死为 opacity:0），以便缩略图清晰可见，入场状态统一交给 GSAP `tl.from(...)` / `tl.fromTo(...)` 控制。\n"
         "- 图内可放少量简短清晰的矢量标注（<text>），严禁堆砌大段文字卡片；文字、数字与药名必须严格来自本幕口播或要点，严禁编造医学事实、剂量或品牌。\n"
         "- 配色只使用真实存在的主题 CSS 变量以自动适配全部深浅主题：var(--v-primary)、var(--v-primary-deep)、var(--v-primary-soft)、var(--v-ink)、var(--v-ink-soft)、var(--v-card-bg)、var(--v-card-border)、var(--v-green)、var(--v-green-soft)、var(--v-amber)、var(--v-amber-soft)、var(--v-coral)、var(--v-coral-soft)（禁止使用未定义的 --v-muted / --v-accent / --v-red）。\n"
+        f"{motion_recipes.MOTION_MD_CORE}\n"
+        f"{motion_recipes.SVG_DESIGN_KIT_HINT}\n"
+        "- 请参考输入中的 `designRecipe`（按本幕信息类型匹配的矢量构图与节奏配方）进行设计。\n"
         "【硬性边界】\n"
         "1. 根节点必须是 <svg ...>...</svg>，严禁包含 <foreignObject>、<img>、<script>、<iframe>、外部 URL、data:image 或内联事件属性（onclick 等）。\n"
         "2. 严禁使用 requestAnimationFrame、setInterval、setTimeout、gsap.ticker、gsap.delayedCall、fetch、eval、window.parent/top/location。\n"
@@ -719,13 +726,72 @@ def build_arrange_prompt(item, library=None, mode=None):
     )
 
 
-def produce_svg_code(client, model, item, library, row, *, prompt="", revision="", previous_svg=None, system_prompt="", on_retry=lambda attempt: None):
+def _resolve_layout_and_theme(item, library):
+    layout_def = None
+    theme_base = "medical"
+    theme_vars = None
+    if library is not None:
+        try:
+            lid = item.get("layoutId") or stage_video.CLASSIC_LAYOUT
+            layout_def, _, _ = library.layout(lid)
+        except Exception:
+            layout_def = None
+        theme_id = item.get("themeId") or item.get("theme")
+        if isinstance(theme_id, str) and theme_id:
+            if theme_id in ("medical", "warm"):
+                theme_base = theme_id
+            elif hasattr(library, "theme"):
+                try:
+                    tdef, _, _ = library.theme(theme_id)
+                    if isinstance(tdef, dict):
+                        theme_base = tdef.get("base", "medical")
+                        theme_vars = tdef.get("vars")
+                except Exception:
+                    pass
+    return layout_def, theme_base, theme_vars
+
+
+def _run_motion_qa_checks(kind, clean_payload, row, item, library, *, prompt="", revision="", visual_check=True):
+    """Run static theme-var check, medical fact grounding, and headless keyframe DOM visual QA.
+    Raises ValueError for fatal/fact issues; returns list of non-fatal layout warnings."""
+    markup = clean_payload.get("svg", "") if kind == "svg" else clean_payload.get("html", "")
+    stage_video.check_undefined_theme_vars(markup, clean_payload.get("css", ""), clean_payload.get("js", ""))
+
+    drug = item.get("drug") or ""
+    extra_source = "\n".join(filter(None, (item.get("topic") or "", prompt or "", revision or "")))
+    static_texts = stage_video.extract_visible_markup_texts(markup)
+    stage_video.check_motion_facts(static_texts, row, drug=drug, extra_source=extra_source)
+
+    if not visual_check:
+        return []
+    layout_def, theme_base, theme_vars = _resolve_layout_and_theme(item, library)
+    qa = stage_video.run_visual_motion_qa(
+        kind,
+        clean_payload,
+        layout=layout_def,
+        theme=theme_base,
+        theme_vars=theme_vars,
+        shot=row,
+    )
+    if not isinstance(qa, dict):
+        return []
+    fatal = qa.get("fatalIssues") or []
+    if fatal:
+        raise ValueError("；".join(str(x) for x in fatal[:3]))
+    rendered_texts = qa.get("renderedTexts") or []
+    if rendered_texts:
+        stage_video.check_motion_facts(rendered_texts, row, drug=drug, extra_source=extra_source)
+    return [str(x) for x in (qa.get("layoutIssues") or [])[:4]]
+
+
+def produce_svg_code(client, model, item, library, row, *, prompt="", revision="", previous_svg=None, system_prompt="", on_retry=lambda attempt: None, visual_check=True):
     spec = _resolve_layout_spec(item, library)
     instruction = system_prompt or build_svg_animation_prompt(spec)
     payload = {
         "topic": item.get("topic") or "",
         "drug": item.get("drug") or "",
         "layoutMedia": _layout_media_payload(spec),
+        "designRecipe": motion_recipes.recipe_for("svg", row, spec),
         "shot": {key: row[key] for key in SHOT_FIELDS if key in row},
         "revision": revision,
     }
@@ -734,6 +800,7 @@ def produce_svg_code(client, model, item, library, row, *, prompt="", revision="
     if isinstance(previous_svg, dict) and previous_svg.get("svg"):
         payload["hasPreviousSvg"] = True
     rejected = []
+    best_soft = None
     for attempt in range(3):
         if rejected:
             payload["validationFeedback"] = rejected[-1]
@@ -748,6 +815,10 @@ def produce_svg_code(client, model, item, library, row, *, prompt="", revision="
             if raw_svg is None and isinstance(reply.get("svg"), str):
                 raw_svg = {k: reply[k] for k in ("svg", "css", "js") if k in reply}
             clean_svg = stage_video.validate_svg_code(raw_svg)
+            layout_issues = _run_motion_qa_checks(
+                "svg", clean_svg, row, item, library,
+                prompt=prompt, revision=revision, visual_check=visual_check,
+            )
             reason = draft_content.string_field(reply, "reason", 180, optional=True) or "按本幕提示词生成纯矢量 SVG 动画。"
             out = {
                 "kind": "svg",
@@ -757,9 +828,18 @@ def produce_svg_code(client, model, item, library, row, *, prompt="", revision="
             }
             if prompt:
                 out["customSvgPrompt"] = prompt
-            return out
+            if not layout_issues:
+                return out
+            if best_soft is None or len(layout_issues) < len(best_soft[0]):
+                best_soft = (layout_issues, out)
+            if attempt < 2:
+                raise ValueError("关键帧版面自检未通过：" + "；".join(layout_issues[:3]))
         except (ValueError, KeyError, TypeError) as error:
-            rejected.append(str(error)[:260])
+            rejected.append(str(error)[:360])
+    if best_soft is not None:
+        warnings, out = best_soft
+        out["qaWarnings"] = warnings[:3]
+        return out
     raise ValueError("SVG 动画生成校验未通过（已重试 2 次）：" + rejected[-1])
 
 
@@ -792,13 +872,14 @@ def produce_svg_batch(client, model, item, library, on_progress=lambda done, tot
     return {"contents": contents, "errors": errors}
 
 
-def produce_scene_code(client, model, item, library, row, *, code_prompt="", custom_code_prompt="", revision="", previous_code=None, system_prompt="", on_retry=lambda attempt: None):
+def produce_scene_code(client, model, item, library, row, *, code_prompt="", custom_code_prompt="", revision="", previous_code=None, system_prompt="", on_retry=lambda attempt: None, visual_check=True):
     spec = _resolve_layout_spec(item, library)
     instruction = system_prompt or build_scene_code_prompt(spec)
     payload = {
         "topic": item.get("topic") or "",
         "drug": item.get("drug") or "",
         "layoutMedia": _layout_media_payload(spec),
+        "designRecipe": motion_recipes.recipe_for("scene", row, spec),
         "shot": {key: row[key] for key in SHOT_FIELDS if key in row},
         "codePrompt": code_prompt,
         "revision": revision,
@@ -808,6 +889,8 @@ def produce_scene_code(client, model, item, library, row, *, code_prompt="", cus
     if isinstance(previous_code, dict) and previous_code.get("html"):
         payload["hasPreviousCode"] = True
     rejected = []
+    best_soft = None
+    merged_prompt = "\n".join(filter(None, (code_prompt, custom_code_prompt)))
     for attempt in range(3):
         if rejected:
             payload["validationFeedback"] = rejected[-1]
@@ -820,6 +903,10 @@ def produce_scene_code(client, model, item, library, row, *, code_prompt="", cus
             if raw_code is None and isinstance(reply.get("html"), str):
                 raw_code = {k: reply[k] for k in ("html", "css", "js") if k in reply}
             clean_code = stage_video.validate_scene_code(raw_code)
+            layout_issues = _run_motion_qa_checks(
+                "scene", clean_code, row, item, library,
+                prompt=merged_prompt, revision=revision, visual_check=visual_check,
+            )
             reason = draft_content.string_field(reply, "reason", 180, optional=True) or "按本幕提示词生成纯代码动效画面。"
             out = {
                 "kind": "scene",
@@ -831,9 +918,18 @@ def produce_scene_code(client, model, item, library, row, *, code_prompt="", cus
                 out["codePrompt"] = code_prompt
             if custom_code_prompt:
                 out["customCodePrompt"] = custom_code_prompt
-            return out
+            if not layout_issues:
+                return out
+            if best_soft is None or len(layout_issues) < len(best_soft[0]):
+                best_soft = (layout_issues, out)
+            if attempt < 2:
+                raise ValueError("关键帧版面自检未通过：" + "；".join(layout_issues[:3]))
         except (ValueError, KeyError, TypeError) as error:
-            rejected.append(str(error)[:260])
+            rejected.append(str(error)[:360])
+    if best_soft is not None:
+        warnings, out = best_soft
+        out["qaWarnings"] = warnings[:3]
+        return out
     raise ValueError("代码动效生成校验未通过（已重试 2 次）：" + rejected[-1])
 
 

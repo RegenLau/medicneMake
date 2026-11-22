@@ -127,6 +127,42 @@ class StageVideoTests(unittest.TestCase):
             with self.subTest(bad_svg=bad_svg), self.assertRaises(ValueError):
                 stage_video.validate_svg_code(bad_svg)
 
+        # Generation-time theme-var whitelist & medical fact grounding checks.
+        stage_video.check_undefined_theme_vars(
+            '<svg><rect fill="var(--v-primary-soft)" stroke="var(--v-card-border)"/><text fill="var(--v-ink-soft)">ok</text></svg>',
+            ".a{color:var(--v-coral);background:var(--v-card-bg);}",
+        )
+        for bad_var in ("fill: var(--v-muted)", "fill: var(--v-accent)", "color: var(--v-red)"):
+            with self.subTest(bad_var=bad_var), self.assertRaisesRegex(ValueError, "未定义的主题 CSS 变量"):
+                stage_video.check_undefined_theme_vars(bad_var)
+
+        shot = {
+            "name": "退烧药核对",
+            "line": "孩子体温超过三十八度五时，按说明书核对对乙酰氨基酚片，两次至少间隔四到六小时。",
+            "points": {
+                "headline": "按说明书核对",
+                "items": [
+                    {"title": "核对剂型", "detail": "看清片剂说明"},
+                    {"title": "核对间隔", "detail": "至少 4–6 小时"},
+                ],
+                "takeaway": "拿不准问药师",
+            },
+        }
+        texts = stage_video.extract_visible_markup_texts(
+            '<div class="box"><style>.x{width:500px;}</style><span>01</span><h3>1. 核对剂型</h3><p>38.5℃ 间隔 4–6 小时 对乙酰氨基酚片</p></div>'
+        )
+        self.assertNotIn(".x{width:500px;}", " ".join(texts))
+        stage_video.check_motion_facts(texts, shot, drug="对乙酰氨基酚片")
+
+        # Clock dial cardinals (12, 3, 6, 9) are allowed as a complete set.
+        stage_video.check_motion_facts(["12", "3", "6", "9", "间隔 4 小时"], shot, drug="对乙酰氨基酚片")
+
+        # Fabricated dosage number or wrong drug name must be rejected.
+        with self.assertRaisesRegex(ValueError, "500"):
+            stage_video.check_motion_facts(["每次 500mg 温水吞服"], shot, drug="对乙酰氨基酚片")
+        with self.assertRaisesRegex(ValueError, "布洛芬混悬液"):
+            stage_video.check_motion_facts(["可改服布洛芬混悬液"], shot, drug="对乙酰氨基酚片")
+
         # Legacy card shots still resolve local art if present.
         legacy = self.payload("card")
         legacy["items"][0]["points"]["items"] = [{"title": "找到栏目", "detail": "", "tag": ""}]

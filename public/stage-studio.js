@@ -76,6 +76,15 @@ const StageStudio = (() => {
     const mergedVars = { ...defaults, ...(themeDef?.vars || {}) };
     const varCss = `:root{${Object.entries(mergedVars).map(([k, v]) => `${k}:${v}`).join(";")}}`;
     const extraCss = String(svgCode?.css || "").trim();
+    if (window.StageIcons && doc.includes("data-icon=")) {
+      doc = doc.replace(/<g\b([^>]*\bdata-icon=["']([a-z0-9-]+)["'][^>]*)>\s*<\/g>/gi, (m, attrs, name) => {
+        const inner = window.StageIcons.svg(name).replace(/^<svg\b[^>]*>|<\/svg>$/gi, "");
+        const hasStroke = /\bstroke=/.test(attrs);
+        const hasFill = /\bfill=/.test(attrs);
+        const extra = `${hasFill ? "" : ' fill="none"'}${hasStroke ? "" : ' stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"'}`;
+        return `<g${attrs}${extra}>${inner}</g>`;
+      });
+    }
     doc = doc.replace(/(<svg\b[^>]*>)/i, `$1<style>${varCss}${extraCss}</style>`);
     return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(doc)}`;
   }
@@ -1356,7 +1365,10 @@ const StageStudio = (() => {
       : (isSvg
           ? `可直接修改上方本幕提示词，再点「生成 SVG 动画」，由 DeepSeek 生成纯矢量 SVG 动画（不含插图，按文本 Token 计费）。`
           : `可直接修改上方本幕提示词，再点「生成代码动画」，由 DeepSeek 生成纯 HTML + CSS + SVG + JS 动效（不含插图，按文本 Token 计费）。`);
-    return promptBox + codeEditorBox + `<p class="small">${statusText}</p>`;
+    const qaWarnHtml = hasGenerated && Array.isArray(c.qaWarnings) && c.qaWarnings.length
+      ? `<p class="small" style="color:var(--amber,#b45309)">版面自检提示：${esc(c.qaWarnings.join("；"))}（可点重新生成或展开代码微调）</p>`
+      : "";
+    return promptBox + codeEditorBox + `<p class="small">${statusText}</p>` + qaWarnHtml;
   }
 
   function artFields(w, shot, c, slot) {
