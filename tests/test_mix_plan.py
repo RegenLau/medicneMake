@@ -674,18 +674,21 @@ class MixPlanningTests(unittest.TestCase):
         self.assertEqual(shorter_still_over["shots"][0]["line"], result["shots"][0]["line"])
 
     def test_script_prompt_lets_model_plan_scenes_with_opening_and_closing(self):
-        for reference, scenes, chars in ((30, "3–5 幕", "不超过 112 字"), (60, "3–7 幕", "不超过 220 字")):
+        for reference, scenes, chars in ((30, "3–4 幕", "不超过 112 字"), (60, "4–6 幕", "不超过 220 字"), (90, "5–8 幕", "不超过 335 字")):
             with self.subTest(reference=reference):
                 prompt = mix_plan.build_script_prompt(self.item, reference)
                 self.assertIn(scenes, prompt)
                 self.assertIn(chars, prompt)
                 self.assertIn("第一幕是开头，最后一幕是收尾", prompt)
                 self.assertIn("开头幕用 cover，收尾幕用 summary", prompt)
+                self.assertIn("亲切药师", prompt)
+                self.assertIn("口语过渡", prompt)
+                self.assertIn("首尾呼应", prompt)
                 self.assertNotIn('"type":"结构"', prompt)
                 self.assertNotIn("每幕 1–2 拍", prompt)
         open_prompt = mix_plan.build_script_prompt(self.item, None)
         self.assertIn("未指定参考时长", open_prompt)
-        self.assertIn("3–7 幕", open_prompt)
+        self.assertIn("4–6 幕", open_prompt)
 
     def test_tighten_prompt_keeps_opening_and_closing(self):
         overlong = copy.deepcopy(self.script)
@@ -696,7 +699,7 @@ class MixPlanningTests(unittest.TestCase):
         mix_plan.write_script(client, "deepseek-flash", self.item, 30, CATALOG)
         tighten_prompt = client.call_args.args[1]["messages"][0]["content"]
         self.assertIn("保留第一幕开头和最后一幕收尾", tighten_prompt)
-        self.assertIn("全片保留 3–5 幕", tighten_prompt)
+        self.assertIn("全片保留 3–4 幕", tighten_prompt)
 
     def test_write_script_uses_custom_script_prompt_when_provided(self):
         raw = copy.deepcopy(self.script)

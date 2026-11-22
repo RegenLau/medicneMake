@@ -348,8 +348,8 @@ def build_script_prompt(item, reference, library=None):
     qa_schema = ',"question":"患者口吻提问","answer":"简短直接结论","verdictTone":"ok"' if is_qa else ""
     drug_tags_schema = ',"drugTags":["剂型","处方药"]' if has_drug else ""
     return draft_content.EDITORIAL_RULES + draft_content.drug_rule(item.get("drug", "")) + (
-        "【任务】写一条用药科普短视频脚本：先写好全片口播，再按内容断点切成几幕，每幕配一组屏幕要点。"
-        "本步只写口播和屏幕文字，不安排画面制作方式。\n"
+        "【任务】写一条有温度、有头有尾的用药科普短视频脚本：先以亲切药师口吻写好一篇一气呵成的完整口播，"
+        "再按自然语义停顿切成几幕，每幕配一组屏幕要点。本步只写口播和屏幕文字，不安排画面制作方式。\n"
         "- 口播由配音朗读：数字和单位用汉字读法（如「每天一次」「五毫克」），不写括号、斜杠、百分号和英文缩写。"
         "屏幕要点里可以用阿拉伯数字。\n"
         "【篇幅与结构】\n"
@@ -362,49 +362,63 @@ def build_script_prompt(item, reference, library=None):
         "highlightWords 从本条 text 中原样摘取 0–3 个词。\n"
         "- 标题不超过 40 字，shortTitle 不超过 12 字。"
         + extra_rules + "\n"
-        "示例只示意开头、一幕正文和收尾，正文幕数按上面的规划决定：\n"
+        "示例只示意开头、一幕正文和收尾的口吻与结构，正文幕数按上面的规划决定：\n"
         '{"title":"全片标题","shortTitle":"主题短句","chapters":["章节一","章节二"]' + drug_tags_schema + ','
         '"shots":['
-        '{"name":"开头","chapterIndex":0,"line":"观众关心的问题？核心答案。",'
-        '"points":{"type":"cover","headline":"开场问题","items":[]},'
-        '"cues":[{"text":"观众关心的问题？","focus":"all","highlightWords":[]},'
-        '{"text":"核心答案。","focus":"all","highlightWords":["核心答案"]}]},'
-        '{"name":"正文小标题","chapterIndex":1,"line":"第一个要点。第二个要点。",'
+        '{"name":"开头","chapterIndex":0,"line":"半夜遇到这种情况，很多人第一反应就容易做错。其实盯住这几个关键点，药师一次帮您讲清楚。",'
+        '"points":{"type":"cover","headline":"开场核心问题","items":[]},'
+        '"cues":[{"text":"半夜遇到这种情况，很多人第一反应就容易做错。","focus":"all","highlightWords":["容易做错"]},'
+        '{"text":"其实盯住这几个关键点，药师一次帮您讲清楚。","focus":"all","highlightWords":["关键点"]}]},'
+        '{"name":"正文小标题","chapterIndex":1,"line":"先看最容易忽略的第一步，对照药盒确认清楚。紧接着第二步，按说明书核对好用法。",'
         '"points":{"type":"steps","headline":"屏显标题","lead":"一句解释"' + qa_schema + ','
         '"items":[{"title":"要点一","detail":"短说明"},{"title":"要点二","detail":"短说明"}]},'
-        '"cues":[{"text":"第一个要点。","focus":"0","highlightWords":["第一个"]},'
-        '{"text":"第二个要点。","focus":"1","highlightWords":[]}]},'
-        '{"name":"收尾","chapterIndex":1,"line":"一句话总结。一句提醒。",'
+        '"cues":[{"text":"先看最容易忽略的第一步，对照药盒确认清楚。","focus":"0","highlightWords":["第一步"]},'
+        '{"text":"紧接着第二步，按说明书核对好用法。","focus":"1","highlightWords":["第二步"]}]},'
+        '{"name":"收尾","chapterIndex":1,"line":"记住这句顺口溜，看清成分、守住间隔。拿不准随时问药师，用药更安心。",'
         '"points":{"type":"summary","headline":"记住这一点"' + qa_schema + ','
-        '"items":[{"title":"要点","detail":"短说明"}],"takeaway":"结论"},'
-        '"cues":[{"text":"一句话总结。","focus":"0","highlightWords":["总结"]},'
-        '{"text":"一句提醒。","focus":"all","highlightWords":[]}]}]}'
+        '"items":[{"title":"要点","detail":"短说明"}],"takeaway":"核心记忆口诀"},'
+        '"cues":[{"text":"记住这句顺口溜，看清成分、守住间隔。","focus":"0","highlightWords":["顺口溜"]},'
+        '{"text":"拿不准随时问药师，用药更安心。","focus":"all","highlightWords":["问药师"]}]}]}'
     )
 
 
 def script_duration_plan(reference):
     plan = draft_content.code_motion_duration_plan(reference)
-    return {**plan, "min_scenes": 3, "max_scenes": min(draft_content.MAX_SHOTS, max(3, plan["max_scenes"] + 1))}
+    if reference is None:
+        return {**plan, "min_scenes": 4, "max_scenes": 6, "low_chars": 145, "high_chars": 215}
+    return {
+        **plan,
+        "min_scenes": max(3, plan["min_scenes"]),
+        "max_scenes": min(draft_content.MAX_SHOTS, max(3, plan["max_scenes"])),
+    }
 
 
 def _script_length_guide(plan):
     if plan["reference_seconds"] is None:
-        budget = f"未指定参考时长，按主题需要写，全片口播总字数（含标点）约 {plan['low_chars']}–{plan['high_chars']} 字。"
+        budget = f"未指定参考时长，按主题需要写完整起承转合，全片口播总字数（含标点）约 {plan['low_chars']}–{plan['high_chars']} 字。"
     else:
         budget = (
             f"参考时长 {plan['reference_seconds']} 秒，配音约每秒 4 字。"
             f"全片口播总字数（含标点）约 {plan['low_chars']}–{plan['high_chars']} 字，不超过 {plan['high_chars']} 字。"
         )
+    long_tip = (
+        "当前篇幅较充裕，正文可展开讲清“为什么”（用日常类比）或补一个具体生活情境，避免写得过短。\n"
+        if (plan["reference_seconds"] or 0) >= 90 else ""
+    )
     return (
         f"- {budget}\n"
-        "- 先列出这个主题要讲的信息点，再按字数取舍：留下观众最需要知道的，次要的删掉，不凑字。\n"
+        "- 先把全片当成药师在窗口面对面聊完一件事来构思，保证起承转合完整；按字数取舍重点，绝不写成彼此孤立的百科条目。\n"
         f"- 幕数由你按内容决定，全片 {plan['min_scenes']}–{plan['max_scenes']} 幕："
         f"第一幕是开头，最后一幕是收尾，中间 {plan['min_scenes'] - 2}–{plan['max_scenes'] - 2} 幕是正文。"
-        "正文每幕只讲一个信息点：信息点多就多分几幕、每幕写短；信息点少就少分几幕、每幕讲透。\n"
-        "- 开头（第一幕，约 15–30 字）：点出观众关心的问题，第一句或第二句就给出核心答案。\n"
-        "- 正文（每幕 1–3 句）：不同幕不重复。讲操作时说清对什么、在哪里、先后顺序，不笼统罗列。\n"
-        "- 收尾（最后一幕，约 15–30 字）：先用一句话收拢全片要点，再给一句提醒，如按说明书和医嘱、有疑问问药师，"
-        "或出现哪些情况要就医。收尾不引入新知识点。\n"
+        "正文每幕聚焦一个信息点，不要在短时长里拆得过碎。\n"
+        "- 开头（第一幕，约 22–38 字，亲切药师入戏）：先用患者或家属熟悉的生活场景或常见困惑自然带入，"
+        "随即亮明核心判断，并用半句话自然引出下文（如「关键盯住这几点，药师一次帮您讲清楚」），把观众顺畅带进第二幕。\n"
+        "- 正文（每幕 1–3 句，自然串联）：相邻幕之间必须用口语过渡语承上启下（如「先看最容易踩坑的……」「算准了量，第二个坑更隐蔽……」「那什么情况不能在家硬扛？」），"
+        "不要每幕都从完整药名重新起头。若涉及严重不良反应或立即就医的红线信号，单独放在正文靠后的 warning 幕讲清，不要塞到收尾幕。\n"
+        + long_tip +
+        "- 收尾（最后一幕，约 20–38 字，纯收束、零新知识点）：先用一句朗朗上口的短总结或口诀回扣开头问题（首尾呼应），"
+        "再接一句有温度的药师落幕语（如「用前对照药盒核一遍，拿不准随时问药师，用着更安心」或「平时按医嘱规律服药，有疑问随时咨询药师」）。"
+        "收尾严禁再抛出新的就医症状或新知识点，也不要只用冷冰冰的「按说明书和医嘱核对」草草结束（画面底部已有免责提示）。\n"
         f"- 章节 {plan['min_chapters']}–{plan['max_chapters']} 个，每个不超过 10 字，把相邻几幕归为一章；"
         "chapterIndex 从 0 起，随幕的顺序递增，不回跳。\n"
     )
@@ -436,7 +450,8 @@ def write_script(client, model, item, reference, catalog, library=None):
                 "【任务】把下面这份用药科普短视频脚本精简压缩到规定时长以内，保留核心科普信息、医学准确性、自然口语与全部字段结构。\n"
                 f"- 当前共 {len(shots)} 幕、口播总计 {current_chars} 字、估算 {total_seconds:.1f} 秒，已超出上限（必须 ≤ {max_total} 秒）。\n"
                 f"- 硬性目标：全片所有 shots 的 line 总字数（含标点）不超过 {char_budget} 字，估算总时长 ≤ {max_total} 秒；"
-                f"保留第一幕开头和最后一幕收尾，优先精简重复表达或合并次要的正文幕（全片保留 {plan['min_scenes']}–{plan['max_scenes']} 幕），"
+                f"保留第一幕开头和最后一幕收尾（保持场景开场、幕间口语衔接与亲切药师回扣收口，不把就医症状塞进收尾幕），"
+                f"优先精简重复表达或合并次要的正文幕（全片保留 {plan['min_scenes']}–{plan['max_scenes']} 幕），"
                 "同步更新 chapters（2–5 个，各不超过 10 字）与 chapterIndex。\n"
                 "- 严禁半途截断句子，每幕 cues 的 text 拼接必须等于该幕 line，保留严重不良反应立即就医的安全红线。\n"
                 + ("- 除第一幕外，保留每幕 points 中的 question、answer 和 verdictTone。\n" if is_qa else "")

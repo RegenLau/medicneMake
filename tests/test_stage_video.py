@@ -186,6 +186,17 @@ class StageVideoTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "幕间转场"):
             stage_video.stage_input(p, server.ASSETS, server.media_path)
 
+    def test_final_shot_defaults_to_longer_closing_tail_pause(self):
+        p = self.payload("scene")
+        second = {**p["items"][0], "name": "收尾", "points": {"type": "summary"}}
+        p["items"] = [p["items"][0], second]
+        _, _, shots, _, _ = stage_video.stage_input(p, server.ASSETS, server.media_path)
+        self.assertEqual(0.55, shots[0]["tailPause"])
+        self.assertEqual(1.0, shots[1]["tailPause"])
+        p["items"][1]["tailPause"] = 0.7
+        _, _, shots_custom, _, _ = stage_video.stage_input(p, server.ASSETS, server.media_path)
+        self.assertEqual(0.7, shots_custom[1]["tailPause"])
+
     def test_drug_drug_tags_and_verdict_tone_validation(self):
         p = self.payload("card")
         p["drug"] = "硝苯地平缓释片"

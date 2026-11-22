@@ -252,7 +252,13 @@ def stage_input(p, library, media_path):
         raise ValueError("视频需要 1–12 幕分镜。")
     used = [(layout_path, layout_item)]
     pictures = {}
-    shots = [validate_shot(item, layout, compatible, library, media_path, pictures, used) for item in items]
+    shots = [
+        validate_shot(
+            item, layout, compatible, library, media_path, pictures, used,
+            default_tail_pause=1.0 if (len(items) >= 2 and idx == len(items) - 1) else 0.55,
+        )
+        for idx, item in enumerate(items)
+    ]
     deck = {"title": title, "shortTitle": short_title, "chapters": chapters}
     if "disclaimer" in p:
         deck["disclaimer"] = disclaimer
@@ -628,7 +634,7 @@ def illustration(value, library, media_path, used):
     return path.as_uri()
 
 
-def validate_shot(item, layout, compatible, library, media_path, pictures, used):
+def validate_shot(item, layout, compatible, library, media_path, pictures, used, *, default_tail_pause=0.55):
     base = validate_shot_common(item)
     points = item["points"]
     items = points.get("items", [])
@@ -641,7 +647,7 @@ def validate_shot(item, layout, compatible, library, media_path, pictures, used)
         if transition not in TRANSITIONS:
             raise ValueError("请选择有效的幕间转场。")
         base["transition"] = transition
-    base.update(kind=kind, tailPause=item.get("tailPause", 0.55))
+    base.update(kind=kind, tailPause=item.get("tailPause", default_tail_pause))
     tone_val = points.get("verdictTone")
     if tone_val not in (None, "") and tone_val not in VERDICT_TONES:
         raise ValueError("结论语气只能是 ok、no 或 warn。")
