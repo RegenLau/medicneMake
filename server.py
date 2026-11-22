@@ -32,6 +32,7 @@ import mix_plan
 import motion_asset
 import mg_generation
 import music_gen
+import video_recreate
 import work_costs
 
 ROOT = Path(__file__).resolve().parent
@@ -45,12 +46,13 @@ DATA = ROOT / ".studio"
 MEDIA = DATA / "media"
 JOBS = DATA / "jobs"
 AVATAR_CACHE = DATA / "avatar_cache"
+RECREATE_DIR = DATA / "recreate"
 GENERATED_MUSIC_DIR = PUBLIC / "assets" / "music" / "generated"
 ASSETS = asset_library.LocalLibrary(DATA / "library", PUBLIC / "assets" / "library")
 KEY_STORAGE = "mac-keychain" if sys.platform == "darwin" else "windows-dpapi" if os.name == "nt" else "session"
 if sys.platform == "darwin":
     import mac_keychain
-for directory in (MEDIA, JOBS, AVATAR_CACHE, GENERATED_MUSIC_DIR):
+for directory in (MEDIA, JOBS, AVATAR_CACHE, RECREATE_DIR, GENERATED_MUSIC_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 PORT = int(os.environ.get("STUDIO_PORT", "8765"))
 ORIGIN = f"http://127.0.0.1:{PORT}"
@@ -4032,6 +4034,14 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/library":
             with CACHE_LOCK:
                 return self.send_json(200, {"items": list_assets()})
+        if path == "/api/recreate/list":
+            with CACHE_LOCK:
+                return self.send_json(200, {"items": video_recreate.list_records(RECREATE_DIR)})
+        if m := re.fullmatch(r"/recreate-media/([a-f0-9-]{36})/(shot-\d{2}\.jpg)", path):
+            try:
+                return self.file_response(video_recreate.resolve_media_file(RECREATE_DIR, m[1], m[2]))
+            except ValueError:
+                return self.send_error(404)
         if path == "/api/library/mg-pending":
             return self.send_json(200, {"items": ASSETS.pending_items()})
         if m := re.fullmatch(r"/library-pending/([^/]+)/(poster\.jpg|preview\.mp4)", path):
@@ -4125,9 +4135,28 @@ class Handler(SimpleHTTPRequestHandler):
             pass
 
     def do_POST(self):
+        if self.path == "/api/recreate/upload":
+            if (
+                not self.allowed()
+                or self.headers.get("Origin") not in (ORIGIN, f"http://localhost:{PORT}")
+            ):
+                return self.send_error(403)
+            try:
+                n = int(self.headers.get("Content-Length", "0"))
+                if not 0 < n <= video_recreate.MAX_VIDEO_BYTES:
+                    raise ValueError("参考视频大小需在 80 MB 以内。")
+                raw = self.rfile.read(n)
+                filename = unquote(self.headers.get("X-Filename", "reference.mp4"))
+                record = video_recreate.analyze_video_file(RECREATE_DIR, FFMPEG, raw, filename)
+                return self.send_json(200, {"item": record})
+            except ValueError as e:
+                return self.send_json(400, {"error": str(e)})
+            except Exception as e:
+                return self.send_json(500, {"error": str(e)[:240]})
         if (
             self.path not in ("/api/jobs", "/api/costs", "/api/script-prompt", "/api/prompt-template", "/api/ark-key", "/api/deepseek-key", "/api/speech-key", "/api/dashscope-key", "/api/mureka-key", "/api/upload-frame", "/api/generate-music", "/api/music-library/rename", "/api/music-library/delete",
-                              "/api/library/upload", "/api/library/collect-image", "/api/library/collect-video", "/api/library/copy-layout", "/api/library/copy-theme", "/api/library/motion-palette", "/api/library/mg-decide", "/api/library/archive")
+                              "/api/library/upload", "/api/library/collect-image", "/api/library/collect-video", "/api/library/copy-layout", "/api/library/copy-theme", "/api/library/motion-palette", "/api/library/mg-decide", "/api/library/archive",
+                              "/api/recreate/blueprint", "/api/recreate/delete")
             or not self.allowed()
             or self.headers.get("Origin") not in (ORIGIN, f"http://localhost:{PORT}")
             or self.headers.get_content_type() != "application/json"
@@ -4135,7 +4164,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_error(403)
         try:
             n = int(self.headers.get("Content-Length", "0"))
-            max_bytes = 8_000_000 if self.path == "/api/upload-frame" else (200_000 if self.path == "/api/jobs" else (100000 if self.path in ("/api/costs", "/api/generate-music") else (16_000 if self.path in ("/api/script-prompt", "/api/prompt-template", "/api/suggest-custom-tag") else 4096)))
+            max_bytes = 8_000_000 if self.path == "/api/upload-frame" else (200_000 if self.path in ("/api/jobs", "/api/recreate/blueprint") else (100000 if self.path in ("/api/costs", "/api/generate-music") else (16_000 if self.path in ("/api/script-prompt", "/api/prompt-template", "/api/suggest-custom-tag") else 4096)))
             if self.path == "/api/library/upload":
                 max_bytes = 11_200_000
             elif self.path in ("/api/library/collect-image", "/api/library/collect-video", "/api/library/copy-layout", "/api/library/copy-theme", "/api/library/motion-palette"):
@@ -4178,6 +4207,22 @@ class Handler(SimpleHTTPRequestHandler):
             if self.path == "/api/library/archive":
                 ASSETS.archive(p.get("id"))
                 return self.send_json(200, {"ok": True})
+            if self.path == "/api/recreate/delete":
+                return self.send_json(200, video_recreate.delete_record(RECREATE_DIR, p.get("id")))
+            if self.path == "/api/recreate/blueprint":
+                ds_key = current_deepseek_key()
+                if not ds_key:
+                    raise ValueError("请先在顶部「模型配置」中配置 DeepSeek API Key。")
+                model = str(p.get("textModel") or TEXT_MODEL).strip()
+                if model not in available_text_models():
+                    model = TEXT_MODEL
+                record = video_recreate.generate_blueprint(
+                    lambda endpoint, body, **kw: deepseek_json(endpoint, body, key=ds_key, **kw),
+                    model,
+                    RECREATE_DIR,
+                    p,
+                )
+                return self.send_json(200, {"item": record})
             if self.path == "/api/generate-music":
                 return self.send_json(200, generate_music_request(p))
             if self.path == "/api/music-library/rename":

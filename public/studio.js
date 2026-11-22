@@ -178,7 +178,7 @@ function loadState() {
 
 let data = loadState(),
   config,
-  tab = "examples",
+  tab = "works",
   exampleFilter = "all",
   filter = "全部",
   toastTimer,
@@ -694,13 +694,20 @@ function updateTopbar() {
       ico("settings");
   }
   const worksEl = $("#nav-works");
+  const onRecreate = route()[0] === "recreate";
+  const recreateEl = $("#nav-recreate");
+  if (recreateEl) {
+    recreateEl.classList.toggle("active", onRecreate);
+    if (onRecreate) recreateEl.setAttribute("aria-current", "page");
+    else recreateEl.removeAttribute("aria-current");
+  }
   const onLibrary = route()[0] === "library";
   const libraryEl = $("#nav-library");
   libraryEl.classList.toggle("active", onLibrary);
   if (onLibrary) libraryEl.setAttribute("aria-current", "page");
   else libraryEl.removeAttribute("aria-current");
   if (worksEl) {
-    const onWorks = route()[0] !== "work" && !onLibrary && tab === "works";
+    const onWorks = route()[0] !== "work" && !onLibrary && !onRecreate && tab === "works";
     worksEl.classList.toggle("active", onWorks);
     if (onWorks) worksEl.setAttribute("aria-current", "page");
     else worksEl.removeAttribute("aria-current");
@@ -1117,6 +1124,88 @@ function newWork(type, example, videoMode, tplSampleIdx) {
   navigate("work/" + id);
 }
 
+function createWorkFromRecreateBlueprint(record, form = {}) {
+  const bp = record?.blueprint;
+  if (!bp || !Array.isArray(bp.shots) || !bp.shots.length) return;
+  const id = crypto.randomUUID();
+  const s = { ...data.settings, ratio: "16:9" };
+  const themeId = bp.recommendedTheme || "builtin:theme/medical";
+  const themeObj = (config?.stageThemes || []).find((x) => x.id === themeId);
+  const topic = (form.targetTopic || record.targetTopic || bp.title || "参考节奏科普视频").trim();
+  const drug = (form.targetDrug || record.targetDrug || "").trim();
+  const chapters = bp.shots.length >= 4 ? ["开场与要点", "核心解析与提醒"] : ["核心讲解"];
+  const shots = bp.shots.map((sh, i) => {
+    const kind = ["scene", "svg", "image"].includes(sh.kind) ? sh.kind : "scene";
+    const line = (sh.sampleLine || sh.narrationRole || `第 ${i + 1} 幕：${sh.name}`).trim();
+    const content = {
+      kind,
+      decidedBy: "user",
+      reason: `参考拆解模板「${bp.title}」第 ${i + 1} 幕节奏`,
+      ...(sh.transition ? { transition: sh.transition } : {}),
+      ...(kind === "scene" && sh.shotPrompt ? { customCodePrompt: sh.shotPrompt } : {}),
+      ...(kind === "svg" && sh.shotPrompt ? { customSvgPrompt: sh.shotPrompt } : {}),
+      ...(kind === "image" && sh.shotPrompt ? { imagePrompt: sh.shotPrompt } : {}),
+    };
+    return {
+      name: sh.name || `第 ${i + 1} 幕`,
+      line,
+      seconds: Math.max(2, Math.min(20, Number(sh.seconds) || 5)),
+      chapterIndex: chapters.length > 1 && i >= Math.ceil(bp.shots.length / 2) ? 1 : 0,
+      points: {
+        type: sh.pointType || "explain",
+        headline: sh.name || `第 ${i + 1} 幕`,
+        items: [{ title: sh.name || `要点 ${i + 1}`, detail: (sh.narrationRole || "").slice(0, 32), tag: "" }],
+        takeaway: i === bp.shots.length - 1 ? "有疑问先问药师" : "",
+        highlightWords: [],
+      },
+      cues: [{ text: line, focus: "all", weight: Math.max(8, line.length) }],
+      content,
+      variants: { [kind]: { ...content } },
+    };
+  });
+  const firstKind = shots[0]?.content?.kind || "scene";
+  const w = {
+    id,
+    type: "video",
+    videoMode: "template",
+    templateTheme: themeObj?.base || (themeId.includes("warm") ? "warm" : "medical"),
+    templateThemeId: themeId,
+    templatePresenter: "digital",
+    stage: "script",
+    viewingSetup: false,
+    title: topic,
+    topic,
+    layout: articleLayouts[0].name,
+    style: 0,
+    drug,
+    tags: bp.styleTags || [],
+    settings: s,
+    costTracking: !!config.workCosts,
+    blocks: shots.map((sh) => ({ name: sh.name, line: sh.line, seconds: sh.seconds })),
+    stagePlan: {
+      layout: { id: bp.recommendedLayoutId || "builtin:layout/info-classic" },
+      themeId,
+      mode: shots.every((x) => x.content.kind === firstKind) ? firstKind : "mix",
+      editorView: "review",
+      shortTitle: topic.slice(0, 12),
+      chapters,
+      disclaimer: "科普内容仅供参考，具体诊疗与用药请遵医嘱",
+      audio: { sfx: { pack: "builtin:sfx-pack/soft", gainDb: -14, stickerSfx: true } },
+      shots,
+      recreateSourceId: record.id,
+      recreateSourceTitle: bp.title || record.title,
+    },
+    created: Date.now(),
+    updated: Date.now(),
+    job: null,
+  };
+  StageStudio.normalizeWork(w);
+  data.works.unshift(w);
+  save();
+  notify(`已套用「${bp.title}」节奏创建科普草稿，可继续改台词并批量生成画面`, "ok");
+  navigate("work/" + id);
+}
+
 function stageName(w) {
   return w.job
     ? "生成中"
@@ -1171,18 +1260,18 @@ function home() {
       .join("") +
     '</div><div class="tabs" role="tablist" aria-label="内容切换">' +
     btn(
-      "视频参考示例",
-      "examples",
-      "tab" + (tab === "examples" ? " active" : ""),
-      "",
-      'role="tab" aria-selected="' + (tab === "examples") + '"',
-    ) +
-    btn(
       '我的作品 <span class="count">' + data.works.length + "</span>",
       "works",
       "tab" + (tab === "works" ? " active" : ""),
       "",
       'role="tab" aria-selected="' + (tab === "works") + '"',
+    ) +
+    btn(
+      "视频参考示例",
+      "examples",
+      "tab" + (tab === "examples" ? " active" : ""),
+      "",
+      'role="tab" aria-selected="' + (tab === "examples") + '"',
     ) +
     "</div>" +
     (tab === "examples"
@@ -4808,6 +4897,12 @@ function render(preserveScroll = false) {
       nextInspector.scrollTop = prevInspectorScroll;
     }
   }
+  if (route()[0] === "recreate") {
+    updateTopbar();
+    StudioRecreate.page();
+    if (!preserveScroll) window.scrollTo(0, 0);
+    return;
+  }
   if (route()[0] === "library") {
     updateTopbar();
     StudioAssets.page();
@@ -5450,6 +5545,9 @@ document.addEventListener("click", async (e) => {
     if (StageStudio.handleAction(w, action, v)) return;
     if (w && isCodeMotion(w) && handleCodeMotionAction(w, action, v)) return;
     switch (action) {
+      case "video-recreate":
+        navigate("recreate");
+        break;
       case "asset-library":
         navigate("library");
         break;
@@ -5489,7 +5587,7 @@ document.addEventListener("click", async (e) => {
         break;
       }
       case "home":
-        tab = "examples";
+        tab = "works";
         navigate("home");
         break;
       case "works":
