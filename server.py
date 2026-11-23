@@ -6,6 +6,7 @@ import json
 import math
 import mimetypes
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -205,6 +206,11 @@ FFMPEG = shutil.which("ffmpeg") or next(
 CACHE_LOCK = threading.RLock()
 ACTIVE = set()
 SLOTS = threading.Semaphore(2)
+ARK_RETRY_DELAYS = (3.0, 6.0, 12.0, 20.0)
+ARK_MAX_RETRY_AFTER = 30.0
+ARK_IMAGE_MIN_INTERVAL = 1.5
+ARK_IMAGE_LOCK = threading.Lock()
+ARK_LAST_IMAGE_AT = None
 SVG_SPEECH_LOCKS = tuple(threading.Lock() for _ in range(16))
 JOB_CREDENTIALS = threading.local()
 
@@ -470,40 +476,82 @@ def read_json(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def ark(path, body=None, *, key=None, timeout=240):
+def _retry_after_seconds(headers):
+    if not headers:
+        return None
+    raw = headers.get("Retry-After")
+    if not raw:
+        return None
+    try:
+        seconds = float(str(raw).strip())
+    except ValueError:
+        return None
+    if not math.isfinite(seconds) or seconds <= 0:
+        return None
+    return min(ARK_MAX_RETRY_AFTER, max(1.0, seconds))
+
+
+def ark(path, body=None, *, key=None, timeout=240, max_retries=None, on_retry=None):
     if key is None:
         key = getattr(JOB_CREDENTIALS, "key", None)
     if key is None:
         key = current_ark_key()
     if not key:
         raise ValueError("请在页面顶部连接火山方舟，再重试生成。")
-    request = Request(
-        ARK + path,
-        data=json.dumps(body).encode() if body is not None else None,
-        headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
+    payload = json.dumps(body).encode() if body is not None else None
+    retries = 0 if path == "/models" else (
+        len(ARK_RETRY_DELAYS) if max_retries is None else max(0, int(max_retries))
     )
-    try:
-        with urlopen(request, timeout=timeout) as response:
-            return json.load(response)
-    except HTTPError as error:
-        if path == "/models":
-            message = {
-                401: "火山方舟未接受此 Key，请检查是否复制完整或已失效。",
-                403: "此 Key 无权查询方舟模型，请检查所属项目与权限。",
-            }.get(error.code, f"方舟验证失败（HTTP {error.code}），请稍后重试。")
-            raise ValueError(message) from None
+    for attempt in range(retries + 1):
+        request = Request(
+            ARK + path,
+            data=payload,
+            headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
+        )
         try:
-            info = json.load(error).get("error", {})
-            message = str(info.get("message") or info.get("code") or "")
-        except (ValueError, AttributeError):
-            message = ""
-        raise ValueError(
-            f"方舟返回 {error.code}。{message.replace(key, '[已隐藏]')[:450]}"
-        ) from None
-    except (URLError, TimeoutError):
-        if path == "/models":
-            raise ValueError("暂时连不上火山方舟，请检查网络后重试。") from None
-        raise
+            with urlopen(request, timeout=timeout) as response:
+                return json.load(response)
+        except HTTPError as error:
+            if path == "/models":
+                message = {
+                    401: "火山方舟未接受此 Key，请检查是否复制完整或已失效。",
+                    403: "此 Key 无权查询方舟模型，请检查所属项目与权限。",
+                }.get(error.code, f"方舟验证失败（HTTP {error.code}），请稍后重试。")
+                raise ValueError(message) from None
+            raw_err = ""
+            try:
+                raw_err = error.read().decode("utf-8", "replace")
+                parsed = json.loads(raw_err)
+                info = parsed.get("error", {}) if isinstance(parsed, dict) else {}
+                if not isinstance(info, dict):
+                    info = {}
+                message = str(info.get("message") or info.get("code") or "")
+            except (ValueError, AttributeError):
+                message = raw_err.strip()
+            if error.code == 429 and attempt < retries:
+                retry_after = _retry_after_seconds(getattr(error, "headers", None))
+                base_delay = ARK_RETRY_DELAYS[min(attempt, len(ARK_RETRY_DELAYS) - 1)]
+                delay = (
+                    retry_after
+                    if retry_after is not None
+                    else base_delay + random.uniform(0.0, min(1.5, base_delay * 0.25))
+                )
+                if on_retry:
+                    on_retry(attempt + 1, retries, delay, message)
+                time.sleep(delay)
+                continue
+            safe_msg = message.replace(key, "[已隐藏]")
+            if error.code == 429 and retries > 0:
+                raise ValueError(
+                    f"方舟返回 429（已自动重试 {retries} 次仍限流），所选模型可能暂时过载，可稍后再试或切换其他生图模型继续。{safe_msg[:320]}"
+                ) from None
+            raise ValueError(
+                f"方舟返回 {error.code}。{safe_msg[:450]}"
+            ) from None
+        except (URLError, TimeoutError):
+            if path == "/models":
+                raise ValueError("暂时连不上火山方舟，请检查网络后重试。") from None
+            raise
 
 
 def deepseek(path, body=None, *, key=None, timeout=120):
@@ -1345,7 +1393,16 @@ def image_references(p, item):
     return references
 
 
-def image_item(p, item, index, record=None):
+def _wait_ark_image_slot():
+    if ARK_IMAGE_MIN_INTERVAL <= 0 or ARK_LAST_IMAGE_AT is None:
+        return
+    wait = ARK_IMAGE_MIN_INTERVAL - (time.monotonic() - ARK_LAST_IMAGE_AT)
+    if wait > 0:
+        time.sleep(wait)
+
+
+def image_item(p, item, index, record=None, on_retry=None):
+    global ARK_LAST_IMAGE_AT
     s = p["settings"]
     size = resolve_image_size(s)
     body = {
@@ -1361,7 +1418,12 @@ def image_item(p, item, index, record=None):
         body["image"] = images if len(images) > 1 else images[0]
     if s["imageModel"] != "doubao-seedream-5-5-261028":
         body["sequential_image_generation"] = "disabled"
-    data = ark("/images/generations", body)
+    with ARK_IMAGE_LOCK:
+        _wait_ark_image_slot()
+        try:
+            data = ark("/images/generations", body, on_retry=on_retry)
+        finally:
+            ARK_LAST_IMAGE_AT = time.monotonic()
     row = (data.get("data") or [{}])[0]
     if not row.get("b64_json"):
         raise ValueError(str(row.get("error", {}).get("message", "方舟未返回图片")))
@@ -3761,9 +3823,16 @@ def work(job, key=None, speech_key="", deepseek_key=None, dashscope_key=""):
             save()
             if p["kind"] == "images":
                 for i in range(len(job["results"]), len(p["items"])):
-                    job["progress"] = f"生成配图 {i + 1} / {len(p['items'])}"
+                    base_progress = f"生成配图 {i + 1} / {len(p['items'])}"
+                    job["progress"] = base_progress
                     save()
-                    job["results"].append(image_item(p, p["items"][i], i, record))
+
+                    def on_retry(attempt, total, delay, _msg, prefix=base_progress):
+                        wait_s = max(1, int(round(delay)))
+                        job["progress"] = f"{prefix} · 方舟限流，约 {wait_s} 秒后自动重试（{attempt}/{total}）"
+                        save()
+
+                    job["results"].append(image_item(p, p["items"][i], i, record, on_retry=on_retry))
                     save()
                 job["output"] = {"images": job["results"]}
             elif p["kind"] == "draft":
@@ -3783,6 +3852,21 @@ def work(job, key=None, speech_key="", deepseek_key=None, dashscope_key=""):
         with CACHE_LOCK:
             save()
             ACTIVE.discard(job["id"])
+
+
+def compatible_resumed_request(existing, incoming):
+    if existing == incoming:
+        return True
+    if existing.get("kind") != "images" or incoming.get("kind") != "images":
+        return False
+    a = json.loads(json.dumps(existing))
+    b = json.loads(json.dumps(incoming))
+    for copy in (a, b):
+        settings = copy.get("settings")
+        if isinstance(settings, dict):
+            settings.pop("imageModel", None)
+            settings.pop("imageSize", None)
+    return a == b
 
 
 def visible(job):
@@ -4255,7 +4339,10 @@ class Handler(SimpleHTTPRequestHandler):
                 if file.exists():
                     job = read_json(file)
                     if job["request"] != p:
-                        raise ValueError("任务 ID 与内容不匹配")
+                        if job["status"] != "done" and job_id not in ACTIVE and compatible_resumed_request(job["request"], p):
+                            job["request"] = p
+                        else:
+                            raise ValueError("任务 ID 与内容不匹配")
                     if job["status"] == "done" or job_id in ACTIVE:
                         return self.send_json(200, visible(job))
                 else:

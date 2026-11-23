@@ -1548,10 +1548,11 @@ const StageStudio = (() => {
       : job.stageDraft === "clip-prompt" ? `第 ${job.stageShotIndex + 1} 幕视频描述`
       : job.stageShotIndex === undefined ? "缺失" + picture : `第 ${job.stageShotIndex + 1} 幕${job.stageImageSlots ? picture : "画面"}`;
     const progressText = formatJobProgress(w, job, job.progress || `正在制作${subject}…`);
+    const altBtn = typeof fallbackImageRetryButton === "function" ? fallbackImageRetryButton(job) : "";
     area.hidden = false;
     area.innerHTML = job.error
       ? `<div class="banner err" role="alert">${subject}未制作完成。${esc(job.error)}<div class="banner-actions">` +
-        btn("继续此任务", "retry", "secondary") + btn("关闭提示", "abort-job", "textbtn") + '</div></div>'
+        altBtn + btn("继续此任务", "retry", "secondary") + btn("关闭提示", "abort-job", "textbtn") + '</div></div>'
       : `<div class="inline-progress" role="status"><span class="spinner" aria-hidden="true"></span><span id="progress">${esc(progressText)}</span></div>`;
     app.querySelectorAll('[data-stage-production-lock], .stage-rail button').forEach(control => { control.disabled = true; });
   }

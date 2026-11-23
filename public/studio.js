@@ -3096,6 +3096,33 @@ function pictureControls(w, b, i, quiet = false) {
   );
 }
 
+function isArkRateLimitError(message) {
+  const text = String(message || "");
+  return /(?:方舟.*429|429.*方舟|RequestBurstTooFast|request burst|方舟当前限流)/i.test(text);
+}
+
+function fallbackImageModel(currentModel) {
+  const ids = Object.keys(config.imageModels || {}).filter((id) => id !== currentModel);
+  if (!ids.length) return "";
+  if (ids.includes("doubao-seedream-5-0-260128")) return "doubao-seedream-5-0-260128";
+  return ids[0];
+}
+
+function fallbackImageSettings(settings, targetModel) {
+  const sizes = config.imageModels?.[targetModel]?.[1] || [];
+  const next = { ...settings, imageModel: targetModel };
+  if (sizes.length && !sizes.includes(next.imageSize)) next.imageSize = sizes[0];
+  return next;
+}
+
+function fallbackImageRetryButton(job, index = "") {
+  if (!job || job.payload?.kind !== "images" || !isArkRateLimitError(job.error)) return "";
+  const alt = fallbackImageModel(job.payload.settings?.imageModel);
+  if (!alt) return "";
+  const label = config.imageModels?.[alt]?.[0] || alt;
+  return btn(`改用 ${label} 继续`, "retry-alt-image-model", "primary", index);
+}
+
 function inlineJobError(job, index = "") {
   const dismiss = job.target === "initial-image"
     ? "跳过这张图"
@@ -3104,6 +3131,7 @@ function inlineJobError(job, index = "") {
     '<div class="banner err" role="alert">配图生成未完成：' +
     esc(job.error) +
     '<div class="banner-actions">' +
+    fallbackImageRetryButton(job, index) +
     btn("重试", "retry", "secondary", index) +
     btn(dismiss, "abort-job", "textbtn", index) +
     "</div></div>"
@@ -3229,7 +3257,7 @@ function updateJobView(w, owner, finished = false) {
       "</span></div>";
   app
     .querySelectorAll(
-      '.layout input, .layout select, .layout textarea, .layout button:not([data-action="retry"]):not([data-action="abort-job"])',
+      '.layout input, .layout select, .layout textarea, .layout button:not([data-action="retry"]):not([data-action="retry-alt-image-model"]):not([data-action="abort-job"])',
     )
     .forEach((el) => {
       el.disabled = true;
@@ -3950,9 +3978,10 @@ function jobView(w) {
   const portraitMessage = rejected &&
     (rejectedIndex >= 0 ? `方舟判定第 ${rejectedIndex + 1} 幕的首帧可能含真人。` : "方舟判定本次使用的首帧可能含真人。") +
     "换成无人物画面后再合成。";
+  const altImageBtn = rejected ? "" : fallbackImageRetryButton(w.job);
   const recovery = rejected
     ? (rejectedIndex >= 0 ? btn(`重做第 ${rejectedIndex + 1} 幕无人物首帧`, "replace-portrait-frame", "primary") : "")
-    : btn(w.job.partial ? "重试配图规划" : "继续此任务", "retry", "primary");
+    : altImageBtn + btn(w.job.partial ? "重试配图规划" : "继续此任务", "retry", altImageBtn ? "secondary" : "primary");
   shell(
     w,
     failed ? "生成任务需要处理" :
@@ -6547,6 +6576,29 @@ document.addEventListener("click", async (e) => {
           { index: i, prompt },
           settings,
         );
+        break;
+      }
+      case "retry-alt-image-model": {
+        const owner = v === "" || v == null ? w : w.blocks[Number(v)];
+        const j = owner?.job;
+        if (!j || j.payload?.kind !== "images") break;
+        const alt = fallbackImageModel(j.payload.settings?.imageModel);
+        if (!alt) break;
+        const nextSettings = fallbackImageSettings(j.payload.settings, alt);
+        const authSettings = { ...nextSettings };
+        if (nextSettings.targetSize && typeof LayoutEngine?.imagePixelSize === "function") {
+          const pxSize = LayoutEngine.imagePixelSize(
+            nextSettings.imageSize,
+            nextSettings.targetSize.w,
+            nextSettings.targetSize.h,
+          );
+          const ratioLabel = nextSettings.ratio || `${nextSettings.targetSize.w}:${nextSettings.targetSize.h}`;
+          authSettings.sizeLabel = `${ratioLabel} · ${pxSize}`;
+        }
+        authorize({ ...w, settings: authSettings }, j.payload.items.length, "images", () => {
+          j.payload.settings = nextSettings;
+          return sendJob(w, owner);
+        });
         break;
       }
       case "retry": {
