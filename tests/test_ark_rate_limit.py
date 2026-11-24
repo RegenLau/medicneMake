@@ -161,6 +161,20 @@ class ArkRateLimitTests(unittest.TestCase):
         self.assertEqual(sleeps, [])
         self.assertIn("429", str(ctx.exception))
 
+    def test_ark_404_model_access_gives_actionable_chinese_hint(self):
+        not_enabled = {
+            "error": {
+                "code": "InvalidEndpointOrModel.NotFound",
+                "message": "The model or endpoint doubao-seedream-5-0-260128 does not exist or you do not have access to it.",
+            }
+        }
+        with patch.object(server, "urlopen", side_effect=make_http_error(404, not_enabled)):
+            with self.assertRaises(ValueError) as ctx:
+                server.ark("/images/generations", {}, key="k")
+        msg = str(ctx.exception)
+        self.assertIn("404", msg)
+        self.assertIn("未开通该模型权限", msg)
+
     def test_image_pacing_enforces_minimum_interval(self):
         sleeps = []
         clock = iter([100.0, 100.4, 102.0])

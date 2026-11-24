@@ -545,6 +545,10 @@ def ark(path, body=None, *, key=None, timeout=240, max_retries=None, on_retry=No
                 raise ValueError(
                     f"方舟返回 429（已自动重试 {retries} 次仍限流），所选模型可能暂时过载，可稍后再试或切换其他生图模型继续。{safe_msg[:320]}"
                 ) from None
+            if error.code == 404 and "does not exist or you do not have access" in message:
+                raise ValueError(
+                    f"方舟返回 404（当前账号未开通该模型权限，可在火山方舟控制台「开通管理」中开通，或切换其他已开通模型继续）。{safe_msg[:320]}"
+                ) from None
             raise ValueError(
                 f"方舟返回 {error.code}。{safe_msg[:450]}"
             ) from None

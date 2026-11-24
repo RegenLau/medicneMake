@@ -3096,16 +3096,13 @@ function pictureControls(w, b, i, quiet = false) {
   );
 }
 
-function isArkRateLimitError(message) {
+function isArkImageModelSwitchableError(message) {
   const text = String(message || "");
-  return /(?:方舟.*429|429.*方舟|RequestBurstTooFast|request burst|方舟当前限流)/i.test(text);
+  return /(?:方舟.*(?:429|404)|(?:429|404).*方舟|RequestBurstTooFast|request burst|方舟当前限流|does not exist or you do not have access|未开通.*模型)/i.test(text);
 }
 
-function fallbackImageModel(currentModel) {
-  const ids = Object.keys(config.imageModels || {}).filter((id) => id !== currentModel);
-  if (!ids.length) return "";
-  if (ids.includes("doubao-seedream-5-0-260128")) return "doubao-seedream-5-0-260128";
-  return ids[0];
+function fallbackImageModels(currentModel) {
+  return Object.keys(config.imageModels || {}).filter((id) => id !== currentModel);
 }
 
 function fallbackImageSettings(settings, targetModel) {
@@ -3116,11 +3113,16 @@ function fallbackImageSettings(settings, targetModel) {
 }
 
 function fallbackImageRetryButton(job, index = "") {
-  if (!job || job.payload?.kind !== "images" || !isArkRateLimitError(job.error)) return "";
-  const alt = fallbackImageModel(job.payload.settings?.imageModel);
-  if (!alt) return "";
-  const label = config.imageModels?.[alt]?.[0] || alt;
-  return btn(`改用 ${label} 继续`, "retry-alt-image-model", "primary", index);
+  if (!job || job.payload?.kind !== "images" || !isArkImageModelSwitchableError(job.error)) return "";
+  const alts = fallbackImageModels(job.payload.settings?.imageModel);
+  if (!alts.length) return "";
+  return alts
+    .map((alt, i) => {
+      const label = config.imageModels?.[alt]?.[0] || alt;
+      const val = `${index === "" || index == null ? "" : index}:${alt}`;
+      return btn(`改用 ${label} 继续`, "retry-alt-image-model", i === 0 ? "primary" : "secondary", val);
+    })
+    .join("");
 }
 
 function inlineJobError(job, index = "") {
@@ -6579,10 +6581,16 @@ document.addEventListener("click", async (e) => {
         break;
       }
       case "retry-alt-image-model": {
-        const owner = v === "" || v == null ? w : w.blocks[Number(v)];
+        const raw = String(v ?? "");
+        const sep = raw.indexOf(":");
+        const blockIdx = sep >= 0 ? raw.slice(0, sep) : raw;
+        const requestedModel = sep >= 0 ? raw.slice(sep + 1) : "";
+        const owner = blockIdx === "" ? w : w.blocks[Number(blockIdx)];
         const j = owner?.job;
         if (!j || j.payload?.kind !== "images") break;
-        const alt = fallbackImageModel(j.payload.settings?.imageModel);
+        const alt = requestedModel && config.imageModels?.[requestedModel]
+          ? requestedModel
+          : fallbackImageModels(j.payload.settings?.imageModel)[0];
         if (!alt) break;
         const nextSettings = fallbackImageSettings(j.payload.settings, alt);
         const authSettings = { ...nextSettings };
